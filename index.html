@@ -1160,26 +1160,58 @@ function actualizarIndicadorSync() {
    (onDisconnect) apenas se cierra la pestaña o se pierde la conexión —
    no depende de que el navegador avise "me fui" correctamente.
    ===================================================================== */
+/* =====================================================================
+   PRESENCIA — quién está conectado ahora mismo, en tiempo real.
+   Patrón estándar de Firebase: cada sesión escribe una entrada bajo
+   /presencia mientras dura la conexión, y Firebase la borra sola
+   (onDisconnect) apenas se cierra la pestaña o se pierde la conexión.
+
+   PROBLEMA QUE ESTO CORRIGE: cada vez que ".info/connected" vuelve a
+   true (reconexión tras una caída de wifi, el celular se bloquea y
+   despierta, la laptop sale de suspensión, etc.) este bloque se
+   ejecuta de nuevo y creaba una entrada NUEVA sin borrar la anterior
+   — el onDisconnect de la conexión vieja a veces nunca llega a
+   dispararse en el servidor. Resultado: "sesiones fantasma" que
+   inflan el contador de conectados (eso era el "5 conectados" con un
+   solo navegador abierto). Se corrige con dos capas:
+   1) Se borra explícitamente la referencia anterior antes de crear la
+      nueva, en cada reconexión.
+   2) Un "latido" (heartbeat) cada 60s actualiza ultimaSenal; cualquier
+      entrada sin señal hace más de 3 min se considera desconectada
+      para el conteo visible, y cualquier cliente conectado ayuda a
+      borrar (best-effort) las que llevan más de 30 min sin señal —
+      así los fantasmas ya existentes se autolimpian con el tiempo.
+   ===================================================================== */
+const PRESENCIA_TTL_VISIBLE_MS = 3*60*1000;   // sin señal > 3 min → no se muestra como conectado
+const PRESENCIA_TTL_PURGA_MS = 30*60*1000;    // sin señal > 30 min → se borra del todo (fantasma)
+
 function configurarPresencia() {
   database.ref('.info/connected').on('value', (snap) => {
     if (snap.val() === true) {
+      if (miPresenciaRef) { try { miPresenciaRef.remove(); } catch(e) {} }
       miPresenciaRef = presenciaRef.push();
       miPresenciaRef.onDisconnect().remove();
-      actualizarMiPresencia();
+      miPresenciaRef.set({ usuario: DB.usuario, rol: DB.role, pagina: currentPage, desde: Date.now(), ultimaSenal: Date.now() });
     }
   });
   presenciaRef.on('value', (snap) => {
     const val = snap.val() || {};
-    listaConectados = Object.entries(val).map(([id, v]) => ({id, ...v}));
+    const ahora = Date.now();
+    listaConectados = Object.entries(val)
+      .map(([id, v]) => ({id, ...v}))
+      .filter(c => (ahora - (c.ultimaSenal || c.desde || 0)) < PRESENCIA_TTL_VISIBLE_MS);
+    Object.entries(val).forEach(([id, v]) => {
+      if ((ahora - (v.ultimaSenal || v.desde || 0)) > PRESENCIA_TTL_PURGA_MS) {
+        presenciaRef.child(id).remove().catch(()=>{});
+      }
+    });
     renderBadgeConectados();
   });
+  setInterval(actualizarMiPresencia, 60000); // latido: mantiene "ultimaSenal" fresca mientras la pestaña siga abierta
 }
 function actualizarMiPresencia() {
   if (!miPresenciaRef) return;
-  miPresenciaRef.set({
-    usuario: DB.usuario, rol: DB.role,
-    pagina: currentPage, desde: Date.now(),
-  });
+  miPresenciaRef.update({ usuario: DB.usuario, rol: DB.role, pagina: currentPage, ultimaSenal: Date.now() }).catch(()=>{});
 }
 
 /* Chat de Requerimientos — un solo listener sobre TODO /mensajes (el
@@ -1465,27 +1497,46 @@ function agregarProductoBodegaGeneral(datos) {
   if (!datos.material || !datos.material.trim()) { toast("Indica el nombre del material.", "danger"); return false; }
   if (buscarBodegaGeneralPorNombre(datos.material)) { toast("Ese material ya existe en la bodega general — usa 'Actualizar stock' en vez de crear uno nuevo.", "danger"); return false; }
   const codigo = (datos.codigo||"").trim() || ("MAT-G-"+String(1000+DB.bodegaGeneral.length+Math.floor(Math.random()*900)));
+  const stockInicial = Number(datos.stock)||0;
+  const precioTotal = Number(datos.precioTotal)||0;
+  // El precio se ingresa como TOTAL pagado por el lote (lo que dice la factura/OC),
+  // no por unidad — acá se calcula el valor unitario dividiendo por la cantidad,
+  // que es lo que Bsale necesita para crear el producto.
+  const precioUnitario = stockInicial>0 ? Math.round(precioTotal/stockInicial) : 0;
   DB.bodegaGeneral.push({
-    codigo, material: datos.material.trim(), stock: Number(datos.stock)||0,
+    codigo, material: datos.material.trim(), stock: stockInicial,
     unidad: datos.unidad||"unidad", minimo: Number(datos.minimo)||0,
+    precioUnitario,
   });
-  registrarHistorial({proyecto:"General", accion:"Crear", detalle:`Producto agregado a bodega general: ${datos.material} (${codigo})`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
+  registrarHistorial({proyecto:"General", accion:"Crear", detalle:`Producto agregado a bodega general: ${datos.material} (${codigo})${precioUnitario?` — precio unitario $${precioUnitario}`:''}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
   toast("Producto agregado a la bodega general.", "ok");
   guardarEstado();
   return true;
 }
 
-function ajustarStockBodegaGeneral(codigo, tipo, cantidad, motivo) {
+function ajustarStockBodegaGeneral(codigo, tipo, cantidad, motivo, precioTotalIngreso) {
   const b = DB.bodegaGeneral.find(x => x.codigo === codigo);
   if (!b) return false;
   if (!puedeGestionarBodega()) { toast(`Tu rol (${DB.role}) no gestiona bodega.`, "danger"); return false; }
   const cant = Number(cantidad);
   if (isNaN(cant) || cant < 0) { toast("Indica una cantidad válida.", "danger"); return false; }
   const antes = b.stock;
-  if (tipo === "Ingreso") b.stock = antes + cant;
+  let notaPrecio = "";
+  if (tipo === "Ingreso") {
+    const totalIngreso = Number(precioTotalIngreso)||0;
+    if (totalIngreso > 0 && cant > 0) {
+      // promedio ponderado entre lo que ya había valorizado al precio unitario
+      // actual, y el lote nuevo que entra a otro precio.
+      const precioAntes = b.precioUnitario || 0;
+      const nuevoUnitario = Math.round(((antes*precioAntes) + totalIngreso) / (antes+cant));
+      notaPrecio = ` — precio unitario ${precioAntes}→${nuevoUnitario}`;
+      b.precioUnitario = nuevoUnitario;
+    }
+    b.stock = antes + cant;
+  }
   else if (tipo === "Salida") b.stock = Math.max(0, antes - cant);
   else b.stock = cant;
-  registrarHistorial({proyecto:"General", accion:"Modificar", detalle:`Bodega general ${codigo} (${b.material}): ${tipo} ${cant} ${b.unidad} — stock ${antes} → ${b.stock}${motivo?` (${motivo})`:''}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
+  registrarHistorial({proyecto:"General", accion:"Modificar", detalle:`Bodega general ${codigo} (${b.material}): ${tipo} ${cant} ${b.unidad} — stock ${antes} → ${b.stock}${notaPrecio}${motivo?` (${motivo})`:''}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
   toast(`Stock de ${b.material} actualizado: ${antes} → ${b.stock} ${b.unidad}.`, "ok");
   guardarEstado();
   return true;
@@ -2806,20 +2857,21 @@ function renderBodegaGeneral() {
       <div class="page-desc">Material disponible de la empresa, sin asignar todavía a ningún proyecto. Desde acá se asigna a un proyecto específico cuando corresponda.</div>
     </div>
     <div class="flex-gap">
-      <button class="btn" onclick="exportarBodegaExcelBsale()" title="Descarga un Excel listo para cargar en el importador masivo de Bsale">⬇ Exportar a Excel (Bsale)</button>
+      ${puede ? `<button class="btn" onclick="modalImportarBodegaExcel()" title="Cargar productos masivamente desde un Excel">⬆ Importar Excel</button>` : ''}
+      <button class="btn" onclick="exportarBodegaExcelBsale()" title="Descarga un Excel listo para cargar en el importador de Stock de Bsale">⬇ Exportar a Excel (Bsale)</button>
       ${puede ? `<button class="btn btn-primary" onclick="modalProductoBodegaGeneral()">+ Agregar producto</button>` : ''}
     </div>
   </div>
   <div class="table-wrap">
     <table>
-      <tr><th>Código</th><th>Material</th><th>Stock disponible</th><th>Mínimo</th><th>Estado</th>${puede?'<th></th>':''}</tr>
+      <tr><th>Código</th><th>Material</th><th>Stock disponible</th><th>Mínimo</th><th>Precio unitario</th><th>Estado</th>${puede?'<th></th>':''}</tr>
       ${DB.bodegaGeneral.length ? DB.bodegaGeneral.map(b => `
-        <tr><td class="mono">${b.codigo}</td><td>${b.material}</td><td class="mono">${b.stock} ${b.unidad}</td><td class="mono muted small">${b.minimo} ${b.unidad}</td><td>${badgeStock(calcularEstadoStock(b))}</td>
+        <tr><td class="mono">${b.codigo}</td><td>${b.material}</td><td class="mono">${b.stock} ${b.unidad}</td><td class="mono muted small">${b.minimo} ${b.unidad}</td><td class="mono">$${(b.precioUnitario||0).toLocaleString('es-CL')}</td><td>${badgeStock(calcularEstadoStock(b))}</td>
         ${puede? `<td class="flex-gap">
           <button class="btn btn-sm" onclick="modalAjustarStockGeneral('${b.codigo}')">Actualizar stock</button>
           <button class="btn btn-sm btn-primary" onclick="modalAsignarAProyecto('${b.codigo}')" ${b.stock<=0?'disabled':''}>→ Asignar a proyecto</button>
         </td>`:''}</tr>
-      `).join('') : `<tr><td colspan="${puede?6:5}"><div class="empty-state">Bodega general vacía. ${puede?'Agrega material que aún no tenga proyecto asignado.':''}</div></td></tr>`}
+      `).join('') : `<tr><td colspan="${puede?7:6}"><div class="empty-state">Bodega general vacía. ${puede?'Agrega material que aún no tenga proyecto asignado.':''}</div></td></tr>`}
     </table>
   </div>
   `;
@@ -2832,31 +2884,137 @@ function renderBodegaGeneral() {
    con encabezados claros y datos limpios. Se arman dos hojas: una para
    dar de alta productos nuevos y otra solo con SKU + Stock, para cuando
    el producto ya existe en Bsale y solo se quiere actualizar cantidad. */
+/* El formato de columnas de acá abajo (SKU, Variante, Stock, Costo Neto,
+   Serie, Moneda, Tipo de Cambio) no es un invento nuestro — es la
+   plantilla real que exporta Bsale (confirmada contra un export real
+   de la cuenta), así que el archivo generado se puede subir directo
+   al importador de Stock de Bsale sin reordenar columnas. */
 function exportarBodegaExcelBsale() {
   if (typeof XLSX === "undefined") { toast("No se pudo cargar el generador de Excel. Revisa tu conexión a internet e intenta de nuevo.", "danger"); return; }
   if (!DB.bodegaGeneral.length) { toast("La bodega general está vacía — no hay nada que exportar.", "danger"); return; }
 
-  const filasProductos = DB.bodegaGeneral.map(b => ({
+  const filas = DB.bodegaGeneral.map(b => ({
     "SKU": b.codigo,
-    "Nombre": b.material,
-    "Clasificación": "Producto",
-    "Unidad de medida": b.unidad,
+    "Variante": b.material,
     "Stock": b.stock,
-    "Stock mínimo (referencia interna)": b.minimo,
+    "Costo Neto": b.precioUnitario || 0,
+    "Serie": "",
+    "Moneda": "",
+    "Tipo de Cambio": "",
   }));
-  const filasStock = DB.bodegaGeneral.map(b => ({ "SKU": b.codigo, "Stock": b.stock }));
 
   const wb = XLSX.utils.book_new();
-  const hojaProductos = XLSX.utils.json_to_sheet(filasProductos);
-  const hojaStock = XLSX.utils.json_to_sheet(filasStock);
-  XLSX.utils.book_append_sheet(wb, hojaProductos, "Productos y servicios");
-  XLSX.utils.book_append_sheet(wb, hojaStock, "Solo Stock");
+  const hoja = XLSX.utils.json_to_sheet(filas);
+  XLSX.utils.book_append_sheet(wb, hoja, "Stock");
 
   const nombreArchivo = `Bodega_Alutipo_para_Bsale_${hoyISO()}.xlsx`;
   XLSX.writeFile(wb, nombreArchivo);
   registrarHistorial({proyecto:"General", accion:"Exportar", detalle:`Bodega general exportada a Excel para Bsale (${DB.bodegaGeneral.length} productos)`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
   guardarEstado();
   toast(`Descargado: ${nombreArchivo}`, "ok");
+}
+
+/* =====================================================================
+   IMPORTAR bodega desde Excel — acepta el mismo formato de arriba
+   (SKU, Variante, Stock, Costo Neto), con nombres de columna
+   flexibles (con o sin tilde, "Nombre" en vez de "Variante", etc.)
+   para no depender de que el archivo venga exactamente parejo.
+   Si el SKU ya existe en la bodega, actualiza stock y precio en vez
+   de duplicar; si no existe, crea el producto.
+   ===================================================================== */
+let _importBodegaFilas = [];
+
+function normalizarHeaderBodega(s) {
+  return (s||"").toString().trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+}
+function mapearFilaImportBodega(row) {
+  const entradas = Object.entries(row).map(([k,v]) => [normalizarHeaderBodega(k), v]);
+  const buscar = (opciones) => { for (const [k,v] of entradas) { if (opciones.includes(k)) return v; } return ""; };
+  const sku = buscar(["sku","codigo"]);
+  const nombre = buscar(["variante","nombre","material","producto","descripcion"]);
+  const stock = buscar(["stock","cantidad"]);
+  const costo = buscar(["costo neto","costo","precio unitario","precio"]);
+  return { sku: (sku||"").toString().trim(), nombre: (nombre||"").toString().trim(), stock: Number(stock)||0, costo: Number(costo)||0 };
+}
+
+function modalImportarBodegaExcel() {
+  if (!puedeGestionarBodega()) { toast(`Tu rol (${DB.role}) no gestiona bodega.`, "danger"); return; }
+  _importBodegaFilas = [];
+  openModal(`
+    <div class="modal-head"><h3>Importar productos desde Excel</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="hint" style="margin-bottom:10px;">Acepta el mismo formato de Bsale: columnas <b>SKU</b>, <b>Variante</b> (nombre) o <b>Nombre</b>, <b>Stock</b> y <b>Costo Neto</b> (precio unitario). Si un SKU ya existe en tu bodega, se actualiza en vez de duplicarse.</div>
+      <label class="field-label">Archivo (.xlsx, .xls o .csv)</label>
+      <input type="file" id="bgImportFile" accept=".xlsx,.xls,.csv" onchange="previsualizarImportBodega(this)">
+      <div id="bgImportPreview" style="margin-top:14px;"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" id="bgImportConfirmBtn" disabled onclick="confirmarImportBodegaExcel()">Importar</button>
+    </div>
+  `);
+}
+
+function previsualizarImportBodega(input) {
+  const file = input.files[0];
+  const preview = document.getElementById('bgImportPreview');
+  const btn = document.getElementById('bgImportConfirmBtn');
+  if (!file) { preview.innerHTML=''; btn.disabled=true; return; }
+  if (typeof XLSX === "undefined") { preview.innerHTML = `<div class="hint" style="color:var(--danger)">No se pudo cargar el lector de Excel. Revisa tu conexión.</div>`; return; }
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const wb = XLSX.read(e.target.result, {type:'array'});
+      const hoja = wb.Sheets[wb.SheetNames[0]];
+      const filas = XLSX.utils.sheet_to_json(hoja, {defval:""});
+      _importBodegaFilas = filas.map(mapearFilaImportBodega).filter(f => f.sku || f.nombre);
+      if (!_importBodegaFilas.length) {
+        preview.innerHTML = `<div class="hint" style="color:var(--danger)">No se encontraron filas con SKU o nombre. Revisa que la primera hoja tenga encabezados.</div>`;
+        btn.disabled = true;
+        return;
+      }
+      const yaExisten = _importBodegaFilas.filter(f => f.sku && DB.bodegaGeneral.some(b=>b.codigo===f.sku)).length;
+      preview.innerHTML = `
+        <div class="hint">Se detectaron <b>${_importBodegaFilas.length}</b> productos. ${yaExisten? `<b>${yaExisten}</b> ya existen en tu bodega y se actualizarán (stock + precio); el resto se crea nuevo.` : 'Todos son nuevos.'}</div>
+        <div class="table-wrap" style="margin-top:8px; max-height:220px; overflow-y:auto;">
+          <table><tr><th>SKU</th><th>Nombre</th><th>Stock</th><th>Costo</th></tr>
+          ${_importBodegaFilas.slice(0,8).map(f=>`<tr><td class="mono">${f.sku||'—'}</td><td>${f.nombre||'—'}</td><td class="mono">${f.stock}</td><td class="mono">$${f.costo.toLocaleString('es-CL')}</td></tr>`).join('')}
+          </table>
+        </div>
+        ${_importBodegaFilas.length>8 ? `<div class="hint" style="margin-top:6px;">+${_importBodegaFilas.length-8} más…</div>` : ''}
+      `;
+      btn.disabled = false;
+    } catch(err) {
+      preview.innerHTML = `<div class="hint" style="color:var(--danger)">No se pudo leer el archivo: ${err.message}</div>`;
+      btn.disabled = true;
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function confirmarImportBodegaExcel() {
+  if (!puedeGestionarBodega()) { toast(`Tu rol (${DB.role}) no gestiona bodega.`, "danger"); return; }
+  if (!_importBodegaFilas.length) return;
+  let creados = 0, actualizados = 0;
+  _importBodegaFilas.forEach(f => {
+    if (!f.sku && !f.nombre) return;
+    let b = f.sku ? DB.bodegaGeneral.find(x=>x.codigo===f.sku) : null;
+    if (!b && f.nombre) b = DB.bodegaGeneral.find(x=>x.material.trim().toLowerCase()===f.nombre.trim().toLowerCase());
+    if (b) {
+      b.stock = f.stock || b.stock;
+      if (f.costo>0) b.precioUnitario = f.costo;
+      actualizados++;
+    } else {
+      const codigo = f.sku || ("MAT-G-"+String(1000+DB.bodegaGeneral.length+Math.floor(Math.random()*900)));
+      DB.bodegaGeneral.push({ codigo, material: f.nombre||codigo, stock: f.stock||0, unidad:"unidad", minimo:0, precioUnitario: f.costo||0 });
+      creados++;
+    }
+  });
+  registrarHistorial({proyecto:"General", accion:"Crear", detalle:`Importación masiva a bodega general desde Excel: ${creados} nuevos, ${actualizados} actualizados`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
+  guardarEstado();
+  closeModal();
+  renderAll();
+  toast(`Importación completa: ${creados} nuevos, ${actualizados} actualizados.`, "ok");
 }
 
 function modalProductoBodegaGeneral() {
@@ -2871,9 +3029,14 @@ function modalProductoBodegaGeneral() {
         <div><label class="field-label">Unidad</label><input type="text" id="bgUnidad" value="unidad"></div>
       </div>
       <div class="grid grid-2" style="gap:10px;">
-        <div><label class="field-label">Stock inicial</label><input type="text" id="bgStock" value="0"></div>
+        <div><label class="field-label">Stock inicial</label><input type="text" id="bgStock" value="0" oninput="recalcularPrecioUnitarioModal()"></div>
         <div><label class="field-label">Stock mínimo</label><input type="text" id="bgMinimo" value="0"></div>
       </div>
+      <div class="grid grid-2" style="gap:10px;">
+        <div><label class="field-label">Precio TOTAL pagado por este lote</label><input type="text" id="bgPrecioTotal" placeholder="Ej: 150000" oninput="recalcularPrecioUnitarioModal()"></div>
+        <div><label class="field-label">Precio unitario (calculado)</label><input type="text" id="bgPrecioUnitarioPreview" value="$0" disabled style="background:var(--paper-2); color:var(--muted);"></div>
+      </div>
+      <div class="hint">Ingresa el total que pagaste por el lote completo (el monto de la factura/OC) — el valor unitario se calcula solo dividiendo por el stock inicial. Ese es el precio que se exporta a Bsale.</div>
     </div>
     <div class="modal-foot">
       <button class="btn" onclick="closeModal()">Cancelar</button>
@@ -2884,10 +3047,18 @@ function modalProductoBodegaGeneral() {
           unidad: document.getElementById('bgUnidad').value,
           stock: document.getElementById('bgStock').value,
           minimo: document.getElementById('bgMinimo').value,
+          precioTotal: document.getElementById('bgPrecioTotal').value,
         });
         if(ok){ closeModal(); renderAll(); }">Agregar</button>
     </div>
   `);
+}
+function recalcularPrecioUnitarioModal() {
+  const stock = Number(document.getElementById('bgStock')?.value) || 0;
+  const total = Number(document.getElementById('bgPrecioTotal')?.value) || 0;
+  const preview = document.getElementById('bgPrecioUnitarioPreview');
+  if (!preview) return;
+  preview.value = stock>0 ? `$${Math.round(total/stock).toLocaleString('es-CL')}` : '— indica stock —';
 }
 
 function modalAjustarStockGeneral(codigo) {
@@ -2897,22 +3068,27 @@ function modalAjustarStockGeneral(codigo) {
   openModal(`
     <div class="modal-head"><h3>Actualizar stock — ${b.material}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
-      <p class="small muted">Stock actual: <b>${b.stock} ${b.unidad}</b> · Mínimo: ${b.minimo} ${b.unidad}</p>
+      <p class="small muted">Stock actual: <b>${b.stock} ${b.unidad}</b> · Mínimo: ${b.minimo} ${b.unidad} · Precio unitario actual: <b>$${(b.precioUnitario||0).toLocaleString('es-CL')}</b></p>
       <label class="field-label">Tipo de movimiento</label>
-      <select id="bgAjusteTipo">
+      <select id="bgAjusteTipo" onchange="document.getElementById('bgPrecioIngresoWrap').style.display = this.value==='Ingreso' ? 'block' : 'none';">
         <option value="Ingreso">Ingreso (suma al stock actual)</option>
         <option value="Salida">Salida (resta del stock actual)</option>
         <option value="Ajuste">Ajuste — fijar el stock exacto</option>
       </select>
       <label class="field-label">Cantidad</label>
       <input type="text" id="bgAjusteCantidad" placeholder="Ej: 10">
+      <div id="bgPrecioIngresoWrap">
+        <label class="field-label">Precio TOTAL pagado por este ingreso (opcional)</label>
+        <input type="text" id="bgAjustePrecioTotal" placeholder="Ej: 80000">
+        <div class="hint">Si lo llenas, se recalcula el precio unitario como promedio ponderado con el stock que ya había. Si lo dejas vacío, se mantiene el precio unitario actual.</div>
+      </div>
       <label class="field-label">Motivo (opcional)</label>
       <input type="text" id="bgAjusteMotivo" placeholder="Ej: compra sin proyecto definido aún">
     </div>
     <div class="modal-foot">
       <button class="btn" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-primary" onclick="
-        const ok = ajustarStockBodegaGeneral('${codigo}', document.getElementById('bgAjusteTipo').value, document.getElementById('bgAjusteCantidad').value, document.getElementById('bgAjusteMotivo').value);
+        const ok = ajustarStockBodegaGeneral('${codigo}', document.getElementById('bgAjusteTipo').value, document.getElementById('bgAjusteCantidad').value, document.getElementById('bgAjusteMotivo').value, document.getElementById('bgAjustePrecioTotal').value);
         if(ok){ closeModal(); renderAll(); }">Guardar</button>
     </div>
   `);

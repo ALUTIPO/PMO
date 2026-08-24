@@ -8,6 +8,8 @@
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+<!-- SheetJS: genera el .xlsx real de exportación de Bodega para Bsale -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <!-- Fuentes -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -2803,7 +2805,10 @@ function renderBodegaGeneral() {
       <h1>Bodega General</h1>
       <div class="page-desc">Material disponible de la empresa, sin asignar todavía a ningún proyecto. Desde acá se asigna a un proyecto específico cuando corresponda.</div>
     </div>
-    ${puede ? `<button class="btn btn-primary" onclick="modalProductoBodegaGeneral()">+ Agregar producto</button>` : ''}
+    <div class="flex-gap">
+      <button class="btn" onclick="exportarBodegaExcelBsale()" title="Descarga un Excel listo para cargar en el importador masivo de Bsale">⬇ Exportar a Excel (Bsale)</button>
+      ${puede ? `<button class="btn btn-primary" onclick="modalProductoBodegaGeneral()">+ Agregar producto</button>` : ''}
+    </div>
   </div>
   <div class="table-wrap">
     <table>
@@ -2818,6 +2823,40 @@ function renderBodegaGeneral() {
     </table>
   </div>
   `;
+}
+
+/* Exporta la Bodega General a un .xlsx con encabezados pensados para el
+   importador masivo de Bsale (Productos y servicios / Stock). Bsale deja
+   mapear manualmente cada columna del Excel a sus propios campos al
+   cargarlo, así que no hace falta replicar su plantilla exacta — basta
+   con encabezados claros y datos limpios. Se arman dos hojas: una para
+   dar de alta productos nuevos y otra solo con SKU + Stock, para cuando
+   el producto ya existe en Bsale y solo se quiere actualizar cantidad. */
+function exportarBodegaExcelBsale() {
+  if (typeof XLSX === "undefined") { toast("No se pudo cargar el generador de Excel. Revisa tu conexión a internet e intenta de nuevo.", "danger"); return; }
+  if (!DB.bodegaGeneral.length) { toast("La bodega general está vacía — no hay nada que exportar.", "danger"); return; }
+
+  const filasProductos = DB.bodegaGeneral.map(b => ({
+    "SKU": b.codigo,
+    "Nombre": b.material,
+    "Clasificación": "Producto",
+    "Unidad de medida": b.unidad,
+    "Stock": b.stock,
+    "Stock mínimo (referencia interna)": b.minimo,
+  }));
+  const filasStock = DB.bodegaGeneral.map(b => ({ "SKU": b.codigo, "Stock": b.stock }));
+
+  const wb = XLSX.utils.book_new();
+  const hojaProductos = XLSX.utils.json_to_sheet(filasProductos);
+  const hojaStock = XLSX.utils.json_to_sheet(filasStock);
+  XLSX.utils.book_append_sheet(wb, hojaProductos, "Productos y servicios");
+  XLSX.utils.book_append_sheet(wb, hojaStock, "Solo Stock");
+
+  const nombreArchivo = `Bodega_Alutipo_para_Bsale_${hoyISO()}.xlsx`;
+  XLSX.writeFile(wb, nombreArchivo);
+  registrarHistorial({proyecto:"General", accion:"Exportar", detalle:`Bodega general exportada a Excel para Bsale (${DB.bodegaGeneral.length} productos)`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
+  guardarEstado();
+  toast(`Descargado: ${nombreArchivo}`, "ok");
 }
 
 function modalProductoBodegaGeneral() {

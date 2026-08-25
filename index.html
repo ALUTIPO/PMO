@@ -1029,6 +1029,23 @@ function renderPasoEmail() {
   setTimeout(()=>{ const el = document.getElementById("loginEmail"); if(el) el.focus(); }, 50);
 }
 
+/* Antes acá se usaba auth.fetchSignInMethodsForEmail(email) para decidir
+   si mostrar "crea tu contraseña" o "inicia sesión". Firebase cambió el
+   comportamiento de esa función por una protección de privacidad
+   ("email enumeration protection"): ahora casi siempre devuelve una
+   lista vacía, sin importar si la cuenta existe o no — por eso, en un
+   dispositivo nuevo (sin sesión ya guardada), la app siempre terminaba
+   creyendo que era "primer acceso" aunque la cuenta ya existiera desde
+   otro dispositivo. En el dispositivo original nunca se notaba, porque
+   Firebase ya lo tenía con la sesión iniciada y nunca volvía a pasar
+   por acá.
+
+   La solución no depende de que Firebase nos diga si la cuenta existe:
+   directamente se intenta iniciar sesión, y solo si eso falla se intenta
+   crear la cuenta — Firebase igual va a rechazar la creación con
+   "auth/email-already-in-use" si la cuenta ya existía, lo que nos dice
+   con certeza que el problema real era la contraseña, no que faltara
+   crear la cuenta. */
 async function continuarLogin() {
   const email = (document.getElementById("loginEmail").value||"").trim().toLowerCase();
   if (!email || !email.includes("@")) { toast("Ingresa un correo válido.", "danger"); return; }
@@ -1043,51 +1060,41 @@ async function continuarLogin() {
     `;
     return;
   }
-
-  let metodos = [];
-  try { metodos = await auth.fetchSignInMethodsForEmail(email); }
-  catch(e) { toast("No se pudo verificar el correo: "+e.message, "danger"); return; }
-
-  if (metodos.length === 0) {
-    // primer acceso — crear contraseña
-    document.getElementById("loginArea").innerHTML = `
-      <div class="ai-note">¡Hola ${autorizado.nombre}! Es tu primer acceso — crea tu contraseña (mínimo 6 caracteres).</div>
-      <label class="field-label" style="margin-top:12px;">Nueva contraseña</label>
-      <input type="password" id="loginPassNueva" placeholder="Mínimo 6 caracteres" onkeydown="if(event.key==='Enter') crearCuentaLogin('${email}');">
-      <button class="btn btn-primary" style="width:100%; justify-content:center; margin-top:12px;" onclick="crearCuentaLogin('${email}')">Crear contraseña e ingresar</button>
-      <button class="btn" style="width:100%; justify-content:center; margin-top:8px;" onclick="renderPasoEmail()">← Volver</button>
-    `;
-  } else {
-    document.getElementById("loginArea").innerHTML = `
-      <div class="small muted" style="margin-bottom:10px;">${autorizado.nombre} · ${autorizado.rol}</div>
-      <label class="field-label">Contraseña</label>
-      <input type="password" id="loginPass" placeholder="Tu contraseña" onkeydown="if(event.key==='Enter') iniciarSesionLogin('${email}');">
-      <button class="btn btn-primary" style="width:100%; justify-content:center; margin-top:12px;" onclick="iniciarSesionLogin('${email}')">Iniciar sesión</button>
-      <div style="text-align:center; margin-top:10px;">
-        <a href="#" class="small" onclick="olvideMiClave('${email}'); return false;">¿Olvidaste tu contraseña?</a>
-      </div>
-      <button class="btn" style="width:100%; justify-content:center; margin-top:8px;" onclick="renderPasoEmail()">← Volver</button>
-    `;
-  }
+  renderPasoPassword(email, autorizado);
 }
 
-async function crearCuentaLogin(email) {
-  const pass = document.getElementById("loginPassNueva").value;
+function renderPasoPassword(email, autorizado) {
+  document.getElementById("loginArea").innerHTML = `
+    <div class="small muted" style="margin-bottom:10px;">${autorizado.nombre} · ${autorizado.rol}</div>
+    <label class="field-label">Contraseña</label>
+    <input type="password" id="loginPass" placeholder="Tu contraseña" onkeydown="if(event.key==='Enter') intentarAccesoLogin('${email}');">
+    <div class="hint">¿Primera vez que entras a ALUTIPO PMO desde cualquier dispositivo? Escribe la contraseña que quieres usar (mínimo 6 caracteres) y quedará creada. Si ya tienes cuenta, solo ingresa tu contraseña de siempre.</div>
+    <button class="btn btn-primary" style="width:100%; justify-content:center; margin-top:12px;" onclick="intentarAccesoLogin('${email}')">Ingresar</button>
+    <div style="text-align:center; margin-top:10px;">
+      <a href="#" class="small" onclick="olvideMiClave('${email}'); return false;">¿Olvidaste tu contraseña?</a>
+    </div>
+    <button class="btn" style="width:100%; justify-content:center; margin-top:8px;" onclick="renderPasoEmail()">← Volver</button>
+  `;
+  setTimeout(()=>{ const el = document.getElementById("loginPass"); if(el) el.focus(); }, 50);
+}
+
+async function intentarAccesoLogin(email) {
+  const pass = document.getElementById("loginPass").value;
   if (!pass || pass.length < 6) { toast("La contraseña debe tener al menos 6 caracteres.", "danger"); return; }
   try {
-    await auth.createUserWithEmailAndPassword(email, pass);
-    // onAuthStateChanged toma el control desde acá
-  } catch(e) {
-    toast("No se pudo crear la cuenta: "+traducirErrorAuth(e), "danger");
-  }
-}
-async function iniciarSesionLogin(email) {
-  const pass = document.getElementById("loginPass").value;
-  if (!pass) { toast("Ingresa tu contraseña.", "danger"); return; }
-  try {
     await auth.signInWithEmailAndPassword(email, pass);
-  } catch(e) {
-    toast("No se pudo iniciar sesión: "+traducirErrorAuth(e), "danger");
+    // éxito — onAuthStateChanged toma el control desde acá
+  } catch (errLogin) {
+    try {
+      await auth.createUserWithEmailAndPassword(email, pass);
+      // éxito creando la cuenta — onAuthStateChanged toma el control desde acá
+    } catch (errCrear) {
+      if (errCrear.code === "auth/email-already-in-use") {
+        toast("Contraseña incorrecta. Si la olvidaste, usa '¿Olvidaste tu contraseña?' abajo.", "danger");
+      } else {
+        toast("No se pudo ingresar: "+traducirErrorAuth(errCrear), "danger");
+      }
+    }
   }
 }
 async function olvideMiClave(email) {
@@ -1102,6 +1109,7 @@ function traducirErrorAuth(e) {
   const map = {
     "auth/wrong-password": "contraseña incorrecta.",
     "auth/user-not-found": "no existe una cuenta con ese correo.",
+    "auth/invalid-credential": "correo o contraseña incorrectos.",
     "auth/email-already-in-use": "ya existe una cuenta con ese correo — usa 'Iniciar sesión' en vez de crear una nueva.",
     "auth/weak-password": "la contraseña es muy débil (mínimo 6 caracteres).",
     "auth/invalid-email": "el correo no es válido.",

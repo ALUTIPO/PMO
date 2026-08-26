@@ -8,6 +8,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-storage-compat.js"></script>
 <!-- SheetJS: genera el .xlsx real de exportación de Bodega para Bsale -->
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <!-- Fuentes -->
@@ -387,6 +388,14 @@ const usuariosAutorizadosRef = database.ref('usuariosAutorizados');
    podrían pisarse el mensaje entre sí. Acá cada mensaje se agrega con
    push() de forma independiente, así nunca compite con nada más. */
 const mensajesRef = database.ref('mensajes');
+/* Bitácora de comentarios + fotos por tarea/sub-ítem del Punch List —
+   independiente del % de avance. Igual criterio que /mensajes: nodo
+   propio, entradas con push(), nunca se pisan entre sí. Las fotos NO
+   se guardan acá (jamás como base64 en RTDB — reventaría el peso de
+   cada sincronización de estado); solo se guarda la URL que entrega
+   Firebase Storage tras subir la imagen ya comprimida. */
+const bitacoraPunchRef = database.ref('bitacoraPunch');
+const storage = firebase.storage();
 let miPresenciaRef = null;
 let listaConectados = [];
 let usuarioAuth = null; // el objeto de Firebase Auth de la sesión actual
@@ -810,6 +819,7 @@ const DB = {
   updatedAt: null,
   syncStatus: "cargando",
   mensajes: {}, // caché local del nodo /mensajes — no viaja por stateRef, ver configurarMensajes()
+  bitacoraPunch: {}, // caché local de /bitacoraPunch — igual criterio, ver configurarBitacoraPunch()
 };
 let modalAbierto = false;
 let _guardando = false;
@@ -926,6 +936,7 @@ async function cargarEstadoInicial() {
   renderAll();
   configurarPresencia();
   configurarMensajes();
+  configurarBitacoraPunch();
   toast(`Bienvenido, ${DB.usuario} (${DB.role}).`, "ok");
 }
 
@@ -1231,6 +1242,12 @@ function actualizarMiPresencia() {
 function configurarMensajes() {
   mensajesRef.on('value', (snap) => {
     DB.mensajes = snap.val() || {};
+    renderAll();
+  });
+}
+function configurarBitacoraPunch() {
+  bitacoraPunchRef.on('value', (snap) => {
+    DB.bitacoraPunch = snap.val() || {};
     renderAll();
   });
 }
@@ -3362,6 +3379,7 @@ function renderMiTareaRow(t) {
     </div>
     <div class="flex-gap" style="margin-top:12px;">
       <button class="btn btn-sm" onclick="DB.proyectoActivo='${t.proyectoId}'; goTo('punch')">Ver en Punch List →</button>
+      <button class="btn btn-sm" onclick="modalBitacoraPunch('${t.proyectoId}','${t.punchId}', ${t.subId!=null?t.subId:'null'})">💬 ${contarBitacora(t.proyectoId, t.punchId, t.subId)||''} Comentarios</button>
     </div>
   </div>`;
 }
@@ -3702,6 +3720,124 @@ function renderPunch() {
   `;
 }
 
+/* =====================================================================
+   BITÁCORA DE PUNCH LIST — comentarios + fotos por tarea/sub-ítem,
+   independiente del % de avance. Pueden agregar entradas: quien tiene
+   la tarea asignada, y cualquiera de los roles que ya pueden cerrar un
+   sub-ítem al 100% (Líder de Terreno, Jefe de Proyecto, Gerencia) —
+   mismo criterio de "supervisor" que ya usa el resto de la app.
+   ===================================================================== */
+function claveBitacora(punchId, subId) { return (subId!=null) ? (punchId+"__"+subId) : punchId; }
+function puedeComentarPunch(it, sub) {
+  if (puedeCerrarSubitem()) return true;
+  const yo = personaActual();
+  if (!yo) return false;
+  const asignadoId = sub ? sub.asignadoPersonaId : it.asignadoPersonaId;
+  return asignadoId === yo.id;
+}
+function contarBitacora(proyectoId, punchId, subId) {
+  const clave = claveBitacora(punchId, subId);
+  return Object.keys(((DB.bitacoraPunch[proyectoId]||{})[clave])||{}).length;
+}
+
+/* Redimensiona la foto en el propio celular ANTES de subirla — sube
+   mucho más rápido con mala señal en terreno y ocupa una fracción del
+   espacio en Firebase Storage. 1280px de ancho máximo es de sobra para
+   ver el detalle de una instalación en pantalla. */
+function comprimirImagenBitacora(file, maxAncho, calidad) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("No se pudo leer la imagen."));
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Archivo de imagen inválido."));
+      img.onload = () => {
+        const escala = Math.min(1, maxAncho / img.width);
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * escala);
+        canvas.height = Math.round(img.height * escala);
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error("No se pudo comprimir la imagen.")), 'image/jpeg', calidad);
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+async function subirFotoBitacora(file, proyectoId, clave, indice) {
+  const comprimida = await comprimirImagenBitacora(file, 1280, 0.75);
+  const ref = storage.ref(`punchFotos/${proyectoId}/${clave}/${Date.now()}_${indice}.jpg`);
+  await ref.put(comprimida, {contentType:'image/jpeg'});
+  return await ref.getDownloadURL();
+}
+
+let _bitacoraFotosSeleccionadas = [];
+
+function modalBitacoraPunch(proyectoId, punchId, subId) {
+  const p = proy(proyectoId);
+  const it = p?.punch.find(x => x.id === punchId);
+  if (!it) return;
+  const sub = (subId!=null) ? (it.subitems||[]).find(s => s.id === subId) : null;
+  const puede = puedeComentarPunch(it, sub);
+  _bitacoraFotosSeleccionadas = [];
+  openModal(`
+    <div class="modal-head"><h3>💬 ${sub ? sub.nombre : it.desc}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      ${renderListaBitacora(proyectoId, punchId, subId)}
+      ${puede ? `
+        <div class="divider"></div>
+        <label class="field-label">Nuevo comentario</label>
+        <textarea id="bitacoraTexto" rows="2" placeholder="Ej: Se instaló el tablero, falta rotular."></textarea>
+        <label class="field-label">Fotos (opcional, puedes elegir varias)</label>
+        <input type="file" accept="image/*" multiple capture="environment" onchange="_bitacoraFotosSeleccionadas = Array.from(this.files); document.getElementById('bitacoraFotosCount').textContent = this.files.length ? this.files.length+' foto(s) seleccionada(s)' : '';">
+        <div id="bitacoraFotosCount" class="hint"></div>
+        <button class="btn btn-primary" style="margin-top:10px;" id="bitacoraEnviarBtn" onclick="enviarBitacoraPunch('${proyectoId}','${punchId}',${subId!=null?subId:'null'})">Publicar</button>
+      ` : `<div class="hint" style="margin-top:10px;">Solo la persona asignada a esta tarea, o un supervisor (Líder de Terreno / Jefe de Proyecto / Gerencia), puede agregar comentarios acá.</div>`}
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cerrar</button></div>
+  `, 480);
+}
+
+function renderListaBitacora(proyectoId, punchId, subId) {
+  const clave = claveBitacora(punchId, subId);
+  const dict = ((DB.bitacoraPunch[proyectoId]||{})[clave]) || {};
+  const entradas = Object.entries(dict).map(([id,v]) => ({id, ...v})).sort((a,b) => (b.ts||0)-(a.ts||0));
+  if (!entradas.length) return `<div class="empty-state small">Todavía no hay comentarios en esta tarea.</div>`;
+  return `<div class="stack" style="gap:10px; max-height:280px; overflow-y:auto;">
+    ${entradas.map(e => `
+      <div style="border-bottom:1px solid var(--line-soft); padding-bottom:10px;">
+        <div class="flex-between small"><b>${e.autor}</b><span class="mono muted" style="font-size:10.5px;">${new Date(e.ts).toLocaleString('es-CL')}</span></div>
+        ${e.texto ? `<div class="small" style="margin-top:4px;">${escaparHtml(e.texto)}</div>` : ''}
+        ${(e.fotos||[]).length ? `<div class="flex-gap" style="margin-top:6px; flex-wrap:wrap;">
+          ${e.fotos.map(url => `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" style="width:64px; height:64px; object-fit:cover; border-radius:6px; border:1px solid var(--line);" loading="lazy"></a>`).join('')}
+        </div>` : ''}
+      </div>
+    `).join('')}
+  </div>`;
+}
+
+async function enviarBitacoraPunch(proyectoId, punchId, subId) {
+  const texto = (document.getElementById('bitacoraTexto').value||"").trim();
+  if (!texto && !_bitacoraFotosSeleccionadas.length) { toast("Escribe un comentario o agrega al menos una foto.", "danger"); return; }
+  const btn = document.getElementById('bitacoraEnviarBtn');
+  if (btn) { btn.disabled = true; btn.textContent = "Subiendo…"; }
+  const clave = claveBitacora(punchId, subId);
+  try {
+    const urls = [];
+    for (let i=0; i<_bitacoraFotosSeleccionadas.length; i++) {
+      urls.push(await subirFotoBitacora(_bitacoraFotosSeleccionadas[i], proyectoId, clave, i));
+    }
+    await bitacoraPunchRef.child(proyectoId).child(clave).push({ autor: DB.usuario, rol: DB.role, texto, fotos: urls, ts: Date.now() });
+    registrarHistorial({proyecto: proy(proyectoId)?.codigo||proyectoId, accion:"Crear", detalle:`Comentario en Punch List (${punchId}${subId!=null?' / '+subId:''})${urls.length?` con ${urls.length} foto(s)`:''}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
+    guardarEstado();
+    _bitacoraFotosSeleccionadas = [];
+    modalBitacoraPunch(proyectoId, punchId, subId);
+  } catch(err) {
+    toast("No se pudo publicar: "+(err.message||err), "danger");
+    if (btn) { btn.disabled = false; btn.textContent = "Publicar"; }
+  }
+}
+
 function renderTareaPunch(p, it) {
   const avance = avancePunchItem(it);
   const tieneSub = it.subitems && it.subitems.length;
@@ -3741,6 +3877,7 @@ function renderTareaPunch(p, it) {
           </select>
           <button class="btn btn-sm" onclick="event.stopPropagation(); toggleExpandirPunch('${it.id}');">+ Agregar sub-ítems</button>`}
       <button class="btn btn-sm" onclick="event.stopPropagation(); modalPunchForm('${p.id}','${it.id}')">Editar</button>
+      <button class="btn btn-sm" onclick="event.stopPropagation(); modalBitacoraPunch('${p.id}','${it.id}', null)">💬 ${contarBitacora(p.id, it.id, null)||''} Comentarios</button>
       <button class="btn btn-sm btn-danger" onclick="event.stopPropagation(); if(confirm('¿Eliminar esta tarea del Punch List?')){ eliminarPunch('${p.id}','${it.id}'); renderAll(); }">Eliminar</button>
     </div>
     ${abierto ? `<div style="margin-top:14px; padding-top:14px; border-top:1px dashed var(--line);">${renderDetallePunchInline(p, it)}</div>` : ''}
@@ -3765,7 +3902,7 @@ function renderDetallePunchInline(p, it) {
 
       <div id="subitemsGrid_${it.id}" style="max-height:340px; overflow-y:auto;">
         ${subs.length ? `<div class="table-wrap"><table>
-          <tr><th>Sub-ítem</th><th>Estado</th><th style="min-width:170px;">Progreso</th><th>Asignado a</th><th></th></tr>
+          <tr><th>Sub-ítem</th><th>Estado</th><th style="min-width:170px;">Progreso</th><th>Asignado a</th><th></th><th></th></tr>
           ${subs.map(s => `
             <tr data-nombre="${s.nombre.toLowerCase()}">
               <td class="small mono">${s.nombre}</td>
@@ -3785,6 +3922,7 @@ function renderDetallePunchInline(p, it) {
                 </select>
                 ${s.asignadoNota ? `<div class="hint" style="margin-top:2px;">antes: "${s.asignadoNota}"</div>` : ''}
               </td>
+              <td><button class="btn btn-sm" onclick="modalBitacoraPunch('${p.id}','${it.id}', ${s.id})" title="Comentarios y fotos">💬 ${contarBitacora(p.id, it.id, s.id)||''}</button></td>
               <td><button class="btn btn-sm btn-danger" onclick="eliminarSubitemPunch('${p.id}','${it.id}',${s.id}); renderAll();">✕</button></td>
             </tr>
           `).join('')}

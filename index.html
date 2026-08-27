@@ -3703,7 +3703,7 @@ function renderPunch() {
       <h1>Punch List ${p.modoCierre?'<span class="badge b-amarillo" style="margin-left:6px;"><span class="dot"></span>Proyecto en cierre</span>':''}</h1>
       <div class="page-desc">${p.modoCierre ? 'Este proyecto se creó en modo cierre — el foco es dejar en 100% cada tarea pendiente, no el seguimiento de postas.' : 'Verificación de sitio abierta durante la Posta 18. La Posta 19 (cierre) no puede completarse mientras existan tareas pendientes.'} Las tareas con fecha de inicio y término se reflejan solas en la carta Gantt.</div>
     </div>
-    <div class="flex-gap">${selectorProyectos()}<button class="btn btn-primary" onclick="modalPunchForm('${p.id}')">+ Nueva tarea</button></div>
+    <div class="flex-gap">${selectorProyectos()}<button class="btn" onclick="filtroGaleriaProyecto='${p.id}'; goTo('galeria')">📷 Galería de este proyecto</button><button class="btn btn-primary" onclick="modalPunchForm('${p.id}')">+ Nueva tarea</button></div>
   </div>
 
   <div class="card" style="margin-bottom:16px;">
@@ -3786,6 +3786,9 @@ function modalBitacoraPunch(proyectoId, punchId, subId) {
       ${renderListaBitacora(proyectoId, punchId, subId)}
       ${puede ? `
         <div class="divider"></div>
+        <label class="field-label">Fecha</label>
+        <input type="date" id="bitacoraFecha" value="${hoyISO()}">
+        <div class="hint" style="margin-bottom:8px;">Por defecto es hoy — cámbiala si estás cargando fotos de un trabajo hecho otro día.</div>
         <label class="field-label">Nuevo comentario</label>
         <textarea id="bitacoraTexto" rows="2" placeholder="Ej: Se instaló el tablero, falta rotular."></textarea>
         <label class="field-label">Fotos (opcional, puedes elegir varias)</label>
@@ -3806,7 +3809,7 @@ function renderListaBitacora(proyectoId, punchId, subId) {
   return `<div class="stack" style="gap:10px; max-height:280px; overflow-y:auto;">
     ${entradas.map(e => `
       <div style="border-bottom:1px solid var(--line-soft); padding-bottom:10px;">
-        <div class="flex-between small"><b>${e.autor}</b><span class="mono muted" style="font-size:10.5px;">${new Date(e.ts).toLocaleString('es-CL')}</span></div>
+        <div class="flex-between small"><b>${e.autor}</b><span class="mono muted" style="font-size:10.5px;">${e.fecha ? new Date(e.fecha+'T00:00:00').toLocaleDateString('es-CL',{day:'2-digit',month:'short',year:'numeric'}) : new Date(e.ts).toLocaleDateString('es-CL')}</span></div>
         ${e.texto ? `<div class="small" style="margin-top:4px;">${escaparHtml(e.texto)}</div>` : ''}
         ${(e.fotos||[]).length ? `<div class="flex-gap" style="margin-top:6px; flex-wrap:wrap;">
           ${e.fotos.map(url => `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" style="width:64px; height:64px; object-fit:cover; border-radius:6px; border:1px solid var(--line);" loading="lazy"></a>`).join('')}
@@ -3818,6 +3821,7 @@ function renderListaBitacora(proyectoId, punchId, subId) {
 
 async function enviarBitacoraPunch(proyectoId, punchId, subId) {
   const texto = (document.getElementById('bitacoraTexto').value||"").trim();
+  const fecha = document.getElementById('bitacoraFecha')?.value || hoyISO();
   if (!texto && !_bitacoraFotosSeleccionadas.length) { toast("Escribe un comentario o agrega al menos una foto.", "danger"); return; }
   const btn = document.getElementById('bitacoraEnviarBtn');
   if (btn) { btn.disabled = true; btn.textContent = "Subiendo…"; }
@@ -3827,7 +3831,7 @@ async function enviarBitacoraPunch(proyectoId, punchId, subId) {
     for (let i=0; i<_bitacoraFotosSeleccionadas.length; i++) {
       urls.push(await subirFotoBitacora(_bitacoraFotosSeleccionadas[i], proyectoId, clave, i));
     }
-    await bitacoraPunchRef.child(proyectoId).child(clave).push({ autor: DB.usuario, rol: DB.role, texto, fotos: urls, ts: Date.now() });
+    await bitacoraPunchRef.child(proyectoId).child(clave).push({ autor: DB.usuario, rol: DB.role, texto, fotos: urls, fecha, ts: Date.now() });
     registrarHistorial({proyecto: proy(proyectoId)?.codigo||proyectoId, accion:"Crear", detalle:`Comentario en Punch List (${punchId}${subId!=null?' / '+subId:''})${urls.length?` con ${urls.length} foto(s)`:''}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
     guardarEstado();
     _bitacoraFotosSeleccionadas = [];
@@ -3836,6 +3840,64 @@ async function enviarBitacoraPunch(proyectoId, punchId, subId) {
     toast("No se pudo publicar: "+(err.message||err), "danger");
     if (btn) { btn.disabled = false; btn.textContent = "Publicar"; }
   }
+}
+
+let filtroGaleriaProyecto = "todos";
+function renderGaleria() {
+  const todasEntradas = [];
+  Object.entries(DB.bitacoraPunch||{}).forEach(([proyectoId, dictClaves]) => {
+    if (filtroGaleriaProyecto!=='todos' && filtroGaleriaProyecto!==proyectoId) return;
+    const p = DB.proyectos.find(x=>x.id===proyectoId);
+    Object.entries(dictClaves||{}).forEach(([clave, dictEntradas]) => {
+      const partes = clave.split('__');
+      const punchId = partes[0];
+      const subId = partes.length>1 ? Number(partes[1]) : null;
+      const it = p?.punch.find(x=>x.id===punchId);
+      const sub = (subId!=null && it) ? (it.subitems||[]).find(s=>s.id===subId) : null;
+      Object.entries(dictEntradas||{}).forEach(([entryId, e]) => {
+        todasEntradas.push({ ...e, entryId, proyectoId, punchId, subId,
+          proyectoCodigo: p?.codigo||proyectoId, proyectoNombre: p?.nombre||proyectoId,
+          tareaNombre: sub ? sub.nombre : (it ? it.desc : punchId) });
+      });
+    });
+  });
+  todasEntradas.sort((a,b) => (b.fecha||'').localeCompare(a.fecha||'') || (b.ts||0)-(a.ts||0));
+
+  return `
+  <div class="page-head">
+    <div>
+      <h1>Galería</h1>
+      <div class="page-desc">Fotos y comentarios de avance cargados desde el Punch List — de todos los proyectos, o filtrado a uno.</div>
+    </div>
+    <div class="flex-gap">
+      <select onchange="filtroGaleriaProyecto=this.value; renderAll();" style="width:auto; font-size:12.5px; padding:8px 11px; border-radius:8px; border:1px solid var(--line); background:var(--card);">
+        <option value="todos" ${filtroGaleriaProyecto==='todos'?'selected':''}>Todos los proyectos</option>
+        ${DB.proyectos.map(p=>`<option value="${p.id}" ${filtroGaleriaProyecto===p.id?'selected':''}>${p.nombre}</option>`).join('')}
+      </select>
+    </div>
+  </div>
+
+  ${!todasEntradas.length ? `<div class="empty-state card">Todavía no hay comentarios ni fotos cargadas${filtroGaleriaProyecto!=='todos'?' en este proyecto':''}. Se agregan desde el botón "💬 Comentarios" de cada tarea del Punch List.</div>` : `
+  <div class="grid grid-3">
+    ${todasEntradas.map(e => `
+      <div class="card">
+        <div class="flex-between small" style="margin-bottom:6px;">
+          <span class="badge b-blue"><span class="dot"></span>${e.proyectoCodigo}</span>
+          <span class="mono muted" style="font-size:10.5px;">${e.fecha ? new Date(e.fecha+'T00:00:00').toLocaleDateString('es-CL',{day:'2-digit',month:'short',year:'numeric'}) : new Date(e.ts).toLocaleDateString('es-CL')}</span>
+        </div>
+        <div class="small" style="font-weight:600;">${e.tareaNombre}</div>
+        ${e.texto ? `<div class="small" style="margin-top:5px;">${escaparHtml(e.texto)}</div>` : ''}
+        ${(e.fotos||[]).length ? `<div class="flex-gap" style="margin-top:8px; flex-wrap:wrap;">
+          ${e.fotos.map(url=>`<a href="${url}" target="_blank" rel="noopener"><img src="${url}" style="width:72px; height:72px; object-fit:cover; border-radius:7px; border:1px solid var(--line);" loading="lazy"></a>`).join('')}
+        </div>` : `<div class="hint" style="margin-top:6px;">Sin fotos, solo comentario.</div>`}
+        <div class="flex-between small muted" style="margin-top:8px;">
+          <span>👤 ${e.autor}</span>
+          <button class="btn btn-sm" onclick="DB.proyectoActivo='${e.proyectoId}'; modalBitacoraPunch('${e.proyectoId}','${e.punchId}', ${e.subId!=null?e.subId:'null'})">Ver tarea →</button>
+        </div>
+      </div>
+    `).join('')}
+  </div>`}
+  `;
 }
 
 function renderTareaPunch(p, it) {
@@ -5367,6 +5429,7 @@ const NAV = [
     {id:"bodega", label:"Bodega del proyecto", icon:iconBox()},
     {id:"punch", label:"Punch List", icon:iconCheck()},
     {id:"requerimientos", label:"Requerimientos", icon:iconChat()},
+    {id:"galeria", label:"Galería", icon:iconGallery()},
     {id:"reaperturas", label:"Reaperturas", icon:iconRefresh()},
   ]},
   {group:"Inteligencia", items:[
@@ -5380,6 +5443,9 @@ function iconGrid() {
 }
 function iconChat() {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 11.5a8.4 8.4 0 0 1-8.9 8.4 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8A8.4 8.4 0 0 1 12.5 3a8.4 8.4 0 0 1 8.4 8.4Z"/></svg>`;
+}
+function iconGallery() {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.8"/><path d="m21 15-5-5-9 9"/></svg>`;
 }
 function iconLayers() {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3 2 8l10 5 10-5-10-5Z"/><path d="m2 13 10 5 10-5"/></svg>`;
@@ -5508,7 +5574,7 @@ function renderAll() {
   document.getElementById("topbarCrumb").textContent = "ALUTIPO-PMO / "+currentPage;
   const renderers = {
     dashboard: renderDashboard, miPanel: renderMiPanel, panelEquipo: renderPanelEquipo, bodegaGeneral: renderBodegaGeneral, personal: renderPersonal, proyecto360: renderProyecto360, planificacion: renderPlanificacion, compras: renderCompras,
-    presupuesto: renderPresupuesto, bodega: renderBodega, punch: renderPunch, requerimientos: renderRequerimientos,
+    presupuesto: renderPresupuesto, bodega: renderBodega, punch: renderPunch, requerimientos: renderRequerimientos, galeria: renderGaleria,
     reaperturas: renderReaperturas, copiloto: renderCopiloto, auditoria: renderAuditoria,
   };
   const target = document.getElementById("page-"+currentPage);

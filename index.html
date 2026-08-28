@@ -310,6 +310,38 @@ tr:last-child td { border-bottom: none; }
   .messages{ max-height:none; }
 }
 
+/* ===================== VISOR DE FOTOS (estilo Instagram) ===================== */
+.visor-overlay {
+  position: fixed; inset: 0; background: rgba(10,12,16,.94); z-index: 300;
+  display: flex; align-items: center; justify-content: center;
+  animation: visorFade .18s ease;
+}
+@keyframes visorFade { from{opacity:0;} to{opacity:1;} }
+.visor-close {
+  position: absolute; top: 16px; right: 20px; background: rgba(255,255,255,.14); border: none; color: #fff;
+  width: 38px; height: 38px; border-radius: 50%; font-size: 18px; cursor: pointer; z-index: 2;
+}
+.visor-close:hover { background: rgba(255,255,255,.24); }
+.visor-nav {
+  position: absolute; top: 50%; transform: translateY(-50%); background: rgba(255,255,255,.14); border: none; color: #fff;
+  width: 44px; height: 44px; border-radius: 50%; font-size: 24px; cursor: pointer; z-index: 2; line-height: 1;
+}
+.visor-nav:hover { background: rgba(255,255,255,.24); }
+.visor-prev { left: 14px; } .visor-next { right: 14px; }
+.visor-imgwrap { max-width: 92vw; max-height: 88vh; display: flex; flex-direction: column; align-items: center; animation: visorScale .16s ease; }
+@keyframes visorScale { from{ transform:scale(.96); opacity:.5; } to{ transform:scale(1); opacity:1; } }
+.visor-img { max-width: 92vw; max-height: 68vh; object-fit: contain; border-radius: 10px; background: #000; }
+.visor-caption { color: #f2f2f2; text-align: center; margin-top: 14px; max-width: 620px; padding: 0 20px; }
+.visor-tarea { font-weight: 600; font-size: 13.5px; }
+.visor-texto { font-size: 13px; margin-top: 4px; color: #d8dce1; }
+.visor-meta { font-size: 11px; color: #9aa1ab; margin-top: 7px; }
+.foto-thumb { cursor: pointer; transition: transform .1s ease; }
+.foto-thumb:hover { transform: scale(1.04); }
+@media (max-width: 600px) {
+  .visor-nav { width: 38px; height: 38px; font-size: 20px; }
+  .visor-img { max-height: 58vh; }
+}
+
 /* ===================== RESPONSIVE / MÓVIL ===================== */
 .hamburger-btn {
   display: none; background: none; border: none; cursor: pointer;
@@ -3727,6 +3759,64 @@ function renderPunch() {
    sub-ítem al 100% (Líder de Terreno, Jefe de Proyecto, Gerencia) —
    mismo criterio de "supervisor" que ya usa el resto de la app.
    ===================================================================== */
+/* =====================================================================
+   VISOR DE FOTOS — estilo Instagram: overlay a pantalla completa,
+   navegación entre todas las fotos del contexto (una tarea, o toda la
+   Galería) sin volver a hacer clic ni abrir pestañas nuevas. Recibe
+   una lista plana de fotos con su información (para mostrar el pie de
+   foto) y el índice inicial.
+   ===================================================================== */
+let _visorFotos = { items: [], indice: 0 };
+function abrirVisorFotos(items, indice) {
+  _visorFotos = { items, indice };
+  renderVisorFotos();
+}
+function cerrarVisorFotos() {
+  document.getElementById('visorFotosRoot')?.remove();
+}
+function moverVisorFotos(delta) {
+  const n = _visorFotos.items.length;
+  if (!n) return;
+  _visorFotos.indice = (_visorFotos.indice + delta + n) % n;
+  renderVisorFotos();
+}
+function renderVisorFotos() {
+  let root = document.getElementById('visorFotosRoot');
+  if (!root) { root = document.createElement('div'); root.id = 'visorFotosRoot'; document.body.appendChild(root); }
+  const it = _visorFotos.items[_visorFotos.indice];
+  if (!it) { cerrarVisorFotos(); return; }
+  const total = _visorFotos.items.length;
+  root.innerHTML = `
+    <div class="visor-overlay" onclick="if(event.target===this) cerrarVisorFotos();">
+      <button class="visor-close" onclick="cerrarVisorFotos()" title="Cerrar (Esc)">✕</button>
+      ${total>1 ? `<button class="visor-nav visor-prev" onclick="moverVisorFotos(-1)">‹</button>` : ''}
+      <div class="visor-imgwrap" id="visorImgWrap">
+        <img src="${it.url}" class="visor-img">
+        <div class="visor-caption">
+          ${it.tarea ? `<div class="visor-tarea">${it.tarea}${it.proyecto?` · ${it.proyecto}`:''}</div>` : ''}
+          ${it.texto ? `<div class="visor-texto">${escaparHtml(it.texto)}</div>` : ''}
+          <div class="visor-meta">👤 ${it.autor||''}${it.fecha?` · ${it.fecha}`:''}${total>1?` · ${_visorFotos.indice+1}/${total}`:''}</div>
+        </div>
+      </div>
+      ${total>1 ? `<button class="visor-nav visor-next" onclick="moverVisorFotos(1)">›</button>` : ''}
+    </div>`;
+  const wrap = document.getElementById('visorImgWrap');
+  let touchStartX = null;
+  wrap.addEventListener('touchstart', e => { touchStartX = e.touches[0].clientX; }, {passive:true});
+  wrap.addEventListener('touchend', e => {
+    if (touchStartX==null) return;
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    if (Math.abs(dx) > 40) moverVisorFotos(dx < 0 ? 1 : -1);
+    touchStartX = null;
+  }, {passive:true});
+}
+document.addEventListener('keydown', (e) => {
+  if (!document.getElementById('visorFotosRoot')) return;
+  if (e.key === 'Escape') cerrarVisorFotos();
+  if (e.key === 'ArrowRight') moverVisorFotos(1);
+  if (e.key === 'ArrowLeft') moverVisorFotos(-1);
+});
+
 function claveBitacora(punchId, subId) { return (subId!=null) ? (punchId+"__"+subId) : punchId; }
 function puedeComentarPunch(it, sub) {
   if (puedeCerrarSubitem()) return true;
@@ -3772,6 +3862,7 @@ async function subirFotoBitacora(file, proyectoId, clave, indice) {
 }
 
 let _bitacoraFotosSeleccionadas = [];
+let _bitacoraFotosFlat = [];
 
 function modalBitacoraPunch(proyectoId, punchId, subId) {
   const p = proy(proyectoId);
@@ -3806,13 +3897,19 @@ function renderListaBitacora(proyectoId, punchId, subId) {
   const dict = ((DB.bitacoraPunch[proyectoId]||{})[clave]) || {};
   const entradas = Object.entries(dict).map(([id,v]) => ({id, ...v})).sort((a,b) => (b.ts||0)-(a.ts||0));
   if (!entradas.length) return `<div class="empty-state small">Todavía no hay comentarios en esta tarea.</div>`;
+  _bitacoraFotosFlat = [];
+  let contadorFoto = 0;
   return `<div class="stack" style="gap:10px; max-height:280px; overflow-y:auto;">
     ${entradas.map(e => `
       <div style="border-bottom:1px solid var(--line-soft); padding-bottom:10px;">
         <div class="flex-between small"><b>${e.autor}</b><span class="mono muted" style="font-size:10.5px;">${e.fecha ? new Date(e.fecha+'T00:00:00').toLocaleDateString('es-CL',{day:'2-digit',month:'short',year:'numeric'}) : new Date(e.ts).toLocaleDateString('es-CL')}</span></div>
         ${e.texto ? `<div class="small" style="margin-top:4px;">${escaparHtml(e.texto)}</div>` : ''}
         ${(e.fotos||[]).length ? `<div class="flex-gap" style="margin-top:6px; flex-wrap:wrap;">
-          ${e.fotos.map(url => `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" style="width:64px; height:64px; object-fit:cover; border-radius:6px; border:1px solid var(--line);" loading="lazy"></a>`).join('')}
+          ${e.fotos.map(url => {
+            const idx = contadorFoto++;
+            _bitacoraFotosFlat.push({ url, texto: e.texto, autor: e.autor, fecha: e.fecha });
+            return `<img src="${url}" class="foto-thumb" onclick="abrirVisorFotos(_bitacoraFotosFlat, ${idx})" style="width:64px; height:64px; object-fit:cover; border-radius:6px; border:1px solid var(--line);" loading="lazy">`;
+          }).join('')}
         </div>` : ''}
       </div>
     `).join('')}
@@ -3843,6 +3940,7 @@ async function enviarBitacoraPunch(proyectoId, punchId, subId) {
 }
 
 let filtroGaleriaProyecto = "todos";
+let _galeriaFotosFlat = [];
 function renderGaleria() {
   const todasEntradas = [];
   Object.entries(DB.bitacoraPunch||{}).forEach(([proyectoId, dictClaves]) => {
@@ -3863,11 +3961,35 @@ function renderGaleria() {
   });
   todasEntradas.sort((a,b) => (b.fecha||'').localeCompare(a.fecha||'') || (b.ts||0)-(a.ts||0));
 
+  _galeriaFotosFlat = [];
+  let contadorFoto = 0;
+  const tarjetasHtml = todasEntradas.map(e => {
+    const fotosHtml = (e.fotos||[]).map(url => {
+      const idx = contadorFoto++;
+      _galeriaFotosFlat.push({ url, texto: e.texto, autor: e.autor, fecha: e.fecha, tarea: e.tareaNombre, proyecto: e.proyectoNombre });
+      return `<img src="${url}" class="foto-thumb" onclick="abrirVisorFotos(_galeriaFotosFlat, ${idx})" style="width:72px; height:72px; object-fit:cover; border-radius:7px; border:1px solid var(--line);" loading="lazy">`;
+    }).join('');
+    return `
+      <div class="card">
+        <div class="flex-between small" style="margin-bottom:6px;">
+          <span class="badge b-blue"><span class="dot"></span>${e.proyectoCodigo}</span>
+          <span class="mono muted" style="font-size:10.5px;">${e.fecha ? new Date(e.fecha+'T00:00:00').toLocaleDateString('es-CL',{day:'2-digit',month:'short',year:'numeric'}) : new Date(e.ts).toLocaleDateString('es-CL')}</span>
+        </div>
+        <div class="small" style="font-weight:600;">${e.tareaNombre}</div>
+        ${e.texto ? `<div class="small" style="margin-top:5px;">${escaparHtml(e.texto)}</div>` : ''}
+        ${fotosHtml ? `<div class="flex-gap" style="margin-top:8px; flex-wrap:wrap;">${fotosHtml}</div>` : `<div class="hint" style="margin-top:6px;">Sin fotos, solo comentario.</div>`}
+        <div class="flex-between small muted" style="margin-top:8px;">
+          <span>👤 ${e.autor}</span>
+          <button class="btn btn-sm" onclick="DB.proyectoActivo='${e.proyectoId}'; modalBitacoraPunch('${e.proyectoId}','${e.punchId}', ${e.subId!=null?e.subId:'null'})">Ver tarea →</button>
+        </div>
+      </div>`;
+  }).join('');
+
   return `
   <div class="page-head">
     <div>
       <h1>Galería</h1>
-      <div class="page-desc">Fotos y comentarios de avance cargados desde el Punch List — de todos los proyectos, o filtrado a uno.</div>
+      <div class="page-desc">Fotos y comentarios de avance cargados desde el Punch List — de todos los proyectos, o filtrado a uno. Toca cualquier foto para verla en grande.</div>
     </div>
     <div class="flex-gap">
       <select onchange="filtroGaleriaProyecto=this.value; renderAll();" style="width:auto; font-size:12.5px; padding:8px 11px; border-radius:8px; border:1px solid var(--line); background:var(--card);">
@@ -3878,25 +4000,7 @@ function renderGaleria() {
   </div>
 
   ${!todasEntradas.length ? `<div class="empty-state card">Todavía no hay comentarios ni fotos cargadas${filtroGaleriaProyecto!=='todos'?' en este proyecto':''}. Se agregan desde el botón "💬 Comentarios" de cada tarea del Punch List.</div>` : `
-  <div class="grid grid-3">
-    ${todasEntradas.map(e => `
-      <div class="card">
-        <div class="flex-between small" style="margin-bottom:6px;">
-          <span class="badge b-blue"><span class="dot"></span>${e.proyectoCodigo}</span>
-          <span class="mono muted" style="font-size:10.5px;">${e.fecha ? new Date(e.fecha+'T00:00:00').toLocaleDateString('es-CL',{day:'2-digit',month:'short',year:'numeric'}) : new Date(e.ts).toLocaleDateString('es-CL')}</span>
-        </div>
-        <div class="small" style="font-weight:600;">${e.tareaNombre}</div>
-        ${e.texto ? `<div class="small" style="margin-top:5px;">${escaparHtml(e.texto)}</div>` : ''}
-        ${(e.fotos||[]).length ? `<div class="flex-gap" style="margin-top:8px; flex-wrap:wrap;">
-          ${e.fotos.map(url=>`<a href="${url}" target="_blank" rel="noopener"><img src="${url}" style="width:72px; height:72px; object-fit:cover; border-radius:7px; border:1px solid var(--line);" loading="lazy"></a>`).join('')}
-        </div>` : `<div class="hint" style="margin-top:6px;">Sin fotos, solo comentario.</div>`}
-        <div class="flex-between small muted" style="margin-top:8px;">
-          <span>👤 ${e.autor}</span>
-          <button class="btn btn-sm" onclick="DB.proyectoActivo='${e.proyectoId}'; modalBitacoraPunch('${e.proyectoId}','${e.punchId}', ${e.subId!=null?e.subId:'null'})">Ver tarea →</button>
-        </div>
-      </div>
-    `).join('')}
-  </div>`}
+  <div class="grid grid-3">${tarjetasHtml}</div>`}
   `;
 }
 

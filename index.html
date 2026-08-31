@@ -552,14 +552,23 @@ function migrarProyecto(p) {
       // (DB.personal) — se intenta calzar por nombre; si no calza con
       // nadie, se conserva el texto original en asignadoNota para no
       // perder la información, y queda sin enlazar.
-      if (sub.asignadoPersonaId===undefined) {
-        const match = sub.asignadoA ? DB.personal.find(per => per.nombre.trim().toLowerCase()===sub.asignadoA.trim().toLowerCase()) : null;
-        sub.asignadoPersonaId = match ? match.id : "";
-        sub.asignadoNota = (sub.asignadoA && !match) ? sub.asignadoA : "";
+      if (sub.asignadoPersonaIds===undefined) {
+        if (sub.asignadoPersonaId===undefined) {
+          const match = sub.asignadoA ? DB.personal.find(per => per.nombre.trim().toLowerCase()===sub.asignadoA.trim().toLowerCase()) : null;
+          sub.asignadoPersonaIds = match ? [match.id] : [];
+          sub.asignadoNota = (sub.asignadoA && !match) ? sub.asignadoA : "";
+        } else {
+          // Versión anterior de la app: solo admitía UNA persona por sub-ítem.
+          sub.asignadoPersonaIds = sub.asignadoPersonaId ? [sub.asignadoPersonaId] : [];
+        }
         delete sub.asignadoA;
+        delete sub.asignadoPersonaId;
       }
     });
-    if (it.asignadoPersonaId===undefined) it.asignadoPersonaId = "";
+    if (it.asignadoPersonaIds===undefined) {
+      it.asignadoPersonaIds = it.asignadoPersonaId ? [it.asignadoPersonaId] : [];
+      delete it.asignadoPersonaId;
+    }
     sincronizarPunchAGanttObj(p, it);
   });
   if(!p.bodega) p.bodega = [];
@@ -2119,7 +2128,7 @@ function agregarSubitemsRango(pid, punchId, prefijo, desde, hasta) {
   if (!it.subitems) it.subitems = [];
   let nextId = (it.subitems.reduce((m,s)=>Math.max(m,s.id),0))+1;
   for (let n=d; n<=h; n++) {
-    it.subitems.push({id: nextId++, nombre: (prefijo||"")+n, avance:0, asignadoPersonaId:"", asignadoNota:"", actualizadoPor:"", actualizadoFecha:""});
+    it.subitems.push({id: nextId++, nombre: (prefijo||"")+n, avance:0, asignadoPersonaIds:[], asignadoNota:"", actualizadoPor:"", actualizadoFecha:""});
   }
   it.estado = estadoDesdeAvance(avancePunchItem(it));
   registrarHistorial({proyecto:p.codigo, accion:"Crear", detalle:`Punch ${punchId}: generados ${h-d+1} sub-ítems (${prefijo||''}${d} a ${prefijo||''}${h})`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
@@ -2139,7 +2148,7 @@ function agregarSubitemsPegado(pid, punchId, texto) {
   if (!nombres.length) { toast("Pega al menos un identificador.", "danger"); return false; }
   if (!it.subitems) it.subitems = [];
   let nextId = (it.subitems.reduce((m,s)=>Math.max(m,s.id),0))+1;
-  nombres.forEach(n => it.subitems.push({id: nextId++, nombre:n, avance:0, asignadoPersonaId:"", asignadoNota:"", actualizadoPor:"", actualizadoFecha:""}));
+  nombres.forEach(n => it.subitems.push({id: nextId++, nombre:n, avance:0, asignadoPersonaIds:[], asignadoNota:"", actualizadoPor:"", actualizadoFecha:""}));
   it.estado = estadoDesdeAvance(avancePunchItem(it));
   registrarHistorial({proyecto:p.codigo, accion:"Crear", detalle:`Punch ${punchId}: agregados ${nombres.length} sub-ítems desde lista pegada`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
   toast(`${nombres.length} sub-ítems agregados.`, "ok");
@@ -2156,21 +2165,52 @@ function eliminarSubitemPunch(pid, punchId, subId) {
   guardarEstado();
 }
 
-function asignarSubitem(pid, punchId, subId, personaId) {
+function modalAsignarSubitem(pid, punchId, subId) {
+  const p = proy(pid);
+  const it = p.punch.find(x => x.id === punchId);
+  const sub = (it?.subitems||[]).find(s => s.id === subId);
+  if (!sub) return;
+  const seleccionados = new Set(sub.asignadoPersonaIds||[]);
+  openModal(`
+    <div class="modal-head"><h3>Asignar — ${sub.nombre}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="hint" style="margin-bottom:10px;">Puedes elegir más de una persona para este sub-ítem.</div>
+      <div class="stack" style="gap:2px; max-height:280px; overflow-y:auto;">
+        ${DB.personal.map(per => `
+          <label style="display:flex; align-items:center; gap:8px; padding:7px 4px; cursor:pointer; border-bottom:1px solid var(--line-soft);">
+            <input type="checkbox" value="${per.id}" ${seleccionados.has(per.id)?'checked':''} style="width:auto;">
+            <span class="small">${per.nombre} <span class="muted">— ${per.cargo}</span></span>
+          </label>
+        `).join('')}
+      </div>
+      ${sub.asignadoNota ? `<div class="hint" style="margin-top:8px;">Nota histórica (texto libre antes del enlace real): "${sub.asignadoNota}"</div>` : ''}
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="
+        const ids = Array.from(document.querySelectorAll('#modalRoot input[type=checkbox]:checked')).map(c=>c.value);
+        asignarSubitem('${pid}','${punchId}',${subId}, ids);
+        closeModal(); renderAll();">Guardar</button>
+    </div>
+  `);
+}
+
+function asignarSubitem(pid, punchId, subId, personaIds) {
   const p = proy(pid);
   const it = p.punch.find(x => x.id === punchId);
   if (!it) return;
   const sub = (it.subitems||[]).find(s => s.id === subId);
   if (!sub) return;
-  sub.asignadoPersonaId = personaId || "";
+  sub.asignadoPersonaIds = Array.isArray(personaIds) ? personaIds : (personaIds ? [personaIds] : []);
+  registrarHistorial({proyecto:p.codigo, accion:"Modificar", detalle:`Punch ${punchId}: "${sub.nombre}" reasignado a ${sub.asignadoPersonaIds.map(id=>DB.personal.find(per=>per.id===id)?.nombre||id).join(', ')||'nadie'}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
   guardarEstado();
 }
 
-function asignarResponsableTarea(pid, punchId, personaId) {
+function asignarResponsableTarea(pid, punchId, personaIds) {
   const p = proy(pid);
   const it = p.punch.find(x => x.id === punchId);
   if (!it) return;
-  it.asignadoPersonaId = personaId || "";
+  it.asignadoPersonaIds = Array.isArray(personaIds) ? personaIds : (personaIds ? [personaIds] : []);
   guardarEstado();
 }
 
@@ -2183,11 +2223,11 @@ function tareasPunchDePersona(proyectoId, personaId) {
   const resultado = [];
   p.punch.forEach(it => {
     const base = { punchId: it.id, tarea: it.desc, fechaInicio: it.fechaInicio||"", fechaTermino: it.fechaTermino||"", disciplina: it.disciplina||"", importancia: it.importancia||"" };
-    if (it.asignadoPersonaId === personaId) {
+    if ((it.asignadoPersonaIds||[]).includes(personaId)) {
       resultado.push(Object.assign({}, base, { subitem: null, subId: null, avance: avancePunchItem(it), estado: it.estado }));
     }
     (it.subitems||[]).forEach(sub => {
-      if (sub.asignadoPersonaId === personaId) {
+      if ((sub.asignadoPersonaIds||[]).includes(personaId)) {
         resultado.push(Object.assign({}, base, { subitem: sub.nombre, subId: sub.id, avance: sub.avance||0, estado: estadoDesdeAvance(sub.avance||0) }));
       }
     });
@@ -3529,7 +3569,7 @@ function renderVistaPorTrabajador() {
   if (!p) return '';
   const asigProyecto = DB.asignaciones.filter(a => a.proyectoId === p.id);
   const personasConTareas = new Set(
-    p.punch.flatMap(it => [it.asignadoPersonaId, ...(it.subitems||[]).map(s=>s.asignadoPersonaId)]).filter(Boolean)
+    p.punch.flatMap(it => [...(it.asignadoPersonaIds||[]), ...(it.subitems||[]).flatMap(s=>s.asignadoPersonaIds||[])])
   );
   const idsRelevantes = new Set([...asigProyecto.map(a=>a.personaId), ...personasConTareas]);
 
@@ -3716,6 +3756,7 @@ function modalAjustarStock(pid, codigo) {
 /* Estado de qué tareas están expandidas en el árbol — vive solo en el
    navegador de cada persona, no se guarda ni se comparte. */
 let punchExpandido = {};
+let filtroEstadoPunch = "todas";
 function toggleExpandirPunch(id) {
   punchExpandido[id] = !punchExpandido[id];
   renderAll();
@@ -3729,6 +3770,19 @@ function renderPunch() {
   const p = proy();
   const pend = p.punch.filter(x => avancePunchItem(x) < 100).length;
   const avanceTotal = avancePunchProyecto(p);
+
+  const conteoEstado = {
+    todas: p.punch.length,
+    no_iniciada: p.punch.filter(x => avancePunchItem(x)===0).length,
+    en_proceso: p.punch.filter(x => { const a=avancePunchItem(x); return a>0 && a<100; }).length,
+    completada: p.punch.filter(x => avancePunchItem(x)===100).length,
+  };
+  const labelEstado = {todas:'Todas', no_iniciada:'No iniciadas', en_proceso:'En proceso', completada:'Completadas'};
+  let tareasFiltradas = p.punch;
+  if (filtroEstadoPunch==='no_iniciada') tareasFiltradas = p.punch.filter(x => avancePunchItem(x)===0);
+  else if (filtroEstadoPunch==='en_proceso') tareasFiltradas = p.punch.filter(x => { const a=avancePunchItem(x); return a>0 && a<100; });
+  else if (filtroEstadoPunch==='completada') tareasFiltradas = p.punch.filter(x => avancePunchItem(x)===100);
+
   return `
   <div class="page-head">
     <div>
@@ -3746,8 +3800,12 @@ function renderPunch() {
 
   ${pend > 0 ? `<div class="ai-note" style="margin-bottom:14px; background:var(--danger-bg); border-color:#e7bfae; color:var(--danger)">⚠ ${pend} tarea(s) no están al 100% — impiden el cierre del proyecto (Posta 19) hasta completarse.</div>` : ''}
 
+  <div class="flex-gap" style="margin-bottom:14px; flex-wrap:wrap;">
+    ${['todas','no_iniciada','en_proceso','completada'].map(f => `<button class="btn btn-sm ${filtroEstadoPunch===f?'btn-primary':''}" onclick="filtroEstadoPunch='${f}'; renderAll();">${labelEstado[f]} · ${conteoEstado[f]}</button>`).join('')}
+  </div>
+
   <div class="stack">
-  ${p.punch.length ? p.punch.map(it => renderTareaPunch(p, it)).join('') : `<div class="empty-state card">Sin tareas en el Punch List.</div>`}
+  ${tareasFiltradas.length ? tareasFiltradas.map(it => renderTareaPunch(p, it)).join('') : `<div class="empty-state card">No hay tareas en este filtro.</div>`}
   </div>
   `;
 }
@@ -3822,8 +3880,8 @@ function puedeComentarPunch(it, sub) {
   if (puedeCerrarSubitem()) return true;
   const yo = personaActual();
   if (!yo) return false;
-  const asignadoId = sub ? sub.asignadoPersonaId : it.asignadoPersonaId;
-  return asignadoId === yo.id;
+  const asignados = sub ? (sub.asignadoPersonaIds||[]) : (it.asignadoPersonaIds||[]);
+  return asignados.includes(yo.id);
 }
 function contarBitacora(proyectoId, punchId, subId) {
   const clave = claveBitacora(punchId, subId);
@@ -4011,7 +4069,7 @@ function renderTareaPunch(p, it) {
   const urgencia = fechaUrgencia(it.fechaTermino);
   const urgenciaColor = {vencido:'var(--danger)', proximo:'var(--copper-dark)', ok:'var(--muted)', 'sin-fecha':'var(--muted)'}[urgencia];
   const enGantt = p.planificacion.some(t => t.origenPunchId === it.id);
-  const responsable = it.asignadoPersonaId ? DB.personal.find(per => per.id === it.asignadoPersonaId) : null;
+  const responsables = (it.asignadoPersonaIds||[]).map(id => DB.personal.find(per => per.id === id)).filter(Boolean);
   return `<div class="card">
     <div class="flex-between" style="flex-wrap:wrap; gap:8px; cursor:${tieneSub?'pointer':'default'};" ${tieneSub?`onclick="toggleExpandirPunch('${it.id}')"`:''}>
       <div class="flex-gap" style="align-items:flex-start;">
@@ -4024,7 +4082,7 @@ function renderTareaPunch(p, it) {
             ${badgeImportancia(it.importancia)}
             ${it.fechaInicio || it.fechaTermino ? `<span class="small" style="color:${urgenciaColor}">📅 ${it.fechaInicio||'?'} → ${it.fechaTermino||'?'}${urgencia==='vencido'?' (vencido)':urgencia==='proximo'?' (próximo)':''}</span>` : ''}
             ${enGantt ? `<span class="small" style="color:var(--blueprint)">🔧 en Gantt</span>` : ''}
-            ${responsable ? `<span class="small" style="color:var(--ink-3)">👤 ${responsable.nombre}</span>` : ''}
+            ${responsables.length ? `<span class="small" style="color:var(--ink-3)">👤 ${responsables.map(r=>r.nombre).join(', ')}</span>` : ''}
           </div>
         </div>
       </div>
@@ -4082,10 +4140,9 @@ function renderDetallePunchInline(p, it) {
                 </div>
               </td>
               <td>
-                <select style="padding:4px 6px; font-size:11.5px;" onchange="asignarSubitem('${p.id}','${it.id}',${s.id}, this.value)">
-                  <option value="">— sin asignar —</option>
-                  ${DB.personal.map(per => `<option value="${per.id}" ${s.asignadoPersonaId===per.id?'selected':''}>${per.nombre}</option>`).join('')}
-                </select>
+                <button class="btn btn-sm" onclick="modalAsignarSubitem('${p.id}','${it.id}',${s.id})" style="text-align:left; max-width:150px;">
+                  ${(s.asignadoPersonaIds||[]).length ? `👤 ${(s.asignadoPersonaIds||[]).map(id=>(DB.personal.find(per=>per.id===id)?.nombre||'?').split(' ')[0]).join(', ')}` : '— sin asignar —'}
+                </button>
                 ${s.asignadoNota ? `<div class="hint" style="margin-top:2px;">antes: "${s.asignadoNota}"</div>` : ''}
               </td>
               <td><button class="btn btn-sm" onclick="modalBitacoraPunch('${p.id}','${it.id}', ${s.id})" title="Comentarios y fotos">💬 ${contarBitacora(p.id, it.id, s.id)||''}</button></td>
@@ -4148,12 +4205,11 @@ function modalPunchForm(pid, id) {
         <div><label class="field-label">Fecha de término</label><input type="text" id="punchFechaTermino" value="${it?it.fechaTermino||'':''}" placeholder="AAAA-MM-DD"></div>
       </div>
       <div class="hint">Con ambas fechas cargadas, esta tarea aparece sola en la carta Gantt (Planificación) y se mantiene sincronizada.</div>
-      <label class="field-label">Responsable de la tarea (opcional)</label>
-      <select id="punchResponsable">
-        <option value="">— sin asignar —</option>
-        ${DB.personal.map(per => `<option value="${per.id}" ${it&&it.asignadoPersonaId===per.id?'selected':''}>${per.nombre} — ${per.cargo}</option>`).join('')}
+      <label class="field-label">Responsables de la tarea (opcional, puedes elegir varios)</label>
+      <select id="punchResponsable" multiple size="4" style="height:auto;">
+        ${DB.personal.map(per => `<option value="${per.id}" ${it&&(it.asignadoPersonaIds||[]).includes(per.id)?'selected':''}>${per.nombre} — ${per.cargo}</option>`).join('')}
       </select>
-      <div class="hint">Útil sobre todo si la tarea no tiene sub-ítems. Si los tiene, puedes además asignar cada sub-ítem por separado en el detalle.</div>
+      <div class="hint">Mantén Ctrl (Cmd en Mac) presionado para elegir varias personas. Útil sobre todo si la tarea no tiene sub-ítems. Si los tiene, puedes además asignar cada sub-ítem por separado en el detalle.</div>
     </div>
     <div class="modal-foot">
       <button class="btn" onclick="closeModal()">Cancelar</button>
@@ -4167,7 +4223,8 @@ function modalPunchForm(pid, id) {
         };
         const ok = ${it? `editarPunch('${pid}', '${it.id}', d)` : `agregarPunch('${pid}', d)`};
         if(ok){
-          asignarResponsableTarea('${pid}', ${it?`'${it.id}'`:`(proy('${pid}').punch[proy('${pid}').punch.length-1].id)`}, document.getElementById('punchResponsable').value);
+          const idsElegidos = Array.from(document.getElementById('punchResponsable').selectedOptions).map(o=>o.value);
+          asignarResponsableTarea('${pid}', ${it?`'${it.id}'`:`(proy('${pid}').punch[proy('${pid}').punch.length-1].id)`}, idsElegidos);
           closeModal(); renderAll();
         }">${it?'Guardar':'Crear tarea'}</button>
     </div>
@@ -5667,10 +5724,20 @@ function goTo(id) {
   cerrarSidebarMobile();
   renderAll();
   actualizarMiPresencia();
-  window.scrollTo({top: 0, behavior: "smooth"});
+  const contentEl = document.getElementById("content");
+  if (contentEl) contentEl.scrollTop = 0; // acá sí queremos partir arriba: es una página nueva
 }
 
+/* IMPORTANTE: renderAll() se llama constantemente ante cualquier cambio
+   de datos (mover un slider, asignar a alguien, marcar un requerimiento,
+   etc.) — no solo al navegar. Como reconstruye #content de cero, sin
+   esto la página "saltaba" arriba cada vez que alguien tocaba algo,
+   perdiendo dónde estaba parado en una lista larga. Por eso acá se
+   guarda el scroll actual y se restaura después de re-renderizar; el
+   único lugar que de verdad quiere ir arriba es goTo() (al cambiar de
+   página), que lo resetea explícitamente después de llamar a esto. */
 function renderAll() {
+  const scrollGuardado = document.getElementById("content")?.scrollTop || 0;
   const paginaActual = NAV.flatMap(g => g.items).find(i => i.id === currentPage);
   if (paginaActual && !navItemVisible(paginaActual)) currentPage = "dashboard"; // el rol cambió o no correspondía
   shell();
@@ -5687,6 +5754,8 @@ function renderAll() {
     const box = document.getElementById("reqMessagesBox");
     if (box) box.scrollTop = box.scrollHeight;
   }
+  const contentEl = document.getElementById("content");
+  if (contentEl) contentEl.scrollTop = scrollGuardado;
 }
 
 function shellCargando() {

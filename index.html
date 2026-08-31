@@ -3757,6 +3757,17 @@ function modalAjustarStock(pid, codigo) {
    navegador de cada persona, no se guarda ni se comparte. */
 let punchExpandido = {};
 let filtroEstadoPunch = "todas";
+function bucketAvance(a) { return a===0 ? 'no_iniciada' : (a===100 ? 'completada' : 'en_proceso'); }
+/* Una tarea "coincide" con el filtro si: no hay filtro activo, o si no
+   tiene sub-ítems y su propio avance cae en el balde, o si tiene
+   sub-ítems y AL MENOS UNO de ellos cae en el balde — así una tarea con
+   130 sub-ítems mezclados no se pierde solo porque su promedio general
+   cae en otro balde. */
+function tareaCoincideFiltro(it, filtro) {
+  if (filtro === 'todas') return true;
+  if (it.subitems && it.subitems.length) return it.subitems.some(s => bucketAvance(s.avance||0)===filtro);
+  return bucketAvance(avancePunchItem(it)) === filtro;
+}
 function toggleExpandirPunch(id) {
   punchExpandido[id] = !punchExpandido[id];
   renderAll();
@@ -3773,15 +3784,12 @@ function renderPunch() {
 
   const conteoEstado = {
     todas: p.punch.length,
-    no_iniciada: p.punch.filter(x => avancePunchItem(x)===0).length,
-    en_proceso: p.punch.filter(x => { const a=avancePunchItem(x); return a>0 && a<100; }).length,
-    completada: p.punch.filter(x => avancePunchItem(x)===100).length,
+    no_iniciada: p.punch.filter(it => tareaCoincideFiltro(it,'no_iniciada')).length,
+    en_proceso: p.punch.filter(it => tareaCoincideFiltro(it,'en_proceso')).length,
+    completada: p.punch.filter(it => tareaCoincideFiltro(it,'completada')).length,
   };
   const labelEstado = {todas:'Todas', no_iniciada:'No iniciadas', en_proceso:'En proceso', completada:'Completadas'};
-  let tareasFiltradas = p.punch;
-  if (filtroEstadoPunch==='no_iniciada') tareasFiltradas = p.punch.filter(x => avancePunchItem(x)===0);
-  else if (filtroEstadoPunch==='en_proceso') tareasFiltradas = p.punch.filter(x => { const a=avancePunchItem(x); return a>0 && a<100; });
-  else if (filtroEstadoPunch==='completada') tareasFiltradas = p.punch.filter(x => avancePunchItem(x)===100);
+  const tareasFiltradas = p.punch.filter(it => tareaCoincideFiltro(it, filtroEstadoPunch));
 
   return `
   <div class="page-head">
@@ -4065,7 +4073,7 @@ function renderGaleria() {
 function renderTareaPunch(p, it) {
   const avance = avancePunchItem(it);
   const tieneSub = it.subitems && it.subitems.length;
-  const abierto = !!punchExpandido[it.id];
+  const abierto = filtroEstadoPunch!=='todas' ? true : !!punchExpandido[it.id];
   const urgencia = fechaUrgencia(it.fechaTermino);
   const urgenciaColor = {vencido:'var(--danger)', proximo:'var(--copper-dark)', ok:'var(--muted)', 'sin-fecha':'var(--muted)'}[urgencia];
   const enGantt = p.planificacion.some(t => t.origenPunchId === it.id);
@@ -4112,14 +4120,16 @@ function renderTareaPunch(p, it) {
    no en un modal aparte — así se puede tener más de una tarea abierta
    a la vez y no se pierde el contexto de las demás. */
 function renderDetallePunchInline(p, it) {
-  const subs = it.subitems||[];
-  const nCompleto = subs.filter(s=>(s.avance||0)===100).length;
-  const nProceso = subs.filter(s=>(s.avance||0)>0 && (s.avance||0)<100).length;
-  const nPendiente = subs.length - nCompleto - nProceso;
+  const todosSubs = it.subitems||[];
+  const subs = filtroEstadoPunch==='todas' ? todosSubs : todosSubs.filter(s => bucketAvance(s.avance||0)===filtroEstadoPunch);
+  const nCompleto = todosSubs.filter(s=>(s.avance||0)===100).length;
+  const nProceso = todosSubs.filter(s=>(s.avance||0)>0 && (s.avance||0)<100).length;
+  const nPendiente = todosSubs.length - nCompleto - nProceso;
   const tope = puedeCerrarSubitem() ? 100 : 99;
   return `
     <div onclick="event.stopPropagation()">
       <div class="flex-between small"><span>${nCompleto} completados · ${nProceso} en proceso · ${nPendiente} pendientes</span></div>
+      ${filtroEstadoPunch!=='todas' && subs.length!==todosSubs.length ? `<div class="hint" style="margin:6px 0;">Filtro activo — mostrando ${subs.length} de ${todosSubs.length} sub-ítems (${({no_iniciada:'no iniciados',en_proceso:'en proceso',completada:'completados'})[filtroEstadoPunch]}).</div>` : ''}
       ${!puedeCerrarSubitem() ? `<div class="ai-note" style="margin:8px 0;">Con tu rol (${DB.role}) puedes reportar avance hasta 99%. El cierre a 100% lo confirma Líder de Terreno, Jefe de Proyecto o Gerencia.</div>` : ''}
 
       ${subs.length > 8 ? `<input type="text" id="filtroSubitems_${it.id}" placeholder="Filtrar por nombre (ej: C-45)..." oninput="filtrarSubitems('${it.id}', this.value)" style="margin:8px 0;">` : ''}
@@ -4149,7 +4159,7 @@ function renderDetallePunchInline(p, it) {
               <td><button class="btn btn-sm btn-danger" onclick="eliminarSubitemPunch('${p.id}','${it.id}',${s.id}); renderAll();">✕</button></td>
             </tr>
           `).join('')}
-        </table></div>` : '<div class="hint">Sin sub-ítems todavía — agrega abajo.</div>'}
+        </table></div>` : (todosSubs.length ? '<div class="hint">Ningún sub-ítem coincide con el filtro activo.</div>' : '<div class="hint">Sin sub-ítems todavía — agrega abajo.</div>')}
       </div>
 
       <div class="divider"></div>

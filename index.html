@@ -427,6 +427,13 @@ const mensajesRef = database.ref('mensajes');
    cada sincronización de estado); solo se guarda la URL que entrega
    Firebase Storage tras subir la imagen ya comprimida. */
 const bitacoraPunchRef = database.ref('bitacoraPunch');
+/* Registro histórico de sesiones — para medir uso real de la app
+   (quién entra, cuándo fue la última vez, cuánto tiempo activo).
+   Nodo propio, independiente de /presencia (que es solo "ahora mismo"
+   y se borra al desconectar). Acá cada sesión queda para siempre,
+   con su hora de inicio y una hora de "fin" que se va extendiendo
+   mientras la persona sigue activa (ver el latido en actualizarMiPresencia). */
+const sesionesRef = database.ref('sesiones');
 const storage = firebase.storage();
 let miPresenciaRef = null;
 let listaConectados = [];
@@ -861,6 +868,7 @@ const DB = {
   syncStatus: "cargando",
   mensajes: {}, // caché local del nodo /mensajes — no viaja por stateRef, ver configurarMensajes()
   bitacoraPunch: {}, // caché local de /bitacoraPunch — igual criterio, ver configurarBitacoraPunch()
+  sesiones: {}, // caché local de /sesiones — igual criterio, ver configurarSesionUso()
 };
 let modalAbierto = false;
 let _guardando = false;
@@ -978,6 +986,7 @@ async function cargarEstadoInicial() {
   configurarPresencia();
   configurarMensajes();
   configurarBitacoraPunch();
+  configurarSesionUso();
   toast(`Bienvenido, ${DB.usuario} (${DB.role}).`, "ok");
 }
 
@@ -1172,6 +1181,7 @@ function traducirErrorAuth(e) {
 
 async function cerrarSesion() {
   try { if (miPresenciaRef) await miPresenciaRef.remove(); } catch(e) {}
+  try { if (miSesionRef) await miSesionRef.update({ fin: Date.now(), cierreLimpio: true }); } catch(e) {}
   await auth.signOut();
 }
 
@@ -1272,6 +1282,7 @@ function configurarPresencia() {
 function actualizarMiPresencia() {
   if (!miPresenciaRef) return;
   miPresenciaRef.update({ usuario: DB.usuario, rol: DB.role, pagina: currentPage, ultimaSenal: Date.now() }).catch(()=>{});
+  if (miSesionRef) miSesionRef.update({ fin: Date.now() }).catch(()=>{});
 }
 
 /* Chat de Requerimientos — un solo listener sobre TODO /mensajes (el
@@ -1290,6 +1301,16 @@ function configurarBitacoraPunch() {
   bitacoraPunchRef.on('value', (snap) => {
     DB.bitacoraPunch = snap.val() || {};
     renderAll();
+  });
+}
+
+let miSesionRef = null;
+function configurarSesionUso() {
+  miSesionRef = sesionesRef.push();
+  miSesionRef.set({ usuario: DB.usuario, rol: DB.role, inicio: Date.now(), fin: Date.now() });
+  sesionesRef.on('value', (snap) => {
+    DB.sesiones = snap.val() || {};
+    if (currentPage === "actividad") renderAll();
   });
 }
 function requerimientosAbiertosGlobal() {
@@ -4703,6 +4724,111 @@ function renderCopiloto() {
 }
 
 // --- Auditoría ---
+/* =====================================================================
+   ACTIVIDAD DE USUARIOS — solo para Jefe de Proyecto. Mide uso real de
+   la app: último ingreso de cada persona autorizada (incluye a quienes
+   NUNCA han entrado, para detectar justamente eso) y horas activas en
+   las últimas 24h, la semana actual (lunes a domingo) y el mes en curso.
+
+   Se apoya en /sesiones — un registro histórico separado de /presencia
+   (que solo dice "quién está conectado AHORA" y se borra al desconectar).
+   Cada sesión nace con inicio=ahora y su "fin" se va estirando con el
+   mismo latido de 60s que ya mantiene viva la presencia — así, aunque
+   alguien cierre el navegador sin avisar, la duración queda razonablemente
+   bien registrada (con un margen de error de como máximo 1 minuto).
+   ===================================================================== */
+const ROLES_VER_ACTIVIDAD = ["Jefe de Proyecto"];
+function inicioDeSemana(ts) {
+  const d = new Date(ts);
+  const dia = d.getDay(); // 0=domingo … 6=sábado
+  const diff = (dia===0 ? -6 : 1-dia); // retrocede hasta el lunes
+  d.setDate(d.getDate()+diff);
+  d.setHours(0,0,0,0);
+  return d.getTime();
+}
+function horasEnRango(sesiones, desde, hasta) {
+  let ms = 0;
+  sesiones.forEach(s => {
+    const ini = Math.max(s.inicio||0, desde);
+    const fin = Math.min(s.fin||s.inicio||0, hasta);
+    if (fin > ini) ms += (fin - ini);
+  });
+  return ms / 3600000;
+}
+function formatoHoras(h) {
+  if (h <= 0) return "—";
+  if (h < 1) return Math.round(h*60)+" min";
+  return h.toFixed(1)+" h";
+}
+function formatoUltimoIngreso(ts) {
+  if (!ts) return "Nunca ha ingresado";
+  const dias = Math.floor((Date.now()-ts)/86400000);
+  const fechaStr = new Date(ts).toLocaleString('es-CL', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'});
+  if (dias===0) return `Hoy · ${fechaStr}`;
+  if (dias===1) return `Ayer · ${fechaStr}`;
+  return `Hace ${dias} días · ${fechaStr}`;
+}
+
+function renderActividad() {
+  const ahora = Date.now();
+  const hace24h = ahora - 24*3600000;
+  const inicioSemana = inicioDeSemana(ahora);
+  const inicioMes = new Date(new Date(ahora).getFullYear(), new Date(ahora).getMonth(), 1).getTime();
+
+  const usuarios = Object.values(DB.usuariosAutorizados||{});
+  const todasSesiones = Object.values(DB.sesiones||{});
+
+  const filas = usuarios.map(u => {
+    const misSesiones = todasSesiones.filter(s => s.usuario===u.nombre);
+    const ultimaMarca = misSesiones.reduce((max,s) => Math.max(max, s.fin||s.inicio||0), 0);
+    return {
+      nombre: u.nombre, rol: u.rol,
+      ultimoIngreso: ultimaMarca || null,
+      h24: horasEnRango(misSesiones, hace24h, ahora),
+      hSemana: horasEnRango(misSesiones, inicioSemana, ahora),
+      hMes: horasEnRango(misSesiones, inicioMes, ahora),
+      conectadoAhora: listaConectados.some(c => c.usuario===u.nombre),
+    };
+  }).sort((a,b) => (b.ultimoIngreso||0)-(a.ultimoIngreso||0));
+
+  const nuncaIngresaron = filas.filter(f => !f.ultimoIngreso).length;
+  const sinUso7dias = filas.filter(f => f.ultimoIngreso && (ahora-f.ultimoIngreso)>7*86400000).length;
+  const conectadosAhora = filas.filter(f => f.conectadoAhora).length;
+
+  return `
+  <div class="page-head">
+    <div>
+      <h1>Actividad de Usuarios</h1>
+      <div class="page-desc">Visible solo para Jefe de Proyecto — quién usa la app, cuándo fue su último ingreso, y cuánto tiempo activo en distintos períodos.</div>
+    </div>
+  </div>
+
+  <div class="grid grid-4">
+    <div class="card kpi"><div class="kpi-label">Usuarios autorizados</div><div class="kpi-value">${filas.length}</div><div class="kpi-sub">en la dotación de acceso</div></div>
+    <div class="card kpi"><div class="kpi-label">Conectados ahora</div><div class="kpi-value" style="color:var(--ok)">${conectadosAhora}</div><div class="kpi-sub">en este momento</div></div>
+    <div class="card kpi"><div class="kpi-label">Nunca han ingresado</div><div class="kpi-value" style="color:${nuncaIngresaron?'var(--danger)':'var(--ok)'}">${nuncaIngresaron}</div><div class="kpi-sub">no han usado la app todavía</div></div>
+    <div class="card kpi"><div class="kpi-label">Sin uso hace +7 días</div><div class="kpi-value" style="color:${sinUso7dias?'var(--copper-dark)':'var(--ok)'}">${sinUso7dias}</div><div class="kpi-sub">revisar si siguen activos</div></div>
+  </div>
+
+  <div class="table-wrap" style="margin-top:16px;">
+    <table>
+      <tr><th>Usuario</th><th>Rol</th><th>Último ingreso</th><th>Últimas 24h</th><th>Esta semana (lun-dom)</th><th>Este mes</th></tr>
+      ${filas.map(f => `
+        <tr>
+          <td>${f.conectadoAhora?'<span class="online-dot" style="margin-right:6px;"></span>':''}${f.nombre}</td>
+          <td class="small muted">${f.rol}</td>
+          <td class="small ${!f.ultimoIngreso?'muted':''}" style="${!f.ultimoIngreso?'color:var(--danger)':''}">${formatoUltimoIngreso(f.ultimoIngreso)}</td>
+          <td class="mono small">${formatoHoras(f.h24)}</td>
+          <td class="mono small">${formatoHoras(f.hSemana)}</td>
+          <td class="mono small">${formatoHoras(f.hMes)}</td>
+        </tr>
+      `).join('')}
+    </table>
+  </div>
+  <div class="hint" style="margin-top:10px;">Las horas se calculan sumando el tiempo entre que cada persona entra y la última señal que envió la app mientras estuvo activa (cada minuto) — si cierra el navegador sin salir, el margen de error es de máximo 1 minuto.</div>
+  `;
+}
+
 function renderAuditoria() {
   return `
   <div class="page-head">
@@ -5606,6 +5732,7 @@ const NAV = [
   {group:"Inteligencia", items:[
     {id:"copiloto", label:"Copiloto IA", icon:iconSpark()},
     {id:"auditoria", label:"Auditoría", icon:iconClock()},
+    {id:"actividad", label:"Actividad de Usuarios", icon:iconActivity(), roles: ROLES_VER_ACTIVIDAD},
   ]},
 ];
 
@@ -5617,6 +5744,9 @@ function iconChat() {
 }
 function iconGallery() {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.8"/><path d="m21 15-5-5-9 9"/></svg>`;
+}
+function iconActivity() {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>`;
 }
 function iconLayers() {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3 2 8l10 5 10-5-10-5Z"/><path d="m2 13 10 5 10-5"/></svg>`;
@@ -5756,7 +5886,7 @@ function renderAll() {
   const renderers = {
     dashboard: renderDashboard, miPanel: renderMiPanel, panelEquipo: renderPanelEquipo, bodegaGeneral: renderBodegaGeneral, personal: renderPersonal, proyecto360: renderProyecto360, planificacion: renderPlanificacion, compras: renderCompras,
     presupuesto: renderPresupuesto, bodega: renderBodega, punch: renderPunch, requerimientos: renderRequerimientos, galeria: renderGaleria,
-    reaperturas: renderReaperturas, copiloto: renderCopiloto, auditoria: renderAuditoria,
+    reaperturas: renderReaperturas, copiloto: renderCopiloto, auditoria: renderAuditoria, actividad: renderActividad,
   };
   const target = document.getElementById("page-"+currentPage);
   if (target && renderers[currentPage]) target.innerHTML = renderers[currentPage]();

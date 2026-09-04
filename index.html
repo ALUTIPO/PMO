@@ -9,8 +9,11 @@
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-storage-compat.js"></script>
-<!-- SheetJS: genera el .xlsx real de exportación de Bodega para Bsale -->
+<!-- SheetJS: genera el .xlsx real de exportación de Bodega para Bsale, y del reporte de KPIs -->
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<!-- jsPDF + autoTable: genera el reporte de KPIs en PDF -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <!-- Fuentes -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -2446,6 +2449,10 @@ function renderDashboard() {
       <div class="page-desc">Tablero compartido en tiempo real de ALUTIPO SPA — avance ponderado, semáforo por desviación y alertas de compras críticas.</div>
     </div>
     <div class="flex-gap">
+      ${ROLES_VER_ACTIVIDAD.includes(DB.role) ? `
+        <button class="btn" onclick="exportarReporteKPIsPDF()" title="Descargar reporte de KPIs en PDF, para la reunión">📄 Reporte PDF</button>
+        <button class="btn" onclick="exportarReporteKPIsExcel()" title="Descargar reporte de KPIs en Excel">📊 Reporte Excel</button>
+      ` : ''}
       <button class="btn" onclick="modalAdminDatos()" title="Vaciar datos de muestra o restaurarlos">⚙ Datos del tablero</button>
       <button class="btn btn-primary" onclick="modalNuevoProyecto()">+ Nuevo proyecto</button>
     </div>
@@ -4827,6 +4834,146 @@ function renderActividad() {
   </div>
   <div class="hint" style="margin-top:10px;">Las horas se calculan sumando el tiempo entre que cada persona entra y la última señal que envió la app mientras estuvo activa (cada minuto) — si cierra el navegador sin salir, el margen de error es de máximo 1 minuto.</div>
   `;
+}
+
+/* =====================================================================
+   REPORTE DE KPIs PARA REUNIÓN — junta los KPIs del Dashboard Ejecutivo
+   y de Actividad de Usuarios en un solo snapshot, exportable a PDF
+   (para proyectar/imprimir) o Excel (para filtrar/editar). Reutiliza
+   exactamente los mismos cálculos que ya se muestran en pantalla, para
+   que el reporte nunca diga algo distinto de lo que ve la app.
+   ===================================================================== */
+function datosReporteKPIs() {
+  const activos = DB.proyectos.filter(p => p.estadoProyecto==="Activo").length;
+  const comprasPendientes = DB.proyectos.reduce((a,p) => a + p.cotizaciones.filter(c => c.estado!=="Recibido").length, 0);
+  const punchAbiertos = DB.proyectos.reduce((a,p) => a + p.punch.filter(x => x.estado!=="Completado").length, 0);
+  const longLeadAlerta = DB.proyectos.reduce((a,p) => a + p.cotizaciones.filter(c => c.alerta).length, 0);
+  const proyectosTabla = DB.proyectos.map(p => ({
+    codigo: p.codigo, nombre: p.nombre, cliente: p.cliente, pm: p.pm,
+    avance: avanceGlobal(p), semaforo: semaforo(p),
+    posta: p.modoCierre ? `Punch List ${avancePunchProyecto(p)}%` : ((p.postas.find(t=>t.estado==="En Progreso"||t.estado==="Bloqueado")||p.postas.slice().reverse().find(t=>t.estado==="Completado"))?.nombre || '—'),
+  }));
+
+  const ahora = Date.now();
+  const hace24h = ahora - 24*3600000;
+  const inicioSemana = inicioDeSemana(ahora);
+  const inicioMes = new Date(new Date(ahora).getFullYear(), new Date(ahora).getMonth(), 1).getTime();
+  const usuarios = Object.values(DB.usuariosAutorizados||{});
+  const todasSesiones = Object.values(DB.sesiones||{});
+  const usuariosTabla = usuarios.map(u => {
+    const misSesiones = todasSesiones.filter(s => s.usuario===u.nombre);
+    const ultimaMarca = misSesiones.reduce((max,s)=>Math.max(max, s.fin||s.inicio||0), 0) || null;
+    return {
+      nombre: u.nombre, rol: u.rol, ultimoIngresoRaw: ultimaMarca,
+      ultimoIngreso: formatoUltimoIngreso(ultimaMarca),
+      h24: formatoHoras(horasEnRango(misSesiones, hace24h, ahora)),
+      hSemana: formatoHoras(horasEnRango(misSesiones, inicioSemana, ahora)),
+      hMes: formatoHoras(horasEnRango(misSesiones, inicioMes, ahora)),
+    };
+  }).sort((a,b) => (b.ultimoIngresoRaw||0)-(a.ultimoIngresoRaw||0));
+  const nuncaIngresaron = usuariosTabla.filter(f=>!f.ultimoIngresoRaw).length;
+  const sinUso7dias = usuariosTabla.filter(f=>f.ultimoIngresoRaw && (ahora-f.ultimoIngresoRaw)>7*86400000).length;
+  const conectadosAhora = usuariosTabla.filter(f=>listaConectados.some(c=>c.usuario===f.nombre)).length;
+
+  return {
+    fecha: new Date().toLocaleString('es-CL',{dateStyle:'long', timeStyle:'short'}),
+    dashboard: { totalProyectos: DB.proyectos.length, activos, comprasPendientes, punchAbiertos, longLeadAlerta, proyectosTabla },
+    actividad: { totalUsuarios: usuarios.length, conectadosAhora, nuncaIngresaron, sinUso7dias, usuariosTabla },
+  };
+}
+
+function exportarReporteKPIsExcel() {
+  if (typeof XLSX === "undefined") { toast("No se pudo cargar el generador de Excel. Revisa tu conexión.", "danger"); return; }
+  const d = datosReporteKPIs();
+  const wb = XLSX.utils.book_new();
+
+  const hojaResumen = XLSX.utils.aoa_to_sheet([
+    ["ALUTIPO SPA — Reporte Ejecutivo"],
+    ["Generado", d.fecha],
+    [],
+    ["DASHBOARD"],
+    ["Proyectos en cartera", d.dashboard.totalProyectos],
+    ["Activos", d.dashboard.activos],
+    ["Compras pendientes", d.dashboard.comprasPendientes],
+    ["Punch List abiertos", d.dashboard.punchAbiertos],
+    ["Alertas long-lead", d.dashboard.longLeadAlerta],
+    [],
+    ["ACTIVIDAD DE USUARIOS"],
+    ["Usuarios autorizados", d.actividad.totalUsuarios],
+    ["Conectados ahora", d.actividad.conectadosAhora],
+    ["Nunca han ingresado", d.actividad.nuncaIngresaron],
+    ["Sin uso hace +7 días", d.actividad.sinUso7dias],
+  ]);
+  XLSX.utils.book_append_sheet(wb, hojaResumen, "Resumen");
+
+  const hojaProyectos = XLSX.utils.json_to_sheet(d.dashboard.proyectosTabla.map(p=>({
+    "Código": p.codigo, "Proyecto": p.nombre, "Cliente": p.cliente, "PM": p.pm,
+    "Avance %": p.avance, "Semáforo": p.semaforo, "Posta/Punch actual": p.posta,
+  })));
+  XLSX.utils.book_append_sheet(wb, hojaProyectos, "Cartera de proyectos");
+
+  const hojaUsuarios = XLSX.utils.json_to_sheet(d.actividad.usuariosTabla.map(u=>({
+    "Usuario": u.nombre, "Rol": u.rol, "Último ingreso": u.ultimoIngreso,
+    "Últimas 24h": u.h24, "Esta semana": u.hSemana, "Este mes": u.hMes,
+  })));
+  XLSX.utils.book_append_sheet(wb, hojaUsuarios, "Actividad de usuarios");
+
+  XLSX.writeFile(wb, `Reporte_KPIs_Alutipo_${hoyISO()}.xlsx`);
+  toast("Reporte Excel descargado.", "ok");
+}
+
+function exportarReporteKPIsPDF() {
+  if (typeof window.jspdf === "undefined") { toast("No se pudo cargar el generador de PDF. Revisa tu conexión.", "danger"); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const d = datosReporteKPIs();
+  let y = 18;
+
+  doc.setFontSize(16); doc.setFont(undefined,'bold');
+  doc.text("ALUTIPO SPA — Reporte Ejecutivo", 14, y);
+  doc.setFontSize(10); doc.setFont(undefined,'normal');
+  y += 7;
+  doc.text(`Generado: ${d.fecha}`, 14, y);
+  y += 10;
+
+  doc.setFontSize(12); doc.setFont(undefined,'bold');
+  doc.text("Dashboard", 14, y);
+  doc.autoTable({
+    startY: y+4,
+    head: [["Proyectos", "Activos", "Compras pendientes", "Punch abiertos", "Alertas long-lead"]],
+    body: [[d.dashboard.totalProyectos, d.dashboard.activos, d.dashboard.comprasPendientes, d.dashboard.punchAbiertos, d.dashboard.longLeadAlerta]],
+    theme: 'grid', styles:{fontSize:9}, headStyles:{fillColor:[193,113,46]},
+  });
+  y = doc.lastAutoTable.finalY + 8;
+
+  doc.autoTable({
+    startY: y,
+    head: [["Código","Proyecto","Cliente","PM","Avance","Semáforo","Posta/Punch"]],
+    body: d.dashboard.proyectosTabla.map(p=>[p.codigo,p.nombre,p.cliente,p.pm,p.avance+"%",p.semaforo,p.posta]),
+    theme:'striped', styles:{fontSize:8}, headStyles:{fillColor:[26,34,46]},
+  });
+  y = doc.lastAutoTable.finalY + 10;
+  if (y > 250) { doc.addPage(); y = 18; }
+
+  doc.setFontSize(12); doc.setFont(undefined,'bold');
+  doc.text("Actividad de Usuarios", 14, y);
+  doc.autoTable({
+    startY: y+4,
+    head: [["Usuarios autorizados","Conectados ahora","Nunca ingresaron","Sin uso +7 días"]],
+    body: [[d.actividad.totalUsuarios, d.actividad.conectadosAhora, d.actividad.nuncaIngresaron, d.actividad.sinUso7dias]],
+    theme:'grid', styles:{fontSize:9}, headStyles:{fillColor:[193,113,46]},
+  });
+  y = doc.lastAutoTable.finalY + 8;
+
+  doc.autoTable({
+    startY: y,
+    head: [["Usuario","Rol","Último ingreso","24h","Semana","Mes"]],
+    body: d.actividad.usuariosTabla.map(u=>[u.nombre,u.rol,u.ultimoIngreso,u.h24,u.hSemana,u.hMes]),
+    theme:'striped', styles:{fontSize:8}, headStyles:{fillColor:[26,34,46]},
+  });
+
+  doc.save(`Reporte_KPIs_Alutipo_${hoyISO()}.pdf`);
+  toast("Reporte PDF descargado.", "ok");
 }
 
 function renderAuditoria() {

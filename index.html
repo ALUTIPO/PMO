@@ -471,6 +471,30 @@ const CATALOGO_POSTAS = [
   {n:19, fase:6, nombre:"Cierre del proyecto (As-Built)", responsable:"Jefe de Proyecto", depende:[18], dias:3, hito:true,  entregable:"Planos As-Built + dossier cliente"},
 ];
 
+/* Segunda línea de negocio: Fabricación de Perfilería de Aluminio
+   (carritos logísticos, pasarelas, barandas, escaleras, etc.) — un
+   flujo de taller más corto que el eléctrico, con sus propios roles
+   (Jefe de Producción / Operario) y su propio Jefe de Proyecto
+   haciendo también las veces de diseñador/validador del plano. */
+const CATALOGO_POSTAS_FABRICACION = [
+  {n:1,  fase:1, nombre:"Recepción y validación de OT / plano de fabricación", responsable:"Jefe de Proyecto", depende:[], dias:1, hito:true,  entregable:"OT validada + plano aprobado"},
+  {n:2,  fase:1, nombre:"Levantamiento de materiales y BOM de perfiles", responsable:"Jefe de Producción", depende:[1], dias:2, hito:false, entregable:"BOM de perfiles, platinas y accesorios"},
+  {n:3,  fase:1, nombre:"Compra y abastecimiento de perfiles y accesorios", responsable:"Asistente Administrativo", depende:[2], dias:5, hito:true,  entregable:"OC emitida y seguimiento"},
+  {n:4,  fase:2, nombre:"Corte de perfiles de aluminio", responsable:"Operario", depende:[3], dias:2, hito:false, entregable:"Piezas cortadas según plano"},
+  {n:5,  fase:2, nombre:"Mecanizado y perforación (taladrado, fresado, ranurado)", responsable:"Operario", depende:[4], dias:2, hito:false, entregable:"Piezas mecanizadas"},
+  {n:6,  fase:2, nombre:"Armado y ensamblaje estructural", responsable:"Jefe de Producción", depende:[5], dias:3, hito:false, entregable:"Estructura armada"},
+  {n:7,  fase:2, nombre:"Instalación de accesorios (ruedas, bisagras, pasamanos, peldaños)", responsable:"Operario", depende:[6], dias:2, hito:false, entregable:"Equipo con accesorios instalados"},
+  {n:8,  fase:3, nombre:"Control dimensional y de calidad", responsable:"Jefe de Producción", depende:[7], dias:1, hito:true,  entregable:"Protocolo de control dimensional firmado"},
+  {n:9,  fase:3, nombre:"Acabado superficial (pulido/anodizado/pintura) y prueba funcional", responsable:"Jefe de Producción", depende:[8], dias:3, hito:false, entregable:"Certificado de acabado + prueba funcional"},
+  {n:10, fase:4, nombre:"Embalaje, despacho y entrega", responsable:"Jefe de Producción", depende:[9], dias:1, hito:true,  entregable:"Guía de despacho + acta de entrega"},
+];
+const FASES_FABRICACION = {
+  1:"Fase 1 · Preparación (OT, BOM y abastecimiento)",
+  2:"Fase 2 · Fabricación (corte, mecanizado, armado, accesorios)",
+  3:"Fase 3 · Control y terminación",
+  4:"Fase 4 · Entrega",
+};
+
 const FASES = {
   1:"Fase 1 · Iniciación y Levantamiento",
   2:"Fase 2 · Ingeniería Básica y Dimensionamiento",
@@ -482,7 +506,8 @@ const FASES = {
 
 const ROLES = [
   "Jefe de Proyecto","Diseñador Eléctrico","Automatista","Jefe de Automatización","Jefe de Taller",
-  "Líder de Terreno","Técnico de Terreno","Asistente Administrativo","Jefe de Servicios Eléctricos","Gerencia"
+  "Líder de Terreno","Técnico de Terreno","Asistente Administrativo","Jefe de Servicios Eléctricos","Gerencia",
+  "Jefe de Producción","Operario"
 ];
 
 /* "Mi Panel" (vista propia, de campo) es solo para quienes reciben
@@ -493,8 +518,8 @@ const ROLES = [
    porque también son responsables directos de tareas. Gerencia y el
    resto de las jefaturas no necesitan ninguna de las dos: su vista es
    el Dashboard Ejecutivo y Proyecto 360°. */
-const ROLES_MI_PANEL = ["Técnico de Terreno","Automatista","Diseñador Eléctrico","Jefe de Taller","Líder de Terreno"];
-const ROLES_PANEL_EQUIPO = ["Jefe de Proyecto","Jefe de Taller","Líder de Terreno"];
+const ROLES_MI_PANEL = ["Técnico de Terreno","Automatista","Diseñador Eléctrico","Jefe de Taller","Líder de Terreno","Operario","Jefe de Producción"];
+const ROLES_PANEL_EQUIPO = ["Jefe de Proyecto","Jefe de Taller","Líder de Terreno","Jefe de Producción"];
 function navItemVisible(it) { return !it.roles || it.roles.includes(DB.role); }
 
 const ESCALA_PERMISOS = {
@@ -506,11 +531,14 @@ const ESCALA_PERMISOS = {
   "Jefe de Taller": ["Jefe de Taller","Jefe de Proyecto"],
   "Líder de Terreno": ["Líder de Terreno","Jefe de Proyecto"],
   "Técnico de Terreno": ["Técnico de Terreno","Líder de Terreno","Jefe de Proyecto"],
+  "Jefe de Producción": ["Jefe de Producción","Jefe de Proyecto"],
+  "Operario": ["Operario","Jefe de Producción","Jefe de Proyecto"],
 };
 
 // Funciones auxiliares (definidas ANTES de ser usadas)
-function genPostas(estadosOverride) {
-  return CATALOGO_POSTAS.map(p => {
+function genPostas(estadosOverride, tipo) {
+  const catalogo = tipo === "fabricacion" ? CATALOGO_POSTAS_FABRICACION : CATALOGO_POSTAS;
+  return catalogo.map(p => {
     const base = {
       numero:p.n, fase:p.fase, nombre:p.nombre, responsable:p.responsable,
       depende:p.depende, dias:p.dias, hito:p.hito, entregable:p.entregable,
@@ -581,6 +609,10 @@ function migrarProyecto(p) {
     }
     sincronizarPunchAGanttObj(p, it);
   });
+  // El campo "tipo" antes no se usaba para nada (quedaba en "Nuevo" fijo);
+  // ahora distingue la línea de negocio del proyecto — todo lo que no sea
+  // explícitamente "fabricacion" se trata como el flujo eléctrico de siempre.
+  if (p.tipo !== "fabricacion") p.tipo = "electrico";
   if(!p.bodega) p.bodega = [];
   if(!p.compras) p.compras = [];
   // Módulo de Compras rediseñado: de "un ítem plano por compra" a
@@ -2483,7 +2515,7 @@ function renderDashboard() {
         const destino = p.modoCierre ? 'punch' : 'proyecto360';
         return `<tr class="row-click" onclick="DB.proyectoActivo='${p.id}'; goTo('${destino}')">
           <td class="mono">${p.codigo}</td>
-          <td style="max-width:230px">${p.modoCierre?'<span title="Proyecto en cierre">🏁</span> ':''}${p.nombre}</td>
+          <td style="max-width:230px">${p.modoCierre?'<span title="Proyecto en cierre">🏁</span> ':''}${p.tipo==='fabricacion'?'<span title="Fabricación">🔧</span> ':''}${p.nombre}</td>
           <td>${p.cliente}</td>
           <td>${p.pm}</td>
           <td style="min-width:120px">
@@ -2537,6 +2569,56 @@ function renderDashboard() {
   `;
 }
 
+/* Cartera de proyectos de Fabricación — la segunda línea de negocio.
+   Es deliberadamente una página angosta: solo lista y crea proyectos.
+   Todo lo demás (Proyecto 360°, Punch List, Requerimientos, Galería,
+   Bodega, Compras, Presupuesto) ya es genérico por proyecto y funciona
+   solo apenas DB.proyectoActivo apunta a uno de fabricación — no hay
+   nada que duplicar. */
+function renderFabricacion() {
+  const proyectos = DB.proyectos.filter(p => p.tipo === "fabricacion");
+  const puedeCrear = DB.role==="Jefe de Proyecto" || DB.role==="Gerencia";
+  return `
+  <div class="page-head">
+    <div>
+      <h1>🔧 Fabricación</h1>
+      <div class="page-desc">Perfilería de aluminio — carritos logísticos, pasarelas, barandas, escaleras y otros equipos de taller. Cada proyecto corre su propio flujo de 10 postas.</div>
+    </div>
+    <div class="flex-gap">${puedeCrear ? `<button class="btn btn-primary" onclick="modalNuevoProyecto('fabricacion')">+ Nuevo proyecto de fabricación</button>` : ''}</div>
+  </div>
+  ${proyectos.length ? `
+  <div class="table-wrap">
+    <table>
+      <tr><th>Código</th><th>Proyecto</th><th>Cliente</th><th>Responsable</th><th>Avance</th><th>Semáforo</th><th>Posta actual</th><th></th></tr>
+      ${proyectos.map(p => {
+        const avanceCache = avanceGlobal(p);
+        const semaforoCache = semaforo(p);
+        const posta = p.postas.find(t=>t.estado==="En Progreso"||t.estado==="Bloqueado") || p.postas.slice().reverse().find(t=>t.estado==="Completado");
+        return `<tr class="row-click" onclick="DB.proyectoActivo='${p.id}'; goTo('proyecto360')">
+          <td class="mono">${p.codigo}</td>
+          <td style="max-width:230px">${p.nombre}</td>
+          <td>${p.cliente}</td>
+          <td>${p.pm}</td>
+          <td style="min-width:120px">
+            <div class="flex-between small"><span>${avanceCache}%</span></div>
+            <div class="progressbar thin"><span style="width:${avanceCache}%"></span></div>
+          </td>
+          <td>${badgeSemaforo(semaforoCache)}</td>
+          <td class="small">${posta ? `#${posta.numero} · ${posta.nombre}` : '—'}</td>
+          <td class="flex-gap">
+            <button class="btn btn-sm btn-ghost" onclick="event.stopPropagation(); DB.proyectoActivo='${p.id}'; goTo('proyecto360')">Ver →</button>
+            <button class="btn btn-sm" onclick="event.stopPropagation(); modalEditarProyecto('${p.id}')" title="Editar datos generales">✎</button>
+          </td>
+        </tr>`;
+      }).join('')}
+    </table>
+  </div>` : `<div class="empty-state card">
+    <p>Aún no hay proyectos de fabricación.</p>
+    ${puedeCrear ? `<button class="btn btn-primary" style="margin-top:10px;" onclick="modalNuevoProyecto('fabricacion')">+ Crear el primero</button>` : ''}
+  </div>`}
+  `;
+}
+
 function renderProyecto360() {
   if (!DB.proyectos.length) {
     return `<div class="page-head"><div><h1>Proyecto 360°</h1></div></div>
@@ -2546,11 +2628,14 @@ function renderProyecto360() {
   const p = proy();
   p.avanceCache = avanceGlobal(p); p.semaforoCache = semaforo(p);
   const pres = presupuesto(p);
+  const esFabricacion = p.tipo === "fabricacion";
+  const fasesMap = esFabricacion ? FASES_FABRICACION : FASES;
+  const numerosFase = Object.keys(fasesMap).map(Number);
 
-  const fasesHtml = [1,2,3,4,5,6].map(f => {
+  const fasesHtml = numerosFase.map(f => {
     const postas = p.postas.filter(t => t.fase === f);
     return `
-    <div class="section-label">${FASES[f]}</div>
+    <div class="section-label">${fasesMap[f]}</div>
     <div class="table-wrap" style="margin-bottom:6px;">
       <table>
         <tr><th style="width:36px">#</th><th>Posta</th><th>Responsable</th><th>Depende de</th><th>Plazo</th><th>Estado</th><th>Avance</th><th></th></tr>
@@ -2578,8 +2663,8 @@ function renderProyecto360() {
   return `
   <div class="page-head">
     <div>
-      <h1>Proyecto 360°</h1>
-      <div class="page-desc">Flujo completo de las 19 postas con cascada de dependencias, avance ponderado y bloqueo con motivo obligatorio.</div>
+      <h1>${esFabricacion?'Fabricación':'Proyecto'} 360° ${esFabricacion?'<span class="badge b-blue" style="margin-left:6px;"><span class="dot"></span>🔧 Perfilería de aluminio</span>':''}</h1>
+      <div class="page-desc">${esFabricacion ? 'Flujo de taller de 10 postas — de la validación del plano al despacho, con cascada de dependencias y avance ponderado.' : 'Flujo completo de las 19 postas con cascada de dependencias, avance ponderado y bloqueo con motivo obligatorio.'}</div>
     </div>
     ${selectorProyectos()}
   </div>
@@ -5554,24 +5639,32 @@ function leerCamposProyecto() {
   };
 }
 
-function modalNuevoProyecto() {
+function modalNuevoProyecto(tipoPreseleccionado) {
   if (DB.role !== "Jefe de Proyecto" && DB.role !== "Gerencia") {
     toast(`Tu rol (${DB.role}) no puede crear proyectos.`, "danger");
     return;
   }
+  const tipoInicial = tipoPreseleccionado === "fabricacion" ? "fabricacion" : "electrico";
   openModal(`
     <div class="modal-head"><h3>Nuevo proyecto</h3><button class="close-x" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
-      <label class="field-label">¿Cómo empieza este proyecto?</label>
-      <div class="stack" style="gap:8px; margin-top:6px;">
-        <label class="card" style="padding:12px 14px; display:flex; gap:10px; align-items:flex-start; cursor:pointer; box-shadow:none; border:1.5px solid var(--copper);" id="opcionNormalLabel" onclick="document.querySelectorAll('input[name=modoNuevo]').forEach(r=>r.checked=(r.value==='normal')); document.getElementById('opcionNormalLabel').style.borderColor='var(--copper)'; document.getElementById('opcionCierreLabel').style.borderColor='var(--line-soft)';">
-          <input type="radio" name="modoNuevo" value="normal" checked style="margin-top:3px;">
-          <div><b class="small">Nuevo — seguimiento completo</b><div class="hint">Las 19 postas parten en "Pendiente", desde el kick-off.</div></div>
-        </label>
-        <label class="card" style="padding:12px 14px; display:flex; gap:10px; align-items:flex-start; cursor:pointer; box-shadow:none; border:1.5px solid var(--line-soft);" id="opcionCierreLabel" onclick="document.querySelectorAll('input[name=modoNuevo]').forEach(r=>r.checked=(r.value==='cierre')); document.getElementById('opcionCierreLabel').style.borderColor='var(--copper)'; document.getElementById('opcionNormalLabel').style.borderColor='var(--line-soft)';">
-          <input type="radio" name="modoNuevo" value="cierre" style="margin-top:3px;">
-          <div><b class="small">Ya está en cierre — foco en Punch List</b><div class="hint">Marca las postas 1-17 como completadas administrativamente (no es seguimiento real) y abre Punch List de inmediato. Compras y Presupuesto siguen disponibles si hace falta.</div></div>
-        </label>
+      <label class="field-label">Área de trabajo</label>
+      <select id="fTipoProyecto" onchange="document.getElementById('bloqueModoNuevo').style.display = this.value==='fabricacion' ? 'none' : 'block';">
+        <option value="electrico" ${tipoInicial==='electrico'?'selected':''}>⚡ Instalación Eléctrica — 19 postas</option>
+        <option value="fabricacion" ${tipoInicial==='fabricacion'?'selected':''}>🔧 Fabricación de Perfilería de Aluminio — 10 postas</option>
+      </select>
+      <div id="bloqueModoNuevo" style="display:${tipoInicial==='fabricacion'?'none':'block'};">
+        <label class="field-label" style="margin-top:14px;">¿Cómo empieza este proyecto?</label>
+        <div class="stack" style="gap:8px; margin-top:6px;">
+          <label class="card" style="padding:12px 14px; display:flex; gap:10px; align-items:flex-start; cursor:pointer; box-shadow:none; border:1.5px solid var(--copper);" id="opcionNormalLabel" onclick="document.querySelectorAll('input[name=modoNuevo]').forEach(r=>r.checked=(r.value==='normal')); document.getElementById('opcionNormalLabel').style.borderColor='var(--copper)'; document.getElementById('opcionCierreLabel').style.borderColor='var(--line-soft)';">
+            <input type="radio" name="modoNuevo" value="normal" checked style="margin-top:3px;">
+            <div><b class="small">Nuevo — seguimiento completo</b><div class="hint">Las 19 postas parten en "Pendiente", desde el kick-off.</div></div>
+          </label>
+          <label class="card" style="padding:12px 14px; display:flex; gap:10px; align-items:flex-start; cursor:pointer; box-shadow:none; border:1.5px solid var(--line-soft);" id="opcionCierreLabel" onclick="document.querySelectorAll('input[name=modoNuevo]').forEach(r=>r.checked=(r.value==='cierre')); document.getElementById('opcionCierreLabel').style.borderColor='var(--copper)'; document.getElementById('opcionNormalLabel').style.borderColor='var(--line-soft)';">
+            <input type="radio" name="modoNuevo" value="cierre" style="margin-top:3px;">
+            <div><b class="small">Ya está en cierre — foco en Punch List</b><div class="hint">Marca las postas 1-17 como completadas administrativamente (no es seguimiento real) y abre Punch List de inmediato. Compras y Presupuesto siguen disponibles si hace falta.</div></div>
+          </label>
+        </div>
       </div>
       <div class="divider"></div>
       ${camposProyectoForm()}
@@ -5581,7 +5674,8 @@ function modalNuevoProyecto() {
       <button class="btn btn-primary" onclick="
         const d=leerCamposProyecto();
         if(!d.nombre){toast('El nombre del proyecto es obligatorio.','danger'); return;}
-        d.modoCierre = document.querySelector('input[name=modoNuevo]:checked').value === 'cierre';
+        d.tipo = document.getElementById('fTipoProyecto').value;
+        d.modoCierre = d.tipo==='electrico' && document.querySelector('input[name=modoNuevo]:checked').value === 'cierre';
         const res = crearProyecto(d);
         closeModal();
         if(res && res.modoCierre) goTo('punch'); else goTo('proyecto360');">Crear proyecto</button>
@@ -5617,7 +5711,8 @@ function crearProyecto(datos) {
     return;
   }
   const id = "P-"+Math.random().toString(36).slice(2,8).toUpperCase();
-  const modoCierre = !!datos.modoCierre;
+  const tipo = datos.tipo === "fabricacion" ? "fabricacion" : "electrico";
+  const modoCierre = !!datos.modoCierre && tipo === "electrico";
 
   // "Modo cierre": el proyecto ya viene avanzado en terreno y lo que
   // importa es el Punch List, no reconstruir el historial completo de
@@ -5625,7 +5720,9 @@ function crearProyecto(datos) {
   // (NO por seguimiento real posta a posta) para abrir Punch List de
   // inmediato, y queda registrado explícitamente en el historial que
   // fue un cierre administrativo, para no confundirlo con avance real.
-  let postas = genPostas();
+  // Solo aplica al flujo eléctrico — Fabricación siempre parte desde la
+  // posta 1, es un ciclo de taller mucho más corto.
+  let postas = genPostas(null, tipo);
   if (modoCierre) {
     postas.forEach(t => {
       if (t.numero <= 17) { t.estado = "Completado"; t.avance = 100; t.fechaCompletado = hoyISO(); }
@@ -5635,7 +5732,7 @@ function crearProyecto(datos) {
 
   const nuevo = {
     id, codigo: datos.codigo || "SIN-CODIGO", nombre: datos.nombre || "Proyecto sin nombre",
-    cliente: datos.cliente || "—", pm: datos.pm || DB.usuario, tipo: datos.tipo || "Nuevo",
+    cliente: datos.cliente || "—", pm: datos.pm || DB.usuario, tipo,
     prioridad: datos.prioridad || "Media", criticidad: datos.criticidad || "Media",
     fechaKickoff: datos.fechaKickoff || hoyISO(), estadoProyecto: "En Definición",
     presupuestoTotal: Number(datos.presupuesto) || 0,
@@ -5644,7 +5741,7 @@ function crearProyecto(datos) {
   };
   DB.proyectos.push(nuevo);
   DB.proyectoActivo = id;
-  registrarHistorial({proyecto: nuevo.codigo, accion:"Crear", detalle:`Nuevo proyecto: ${nuevo.nombre}${modoCierre?' — creado en modo cierre: postas 1-17 marcadas completadas ADMINISTRATIVAMENTE (sin seguimiento posta a posta), foco en Punch List':''}`, usuario:DB.usuario, criticidad:"Media"});
+  registrarHistorial({proyecto: nuevo.codigo, accion:"Crear", detalle:`Nuevo proyecto (${tipo==='fabricacion'?'Fabricación':'Eléctrico'}): ${nuevo.nombre}${modoCierre?' — creado en modo cierre: postas 1-17 marcadas completadas ADMINISTRATIVAMENTE (sin seguimiento posta a posta), foco en Punch List':''}`, usuario:DB.usuario, criticidad:"Media"});
   guardarEstado();
   toast(modoCierre ? "Proyecto creado en modo cierre — Punch List ya está disponible." : "Proyecto creado y guardado en la nube.", "ok");
   return { id, modoCierre };
@@ -5876,6 +5973,9 @@ const NAV = [
     {id:"galeria", label:"Galería", icon:iconGallery()},
     {id:"reaperturas", label:"Reaperturas", icon:iconRefresh()},
   ]},
+  {group:"Fabricación", items:[
+    {id:"fabricacion", label:"Fabricación", icon:iconWrench()},
+  ]},
   {group:"Inteligencia", items:[
     {id:"copiloto", label:"Copiloto IA", icon:iconSpark()},
     {id:"auditoria", label:"Auditoría", icon:iconClock()},
@@ -5894,6 +5994,9 @@ function iconGallery() {
 }
 function iconActivity() {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>`;
+}
+function iconWrench() {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14.7 6.3a4 4 0 0 0-5.6 5l-6 6 2.6 2.6 6-6a4 4 0 0 0 5-5.6l-2.7 2.7-2.6-2.6 2.7-2.7Z"/></svg>`;
 }
 function iconLayers() {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3 2 8l10 5 10-5-10-5Z"/><path d="m2 13 10 5 10-5"/></svg>`;
@@ -6033,6 +6136,7 @@ function renderAll() {
   const renderers = {
     dashboard: renderDashboard, miPanel: renderMiPanel, panelEquipo: renderPanelEquipo, bodegaGeneral: renderBodegaGeneral, personal: renderPersonal, proyecto360: renderProyecto360, planificacion: renderPlanificacion, compras: renderCompras,
     presupuesto: renderPresupuesto, bodega: renderBodega, punch: renderPunch, requerimientos: renderRequerimientos, galeria: renderGaleria,
+    fabricacion: renderFabricacion,
     reaperturas: renderReaperturas, copiloto: renderCopiloto, auditoria: renderAuditoria, actividad: renderActividad,
   };
   const target = document.getElementById("page-"+currentPage);

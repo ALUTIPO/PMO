@@ -91,6 +91,14 @@ a { color: var(--blueprint); }
 .brand-logo-img { display: block; height: 26px; width: auto; }
 .brand-name { font-weight: 700; font-size: 16.5px; color: #fff; letter-spacing: .01em; }
 .brand-sub { font-size: 11px; color: var(--copper-light); margin-top: 2px; font-family: 'IBM Plex Mono', monospace; letter-spacing: .04em; text-transform: uppercase; }
+.area-switch { display: flex; gap: 4px; padding: 12px 16px 6px; }
+.area-btn {
+  flex: 1; font-family: inherit; font-size: 12px; font-weight: 700; padding: 9px 6px; border-radius: 8px;
+  border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.04); color: #9aa4b0; cursor: pointer;
+  transition: .12s ease;
+}
+.area-btn:hover { background: rgba(255,255,255,.09); color: #d8dde3; }
+.area-btn.active { background: var(--copper); border-color: var(--copper); color: #fff; }
 .nav { padding: 14px 12px; position: relative; z-index: 1; flex: 1; }
 .nav-group-label {
   font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; color: #7c8794;
@@ -534,6 +542,24 @@ const ESCALA_PERMISOS = {
   "Jefe de Producción": ["Jefe de Producción","Jefe de Proyecto"],
   "Operario": ["Operario","Jefe de Producción","Jefe de Proyecto"],
 };
+
+/* Dos áreas de trabajo separadas de verdad: cambiar acá reconstruye
+   TODO el menú lateral (no solo un ítem) y acota qué proyectos ve el
+   selector, el Dashboard, Galería y Requerimientos — cada pestaña solo
+   muestra información de su propia área. Las páginas en sí (Dashboard,
+   Proyecto 360°, Punch List, etc.) son el mismo código para las dos;
+   lo único que cambia es el filtro de qué proyectos entran. */
+let areaActiva = "electrico"; // "electrico" | "fabricacion"
+function proyectosDelArea() { return DB.proyectos.filter(p => (p.tipo||"electrico") === areaActiva); }
+function cambiarArea(nueva) {
+  areaActiva = nueva;
+  const disponibles = proyectosDelArea();
+  if (!disponibles.some(p => p.id === DB.proyectoActivo)) {
+    DB.proyectoActivo = disponibles.length ? disponibles[0].id : null;
+  }
+  currentPage = "dashboard";
+  renderAll();
+}
 
 // Funciones auxiliares (definidas ANTES de ser usadas)
 function genPostas(estadosOverride, tipo) {
@@ -1419,7 +1445,8 @@ function cambiarEstadoPosta(pid, numero, nuevoEstado, motivo) {
     toast("Esta posta ya está completada. Requiere Solicitud de Reapertura con 4 firmas.", "warn");
     return false;
   }
-  if (nuevoEstado==="Completado" && numero===19) {
+  const numeroCierre = p.tipo === "fabricacion" ? 10 : 19;
+  if (nuevoEstado==="Completado" && numero===numeroCierre) {
     const pendientes = p.punch.filter(x => x.estado !== "Completado");
     if (pendientes.length > 0) {
       toast(`No se puede cerrar: quedan ${pendientes.length} ítems de Punch List sin completar.`, "danger");
@@ -1485,6 +1512,7 @@ function guardarComentarioPosta(pid, numero, comentario, linkSharepoint) {
 const ROLES_COMPRAS = [
   "Asistente Administrativo","Jefe de Proyecto","Jefe de Servicios Eléctricos",
   "Líder de Terreno","Jefe de Taller","Diseñador Eléctrico","Jefe de Automatización","Automatista",
+  "Jefe de Producción",
 ];
 function puedeGestionarCompras() {
   return ROLES_COMPRAS.includes(DB.role);
@@ -2027,7 +2055,7 @@ function avancePunchItem(it) {
 /* Solo estos roles pueden llevar un sub-ítem al 100% — cualquier otro
    puede reportar avance libremente hasta 99%, pero el cierre final
    queda para quien verifica en terreno o la jefatura. */
-const ROLES_CIERRE_SUBITEM = ["Líder de Terreno", "Jefe de Proyecto", "Gerencia"];
+const ROLES_CIERRE_SUBITEM = ["Líder de Terreno", "Jefe de Proyecto", "Gerencia", "Jefe de Producción"];
 function puedeCerrarSubitem() { return ROLES_CIERRE_SUBITEM.includes(DB.role); }
 /* Avance global del Punch List del proyecto: promedio simple entre
    tareas (cada tarea pesa igual, sin importar si tiene 2 o 130
@@ -2462,55 +2490,57 @@ function badgeStock(e) {
 
 function selectorProyectos() {
   return `<select onchange="DB.proyectoActivo=this.value; renderAll();" style="font-family:inherit;font-size:12.5px;padding:7px 10px;border-radius:7px;border:1px solid var(--line);background:var(--card)">
-    ${DB.proyectos.map(p=>`<option value="${p.id}" ${p.id===DB.proyectoActivo?'selected':''}>${p.modoCierre?'🏁 ':''}${p.codigo} — ${p.nombre}</option>`).join('')}
+    ${proyectosDelArea().map(p=>`<option value="${p.id}" ${p.id===DB.proyectoActivo?'selected':''}>${p.modoCierre?'🏁 ':''}${p.codigo} — ${p.nombre}</option>`).join('')}
   </select>`;
 }
 
 function renderDashboard() {
-  DB.proyectos.forEach(p => { p.avanceCache = avanceGlobal(p); p.semaforoCache = semaforo(p); });
-  const activos = DB.proyectos.filter(p => p.estadoProyecto==="Activo").length;
-  const comprasPendientes = DB.proyectos.reduce((a,p) => a + p.cotizaciones.filter(c => c.estado!=="Recibido").length, 0);
-  const punchAbiertos = DB.proyectos.reduce((a,p) => a + p.punch.filter(x => x.estado!=="Completado").length, 0);
-  const longLeadAlerta = DB.proyectos.reduce((a,p) => a + p.cotizaciones.filter(c => c.alerta).length, 0);
-  const destacado = DB.proyectos.find(p => p.id === DB.proyectoActivo) || DB.proyectos[0];
+  const misProyectos = proyectosDelArea();
+  misProyectos.forEach(p => { p.avanceCache = avanceGlobal(p); p.semaforoCache = semaforo(p); });
+  const activos = misProyectos.filter(p => p.estadoProyecto==="Activo").length;
+  const comprasPendientes = misProyectos.reduce((a,p) => a + p.cotizaciones.filter(c => c.estado!=="Recibido").length, 0);
+  const punchAbiertos = misProyectos.reduce((a,p) => a + p.punch.filter(x => x.estado!=="Completado").length, 0);
+  const longLeadAlerta = misProyectos.reduce((a,p) => a + p.cotizaciones.filter(c => c.alerta).length, 0);
+  const destacado = misProyectos.find(p => p.id === DB.proyectoActivo) || misProyectos[0];
+  const esFab = areaActiva === "fabricacion";
 
   return `
   <div class="page-head">
     <div>
-      <h1>Dashboard Ejecutivo</h1>
-      <div class="page-desc">Tablero compartido en tiempo real de ALUTIPO SPA — avance ponderado, semáforo por desviación y alertas de compras críticas.</div>
+      <h1>${esFab?'🔧 Dashboard — Fabricación':'⚡ Dashboard — Eléctrico'}</h1>
+      <div class="page-desc">${esFab ? 'Perfilería de aluminio — carritos logísticos, pasarelas, barandas, escaleras y otros equipos de taller.' : 'Instalaciones eléctricas — avance ponderado, semáforo por desviación y alertas de compras críticas.'} Solo se muestra información de esta área.</div>
     </div>
     <div class="flex-gap">
-      ${ROLES_VER_ACTIVIDAD.includes(DB.role) ? `
+      ${(!esFab && ROLES_VER_ACTIVIDAD.includes(DB.role)) ? `
         <button class="btn" onclick="exportarReporteKPIsPDF()" title="Descargar reporte de KPIs en PDF, para la reunión">📄 Reporte PDF</button>
         <button class="btn" onclick="exportarReporteKPIsExcel()" title="Descargar reporte de KPIs en Excel">📊 Reporte Excel</button>
       ` : ''}
       <button class="btn" onclick="modalAdminDatos()" title="Vaciar datos de muestra o restaurarlos">⚙ Datos del tablero</button>
-      <button class="btn btn-primary" onclick="modalNuevoProyecto()">+ Nuevo proyecto</button>
+      <button class="btn btn-primary" onclick="modalNuevoProyecto('${areaActiva}')">+ Nuevo proyecto</button>
     </div>
   </div>
 
   ${(() => {
-    const criticos = requerimientosCriticosAbiertos();
+    const criticos = requerimientosCriticosAbiertos(true);
     if (!criticos.length) return '';
     return `<div class="alert-chip" style="margin-bottom:14px;" onclick="filtroReq='criticas'; panelReqAbierto=true; goTo('requerimientos')">
-      🔴 ${criticos.length} requerimiento(s) crítico(s) abierto(s) en el proyecto — revisar ahora →
+      🔴 ${criticos.length} requerimiento(s) crítico(s) abierto(s) en esta área — revisar ahora →
     </div>`;
   })()}
 
   <div class="grid grid-4">
-    <div class="card kpi"><div class="kpi-label">Proyectos en cartera</div><div class="kpi-value">${DB.proyectos.length}</div><div class="kpi-sub">${activos} marcados como activos</div></div>
+    <div class="card kpi"><div class="kpi-label">Proyectos en cartera</div><div class="kpi-value">${misProyectos.length}</div><div class="kpi-sub">${activos} marcados como activos</div></div>
     <div class="card kpi"><div class="kpi-label">Compras pendientes</div><div class="kpi-value" style="color:var(--copper-dark)">${comprasPendientes}</div><div class="kpi-sub">ítems no recepcionados</div></div>
     <div class="card kpi"><div class="kpi-label">Punch List abiertos</div><div class="kpi-value" style="color:var(--danger)">${punchAbiertos}</div><div class="kpi-sub">pendientes de cierre en terreno</div></div>
     <div class="card kpi"><div class="kpi-label">Alertas long-lead</div><div class="kpi-value" style="color:${longLeadAlerta>0?'var(--danger)':'var(--ok)'}">${longLeadAlerta}</div><div class="kpi-sub">materiales críticos en riesgo</div></div>
   </div>
 
   <div class="section-label">Cartera de proyectos</div>
-  ${DB.proyectos.length ? `
+  ${misProyectos.length ? `
   <div class="table-wrap">
     <table>
       <tr><th>Código</th><th>Proyecto</th><th>Cliente</th><th>PM</th><th>Avance</th><th>Semáforo</th><th>Posta actual</th><th></th></tr>
-      ${DB.proyectos.map(p => {
+      ${misProyectos.map(p => {
         const posta = p.postas.find(t => t.estado==="En Progreso" || t.estado==="Bloqueado") || p.postas.slice().reverse().find(t => t.estado==="Completado");
         const destino = p.modoCierre ? 'punch' : 'proyecto360';
         return `<tr class="row-click" onclick="DB.proyectoActivo='${p.id}'; goTo('${destino}')">
@@ -2532,11 +2562,11 @@ function renderDashboard() {
       }).join('')}
     </table>
   </div>` : `<div class="empty-state card">
-      <p>Aún no hay proyectos en el tablero compartido.</p>
-      <button class="btn btn-primary" style="margin-top:10px;" onclick="modalNuevoProyecto()">+ Crear el primer proyecto</button>
+      <p>Aún no hay proyectos de ${esFab?'fabricación':'esta área'} en el tablero.</p>
+      <button class="btn btn-primary" style="margin-top:10px;" onclick="modalNuevoProyecto('${areaActiva}')">+ Crear el primer proyecto</button>
     </div>`}
 
-  ${DB.proyectos.length ? `
+  ${misProyectos.length ? `
   <div class="section-label">Proyecto destacado</div>
   <div class="grid grid-2">
     <div class="card">
@@ -2620,7 +2650,7 @@ function renderFabricacion() {
 }
 
 function renderProyecto360() {
-  if (!DB.proyectos.length) {
+  if (!proyectosDelArea().length) {
     return `<div class="page-head"><div><h1>Proyecto 360°</h1></div></div>
     <div class="empty-state card">Aún no hay proyectos en el tablero. <button class="btn btn-primary" style="margin-top:10px;" onclick="modalNuevoProyecto()">+ Crear el primer proyecto</button></div>`;
   }
@@ -2686,7 +2716,7 @@ function renderProyecto360() {
       <div><div class="small muted">Avance global</div><div style="font-size:22px;font-weight:700;font-family:'IBM Plex Mono',monospace">${p.avanceCache}%</div><div class="progressbar thin" style="margin-top:6px"><span style="width:${p.avanceCache}%"></span></div></div>
       <div><div class="small muted">Presupuesto total</div><div style="font-size:16px;font-weight:600;font-family:'IBM Plex Mono',monospace">${money(p.presupuestoTotal)}</div></div>
       <div><div class="small muted">Disponible compras reales (60%)</div><div style="font-size:16px;font-weight:600;font-family:'IBM Plex Mono',monospace;color:${pres.realDisponiblePct<20?'var(--danger)':'var(--ink)'}">${pres.realDisponiblePct}%</div></div>
-      <div><div class="small muted">Postas completadas</div><div style="font-size:16px;font-weight:600;font-family:'IBM Plex Mono',monospace">${p.postas.filter(t => t.estado==='Completado').length} / 19</div></div>
+      <div><div class="small muted">Postas completadas</div><div style="font-size:16px;font-weight:600;font-family:'IBM Plex Mono',monospace">${p.postas.filter(t => t.estado==='Completado').length} / ${p.postas.length}</div></div>
     </div>
   </div>
 
@@ -2815,7 +2845,7 @@ function ganttSVG(tareas, cpm) {
 function puedeEditarPlanificacion() { return DB.role==="Jefe de Proyecto" || DB.role==="Gerencia"; }
 
 function renderPlanificacion() {
-  if (!DB.proyectos.length) {
+  if (!proyectosDelArea().length) {
     return `<div class="page-head"><div><h1>Planificación (Gantt)</h1></div></div>
     <div class="empty-state card">Aún no hay proyectos en el tablero.</div>`;
   }
@@ -2896,7 +2926,7 @@ function renderPlanificacion() {
 
 // --- Compras ---
 function renderCompras() {
-  if (!DB.proyectos.length) {
+  if (!proyectosDelArea().length) {
     return `<div class="page-head"><div><h1>Compras</h1></div></div>
     <div class="empty-state card">Aún no hay proyectos en el tablero.</div>`;
   }
@@ -2973,7 +3003,7 @@ function accionesEtapaCotizacion(p, c) {
 
 // --- Presupuesto ---
 function renderPresupuesto() {
-  if (!DB.proyectos.length) {
+  if (!proyectosDelArea().length) {
     return `<div class="page-head"><div><h1>Presupuesto</h1></div></div>
     <div class="empty-state card">Aún no hay proyectos en el tablero.</div>`;
   }
@@ -3025,7 +3055,7 @@ function renderPresupuesto() {
 
 // --- Bodega ---
 function renderBodega() {
-  if (!DB.proyectos.length) {
+  if (!proyectosDelArea().length) {
     return `<div class="page-head"><div><h1>Bodega del proyecto</h1></div></div>
     <div class="empty-state card">Aún no hay proyectos en el tablero.</div>`;
   }
@@ -3308,7 +3338,7 @@ function modalAsignarAProyecto(codigo) {
   const b = DB.bodegaGeneral.find(x => x.codigo === codigo);
   if (!b) return;
   if (!puedeGestionarBodega()) { toast(`Tu rol (${DB.role}) no gestiona bodega.`, "danger"); return; }
-  if (!DB.proyectos.length) { toast("No hay proyectos creados todavía.", "danger"); return; }
+  if (!proyectosDelArea().length) { toast("No hay proyectos creados todavía.", "danger"); return; }
   openModal(`
     <div class="modal-head"><h3>Asignar a proyecto</h3><button class="close-x" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
@@ -3760,7 +3790,7 @@ function modalPersonalForm(id) {
 function modalAsignacionForm(id) {
   if (!puedeGestionarAsignaciones()) { toast(`Tu rol (${DB.role}) no puede crear asignaciones.`, "danger"); return; }
   if (!DB.personal.length) { toast("Agrega personas a la dotación primero.", "danger"); return; }
-  if (!DB.proyectos.length) { toast("No hay proyectos creados todavía.", "danger"); return; }
+  if (!proyectosDelArea().length) { toast("No hay proyectos creados todavía.", "danger"); return; }
   const a = id ? DB.asignaciones.find(x => x.id === id) : null;
   const esPersonalizado = a && !DIAS_OPCIONES.includes(a.dias);
   openModal(`
@@ -3887,7 +3917,7 @@ function toggleExpandirPunch(id) {
 }
 
 function renderPunch() {
-  if (!DB.proyectos.length) {
+  if (!proyectosDelArea().length) {
     return `<div class="page-head"><div><h1>Punch List</h1></div></div>
     <div class="empty-state card">Aún no hay proyectos en el tablero.</div>`;
   }
@@ -3908,7 +3938,7 @@ function renderPunch() {
   <div class="page-head">
     <div>
       <h1>Punch List ${p.modoCierre?'<span class="badge b-amarillo" style="margin-left:6px;"><span class="dot"></span>Proyecto en cierre</span>':''}</h1>
-      <div class="page-desc">${p.modoCierre ? 'Este proyecto se creó en modo cierre — el foco es dejar en 100% cada tarea pendiente, no el seguimiento de postas.' : 'Verificación de sitio abierta durante la Posta 18. La Posta 19 (cierre) no puede completarse mientras existan tareas pendientes.'} Las tareas con fecha de inicio y término se reflejan solas en la carta Gantt.</div>
+      <div class="page-desc">${p.modoCierre ? 'Este proyecto se creó en modo cierre — el foco es dejar en 100% cada tarea pendiente, no el seguimiento de postas.' : (p.tipo==='fabricacion' ? 'Detalles finales antes de la entrega. La Posta 10 (Embalaje, despacho y entrega) no puede completarse mientras existan tareas pendientes.' : 'Verificación de sitio abierta durante la Posta 18. La Posta 19 (cierre) no puede completarse mientras existan tareas pendientes.')} Las tareas con fecha de inicio y término se reflejan solas en la carta Gantt.</div>
     </div>
     <div class="flex-gap">${selectorProyectos()}<button class="btn" onclick="filtroGaleriaProyecto='${p.id}'; goTo('galeria')">📷 Galería de este proyecto</button><button class="btn btn-primary" onclick="modalPunchForm('${p.id}')">+ Nueva tarea</button></div>
   </div>
@@ -3919,7 +3949,7 @@ function renderPunch() {
     <div class="hint" style="margin-top:6px;">Promedio entre las ${p.punch.length} tarea(s) — cada tarea pesa igual, sin importar si tiene 3 o 130 sub-ítems.</div>
   </div>
 
-  ${pend > 0 ? `<div class="ai-note" style="margin-bottom:14px; background:var(--danger-bg); border-color:#e7bfae; color:var(--danger)">⚠ ${pend} tarea(s) no están al 100% — impiden el cierre del proyecto (Posta 19) hasta completarse.</div>` : ''}
+  ${pend > 0 ? `<div class="ai-note" style="margin-bottom:14px; background:var(--danger-bg); border-color:#e7bfae; color:var(--danger)">⚠ ${pend} tarea(s) no están al 100% — impiden el cierre del proyecto (Posta ${p.tipo==='fabricacion'?'10':'19'}) hasta completarse.</div>` : ''}
 
   <div class="flex-gap" style="margin-bottom:14px; flex-wrap:wrap;">
     ${['todas','no_iniciada','en_proceso','completada'].map(f => `<button class="btn btn-sm ${filtroEstadoPunch===f?'btn-primary':''}" onclick="filtroEstadoPunch='${f}'; renderAll();">${labelEstado[f]} · ${conteoEstado[f]}</button>`).join('')}
@@ -4121,8 +4151,10 @@ async function enviarBitacoraPunch(proyectoId, punchId, subId) {
 let filtroGaleriaProyecto = "todos";
 let _galeriaFotosFlat = [];
 function renderGaleria() {
+  const idsArea = new Set(proyectosDelArea().map(p=>p.id));
   const todasEntradas = [];
   Object.entries(DB.bitacoraPunch||{}).forEach(([proyectoId, dictClaves]) => {
+    if (!idsArea.has(proyectoId)) return;
     if (filtroGaleriaProyecto!=='todos' && filtroGaleriaProyecto!==proyectoId) return;
     const p = DB.proyectos.find(x=>x.id===proyectoId);
     Object.entries(dictClaves||{}).forEach(([clave, dictEntradas]) => {
@@ -4173,7 +4205,7 @@ function renderGaleria() {
     <div class="flex-gap">
       <select onchange="filtroGaleriaProyecto=this.value; renderAll();" style="width:auto; font-size:12.5px; padding:8px 11px; border-radius:8px; border:1px solid var(--line); background:var(--card);">
         <option value="todos" ${filtroGaleriaProyecto==='todos'?'selected':''}>Todos los proyectos</option>
-        ${DB.proyectos.map(p=>`<option value="${p.id}" ${filtroGaleriaProyecto===p.id?'selected':''}>${p.nombre}</option>`).join('')}
+        ${proyectosDelArea().map(p=>`<option value="${p.id}" ${filtroGaleriaProyecto===p.id?'selected':''}>${p.nombre}</option>`).join('')}
       </select>
     </div>
   </div>
@@ -4365,8 +4397,8 @@ function modalPunchForm(pid, id) {
    ===================================================================== */
 
 // quién levanta el requerimiento → a quién lo puede asignar (definido junto al Jefe de Proyecto)
-const ROLES_REQ_RESTRINGIDO = ["Técnico de Terreno","Automatista"];
-const ASIGNABLES_REQ_RESTRINGIDO = ["Jefe de Automatización","Jefe de Servicios Eléctricos","Jefe de Proyecto"];
+const ROLES_REQ_RESTRINGIDO = ["Técnico de Terreno","Automatista","Operario"];
+const ASIGNABLES_REQ_RESTRINGIDO = ["Jefe de Automatización","Jefe de Servicios Eléctricos","Jefe de Proyecto","Jefe de Producción"];
 // sugerencia automática de a quién asignar según el tipo — el usuario siempre puede cambiarla
 const SUGERENCIA_REQ_ROL = {
   restringido: {"Duda técnica":"Jefe de Servicios Eléctricos", "Falta material":"Jefe de Proyecto", "Trabajo adicional":"Jefe de Proyecto", "Autorización":"Jefe de Proyecto", "Otro":""},
@@ -4396,9 +4428,11 @@ function calcularUrgenciaReq(bloquea, resuelveOtro) {
   return "baja";
 }
 function claveSalaActivaReq() { return contextoChatReq==="general" ? "general" : DB.proyectoActivo; }
-function requerimientosCriticosAbiertos() {
+function requerimientosCriticosAbiertos(soloAreaActiva) {
+  const idsPermitidos = soloAreaActiva ? new Set(['general', ...proyectosDelArea().map(p=>p.id)]) : null;
   const out = [];
   Object.entries(DB.mensajes||{}).forEach(([salaId, dict]) => {
+    if (idsPermitidos && !idsPermitidos.has(salaId)) return;
     Object.entries(dict||{}).forEach(([id,m]) => { if (m.req && m.req.urgencia==='critica' && m.req.estado!=='resuelta') out.push({...m, id, salaId}); });
   });
   return out;
@@ -4426,8 +4460,8 @@ function sugerenciaAsignadoReq(tipo) {
 }
 
 function renderRequerimientos() {
-  if (!DB.proyectos.length) contextoChatReq = "general";
-  const criticasAbiertas = Object.values(DB.mensajes||{}).flatMap(sala=>Object.values(sala||{})).filter(m=>m.req && m.req.urgencia==='critica' && m.req.estado!=='resuelta').length;
+  if (!proyectosDelArea().length) contextoChatReq = "general";
+  const criticasAbiertas = requerimientosCriticosAbiertos(true).length;
 
   return `
   <div class="page-head">
@@ -4436,9 +4470,9 @@ function renderRequerimientos() {
       <div class="page-desc">Conversación libre por proyecto — cualquier mensaje se puede marcar como requerimiento, con seguimiento visible para todos.</div>
     </div>
     <div class="flex-gap" style="flex-wrap:wrap; align-items:center;">
-      ${DB.proyectos.length ? selectorProyectos() : ''}
+      ${proyectosDelArea().length ? selectorProyectos() : ''}
       <div class="ctx-switch">
-        ${DB.proyectos.length ? `<div class="ctx-chip ${contextoChatReq==='proyecto'?'active':''}" onclick="contextoChatReq='proyecto'; renderAll();">Este proyecto</div>` : ''}
+        ${proyectosDelArea().length ? `<div class="ctx-chip ${contextoChatReq==='proyecto'?'active':''}" onclick="contextoChatReq='proyecto'; renderAll();">Este proyecto</div>` : ''}
         <div class="ctx-chip ${contextoChatReq==='general'?'active':''}" onclick="contextoChatReq='general'; renderAll();">💬 General</div>
       </div>
       <div class="alert-chip ${criticasAbiertas===0?'zero':''}" onclick="filtroReq='criticas'; panelReqAbierto=true; renderAll();" title="Requerimientos críticos abiertos, en todos los proyectos">
@@ -4513,8 +4547,10 @@ function renderMensajesReq() {
 }
 
 function renderPanelRequerimientos() {
+  const idsPermitidos = new Set(['general', ...proyectosDelArea().map(p=>p.id)]);
   const todos = [];
   Object.entries(DB.mensajes||{}).forEach(([salaId, dict]) => {
+    if (!idsPermitidos.has(salaId)) return;
     Object.entries(dict||{}).forEach(([id,m]) => { if (m.req) todos.push({...m, id, salaId}); });
   });
   let lista = todos;
@@ -4699,7 +4735,7 @@ function confirmarRequerimiento() {
 }
 
 function renderReaperturas() {
-  if (!DB.proyectos.length) {
+  if (!proyectosDelArea().length) {
     return `<div class="page-head"><div><h1>Solicitudes de Reapertura</h1></div></div>
     <div class="empty-state card">Aún no hay proyectos en el tablero.</div>`;
   }
@@ -4741,7 +4777,7 @@ function renderReaperturas() {
 
 // --- Copiloto IA ---
 function renderCopiloto() {
-  if (!DB.proyectos.length) {
+  if (!proyectosDelArea().length) {
     return `<div class="page-head"><div><h1>Copiloto IA</h1></div></div>
     <div class="empty-state card">Aún no hay proyectos en el tablero.</div>`;
   }
@@ -5954,34 +5990,50 @@ function importarPegadoGantt(pid, texto) {
 // ================================================================
 // 8. SHELL Y NAVEGACIÓN
 // ================================================================
-const NAV = [
-  {group:"Vista General", items:[
-    {id:"dashboard", label:"Dashboard", icon:iconGrid()},
-    {id:"miPanel", label:"Mi Panel", icon:iconTarget(), roles: ROLES_MI_PANEL},
-    {id:"panelEquipo", label:"Panel de Equipo", icon:iconTeamCheck(), roles: ROLES_PANEL_EQUIPO},
-    {id:"bodegaGeneral", label:"Bodega General", icon:iconBox()},
-    {id:"personal", label:"Personal", icon:iconUsers()},
-  ]},
-  {group:"Proyecto", items:[
-    {id:"proyecto360", label:"Proyecto 360°", icon:iconLayers()},
-    {id:"planificacion", label:"Planificación (Gantt)", icon:iconGantt()},
-    {id:"compras", label:"Compras", icon:iconCart()},
-    {id:"presupuesto", label:"Presupuesto", icon:iconCoin()},
-    {id:"bodega", label:"Bodega del proyecto", icon:iconBox()},
-    {id:"punch", label:"Punch List", icon:iconCheck()},
-    {id:"requerimientos", label:"Requerimientos", icon:iconChat()},
-    {id:"galeria", label:"Galería", icon:iconGallery()},
-    {id:"reaperturas", label:"Reaperturas", icon:iconRefresh()},
-  ]},
-  {group:"Fabricación", items:[
-    {id:"fabricacion", label:"Fabricación", icon:iconWrench()},
-  ]},
-  {group:"Inteligencia", items:[
-    {id:"copiloto", label:"Copiloto IA", icon:iconSpark()},
-    {id:"auditoria", label:"Auditoría", icon:iconClock()},
-    {id:"actividad", label:"Actividad de Usuarios", icon:iconActivity(), roles: ROLES_VER_ACTIVIDAD},
-  ]},
-];
+function NAV_ACTUAL() {
+  const compartido = [
+    {group:"Vista General", items:[
+      {id:"miPanel", label:"Mi Panel", icon:iconTarget(), roles: ROLES_MI_PANEL},
+      {id:"panelEquipo", label:"Panel de Equipo", icon:iconTeamCheck(), roles: ROLES_PANEL_EQUIPO},
+      {id:"bodegaGeneral", label:"Bodega General", icon:iconBox()},
+      {id:"personal", label:"Personal", icon:iconUsers()},
+    ]},
+  ];
+  const electrico = [
+    {group:"⚡ Eléctrico", items:[
+      {id:"dashboard", label:"Dashboard", icon:iconGrid()},
+      {id:"proyecto360", label:"Proyecto 360°", icon:iconLayers()},
+      {id:"planificacion", label:"Planificación (Gantt)", icon:iconGantt()},
+      {id:"compras", label:"Compras", icon:iconCart()},
+      {id:"presupuesto", label:"Presupuesto", icon:iconCoin()},
+      {id:"bodega", label:"Bodega del proyecto", icon:iconBox()},
+      {id:"punch", label:"Punch List", icon:iconCheck()},
+      {id:"requerimientos", label:"Requerimientos", icon:iconChat()},
+      {id:"galeria", label:"Galería", icon:iconGallery()},
+      {id:"reaperturas", label:"Reaperturas", icon:iconRefresh()},
+    ]},
+  ];
+  const fabricacion = [
+    {group:"🔧 Fabricación", items:[
+      {id:"dashboard", label:"Dashboard", icon:iconGrid()},
+      {id:"proyecto360", label:"Proyecto 360°", icon:iconLayers()},
+      {id:"compras", label:"Compras", icon:iconCart()},
+      {id:"presupuesto", label:"Presupuesto", icon:iconCoin()},
+      {id:"bodega", label:"Bodega del proyecto", icon:iconBox()},
+      {id:"punch", label:"Punch List", icon:iconCheck()},
+      {id:"requerimientos", label:"Requerimientos", icon:iconChat()},
+      {id:"galeria", label:"Galería", icon:iconGallery()},
+    ]},
+  ];
+  const inteligencia = [
+    {group:"Inteligencia", items:[
+      {id:"copiloto", label:"Copiloto IA", icon:iconSpark()},
+      {id:"auditoria", label:"Auditoría", icon:iconClock()},
+      {id:"actividad", label:"Actividad de Usuarios", icon:iconActivity(), roles: ROLES_VER_ACTIVIDAD},
+    ]},
+  ];
+  return [...compartido, ...(areaActiva==='fabricacion' ? fabricacion : electrico), ...inteligencia];
+}
 
 function iconGrid() {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>`;
@@ -6052,6 +6104,10 @@ function shell() {
         </div>
         <div class="brand-sub" style="margin-top:8px;">PMO · Coordinación de Proyectos</div>
       </div>
+      <div class="area-switch">
+        <button class="area-btn ${areaActiva==='electrico'?'active':''}" onclick="cambiarArea('electrico')">⚡ Eléctrico</button>
+        <button class="area-btn ${areaActiva==='fabricacion'?'active':''}" onclick="cambiarArea('fabricacion')">🔧 Fabricación</button>
+      </div>
       <nav class="nav" id="navList"></nav>
       <div class="sidebar-foot">
         <b>${DB.usuario}</b><br>
@@ -6084,7 +6140,7 @@ function shell() {
     </div>
   `;
   const navList = document.getElementById("navList");
-  navList.innerHTML = NAV.map(g => {
+  navList.innerHTML = NAV_ACTUAL().map(g => {
     const items = g.items.filter(navItemVisible);
     if (!items.length) return '';
     return `
@@ -6092,7 +6148,7 @@ function shell() {
     ${items.map(it => `<button class="nav-item ${it.id===currentPage ? 'active' : ''}" data-nav="${it.id}" onclick="goTo('${it.id}')">${it.icon}<span>${it.label}</span>${it.id==='requerimientos' && requerimientosAbiertosGlobal() ? `<span class="req-nav-badge" style="display:flex;">${requerimientosAbiertosGlobal()}</span>` : ''}</button>`).join('')}
   `;
   }).join('');
-  document.getElementById("content").innerHTML = NAV.flatMap(g => g.items).filter(navItemVisible).map(it => `<div class="page ${it.id===currentPage ? 'active' : ''}" id="page-${it.id}"></div>`).join('');
+  document.getElementById("content").innerHTML = NAV_ACTUAL().flatMap(g => g.items).filter(navItemVisible).map(it => `<div class="page ${it.id===currentPage ? 'active' : ''}" id="page-${it.id}"></div>`).join('');
   actualizarIndicadorSync();
   renderBadgeConectados();
   renderPanelConectados();
@@ -6108,7 +6164,7 @@ function cerrarSidebarMobile() {
 }
 
 function goTo(id) {
-  const item = NAV.flatMap(g => g.items).find(i => i.id === id);
+  const item = NAV_ACTUAL().flatMap(g => g.items).find(i => i.id === id);
   if (item && !navItemVisible(item)) return; // el rol actual no tiene acceso a esta página
   currentPage = id;
   cerrarSidebarMobile();
@@ -6128,10 +6184,10 @@ function goTo(id) {
    página), que lo resetea explícitamente después de llamar a esto. */
 function renderAll() {
   const scrollGuardado = document.getElementById("content")?.scrollTop || 0;
-  const paginaActual = NAV.flatMap(g => g.items).find(i => i.id === currentPage);
+  const paginaActual = NAV_ACTUAL().flatMap(g => g.items).find(i => i.id === currentPage);
   if (paginaActual && !navItemVisible(paginaActual)) currentPage = "dashboard"; // el rol cambió o no correspondía
   shell();
-  document.getElementById("topbarTitle").textContent = NAV.flatMap(g => g.items).find(i => i.id === currentPage)?.label || "";
+  document.getElementById("topbarTitle").textContent = NAV_ACTUAL().flatMap(g => g.items).find(i => i.id === currentPage)?.label || "";
   document.getElementById("topbarCrumb").textContent = "ALUTIPO-PMO / "+currentPage;
   const renderers = {
     dashboard: renderDashboard, miPanel: renderMiPanel, panelEquipo: renderPanelEquipo, bodegaGeneral: renderBodegaGeneral, personal: renderPersonal, proyecto360: renderProyecto360, planificacion: renderPlanificacion, compras: renderCompras,

@@ -2944,7 +2944,7 @@ function renderCompras() {
   </div>
 
   <div class="stack">
-  ${p.cotizaciones.length ? p.cotizaciones.map(c => {
+  ${p.cotizaciones.length ? [...p.cotizaciones].reverse().sort((a,b) => (b.fecha||'').localeCompare(a.fecha||'')).map(c => {
     const totalNeto = totalNetoCotizacion(c);
     return `<div class="card">
       <div class="flex-between" style="flex-wrap:wrap; gap:8px;">

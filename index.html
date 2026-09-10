@@ -1938,7 +1938,7 @@ function guardarCotizacion(pid, cotId, datos) {
     registrarHistorial({proyecto:p.codigo, accion:"Modificar", detalle:`Cotización editada: ${cotId} (${datos.proveedor})`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
     toast(`Cotización ${cotId} actualizada.`, "ok");
   } else {
-    const id = "COT-"+String(500 + p.cotizaciones.length + 1 + Math.floor(Math.random()*90));
+    const id = generarIdUnicoCotizacion(p);
     p.cotizaciones.push({
       id, numeroCotizacion: datos.numeroCotizacion||"", proveedor: datos.proveedor,
       fecha: hoyISO(), referencia: datos.referencia||"", importancia: datos.importancia||"Media",
@@ -1951,6 +1951,49 @@ function guardarCotizacion(pid, cotId, datos) {
   }
   guardarEstado();
   return true;
+}
+
+/* El ID anterior se calculaba como 500 + cantidad de cotizaciones + un
+   número al azar (0-89) — si en algún momento se elimina una
+   cotización, ese cálculo se puede repetir y coincidir con el ID de
+   otra que ya existía. Como "Editar" busca por ID, terminaba abriendo
+   la cotización equivocada. Este esquema usa la hora exacta + un sufijo
+   al azar, y además verifica contra las que ya existen en el proyecto
+   antes de aceptarlo — no puede repetirse. */
+function generarIdUnicoCotizacion(p) {
+  let id;
+  do {
+    id = "COT-" + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2,5).toUpperCase();
+  } while (p.cotizaciones.some(c => c.id === id));
+  return id;
+}
+/* Reparación única para datos ya guardados con IDs duplicados (de la
+   fórmula vieja) — a la segunda y siguientes cotizaciones que compartan
+   un ID dentro del mismo proyecto, les asigna uno nuevo y único. La
+   primera aparición se deja intacta. */
+function repararIdsDuplicadosCotizaciones() {
+  let reparadas = 0;
+  DB.proyectos.forEach(p => {
+    const vistos = new Set();
+    p.cotizaciones.forEach(c => {
+      if (vistos.has(c.id)) {
+        const idViejo = c.id;
+        c.id = generarIdUnicoCotizacion(p);
+        vistos.add(c.id);
+        reparadas++;
+        registrarHistorial({proyecto:p.codigo, accion:"Modificar", detalle:`ID de cotización duplicado corregido: ${idViejo} → ${c.id} (${c.proveedor})`, usuario:DB.usuario+" · "+DB.role, criticidad:"Alta"});
+      } else {
+        vistos.add(c.id);
+      }
+    });
+  });
+  if (reparadas > 0) {
+    guardarEstado(`Reparación: ${reparadas} ID(s) de cotización duplicado(s) corregido(s)`);
+    toast(`Se corrigieron ${reparadas} cotización(es) con ID duplicado.`, "ok");
+  } else {
+    toast("No se encontraron IDs de cotización duplicados.", "ok");
+  }
+  renderAll();
 }
 
 function eliminarCotizacion(pid, cotId) {
@@ -5645,6 +5688,10 @@ function modalAdminDatos() {
         <div class="flex-between">
           <div><b class="small">Restaurar datos de ejemplo</b><div class="hint">Vuelve a cargar los 5 proyectos de demostración.</div></div>
           <button class="btn btn-sm" onclick="restaurarDatosDeEjemplo(); closeModal(); renderAll();">Restaurar</button>
+        </div>
+        <div class="flex-between">
+          <div><b class="small">Reparar IDs de cotización duplicados</b><div class="hint">Corrige el bug donde "Editar" abría la cotización equivocada por un ID repetido. Seguro de ejecutar cuando quieras — si no hay duplicados, no hace nada.</div></div>
+          <button class="btn btn-sm" onclick="repararIdsDuplicadosCotizaciones(); closeModal();">Reparar</button>
         </div>
       </div>
     </div>

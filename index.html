@@ -513,10 +513,18 @@ const FASES = {
 };
 
 const ROLES = [
-  "Jefe de Proyecto","Diseñador Eléctrico","Automatista","Jefe de Automatización","Jefe de Taller",
+  "Administrador","Jefe de Proyecto","Diseñador Eléctrico","Automatista","Jefe de Automatización","Jefe de Taller",
   "Líder de Terreno","Técnico de Terreno","Asistente Administrativo","Jefe de Servicios Eléctricos","Gerencia",
   "Jefe de Producción","Operario"
 ];
+/* Administrador = acceso total, sin excepción — ve todas las páginas de
+   ambas áreas (sin que el menú le oculte nada por rol) y puede operar
+   cualquier acción que en otros roles está restringida (postas, compras,
+   cierre de sub-ítems al 100%, dotación, planificación, etc.). Se usa
+   como bypass en cada función de permisos, en vez de andar agregando
+   "Administrador" a cada lista de roles una por una — así no queda
+   ninguna función nueva de permisos que se nos olvide incluirlo. */
+function esAdministrador() { return DB.role === "Administrador"; }
 
 /* "Mi Panel" (vista propia, de campo) es solo para quienes reciben
    tareas de Punch List día a día. "Panel de Equipo" (la misma vista,
@@ -528,7 +536,7 @@ const ROLES = [
    el Dashboard Ejecutivo y Proyecto 360°. */
 const ROLES_MI_PANEL = ["Técnico de Terreno","Automatista","Diseñador Eléctrico","Jefe de Taller","Líder de Terreno","Operario","Jefe de Producción"];
 const ROLES_PANEL_EQUIPO = ["Jefe de Proyecto","Jefe de Taller","Líder de Terreno","Jefe de Producción"];
-function navItemVisible(it) { return !it.roles || it.roles.includes(DB.role); }
+function navItemVisible(it) { return esAdministrador() || !it.roles || it.roles.includes(DB.role); }
 
 const ESCALA_PERMISOS = {
   "Jefe de Proyecto": ["Jefe de Proyecto"],
@@ -745,7 +753,7 @@ function rolesResponsables(t) {
   return t.responsable.split("/").map(r => r.trim());
 }
 function puedeOperarPosta(t) {
-  if(DB.role==="Gerencia" || DB.role==="Jefe de Servicios Eléctricos") return true;
+  if(esAdministrador() || DB.role==="Gerencia" || DB.role==="Jefe de Servicios Eléctricos") return true;
   return rolesResponsables(t).some(rol => (ESCALA_PERMISOS[rol] || [rol]).includes(DB.role));
 }
 
@@ -1107,7 +1115,7 @@ function cargarUsuariosAutorizados() {
 }
 
 function esAdminUsuarios() {
-  return DB.role === "Jefe de Proyecto" || DB.role === "Gerencia";
+  return esAdministrador() || DB.role === "Jefe de Proyecto" || DB.role === "Gerencia";
 }
 
 async function agregarUsuarioAutorizado(email, nombre, rol) {
@@ -1526,7 +1534,7 @@ const ROLES_COMPRAS = [
   "Jefe de Producción",
 ];
 function puedeGestionarCompras() {
-  return ROLES_COMPRAS.includes(DB.role);
+  return esAdministrador() || ROLES_COMPRAS.includes(DB.role);
 }
 
 function cambiarEstadoCotizacion(pid, cotId, nuevoEstado) {
@@ -1738,7 +1746,7 @@ function asignarBodegaGeneralAProyecto(codigoGeneral, proyectoId, cantidad) {
    ===================================================================== */
 function puedeGestionarPersonalRoster() { return esAdminUsuarios(); }
 function puedeGestionarAsignaciones() {
-  return ["Jefe de Proyecto","Gerencia","Líder de Terreno","Jefe de Taller"].includes(DB.role);
+  return esAdministrador() || ["Jefe de Proyecto","Gerencia","Líder de Terreno","Jefe de Taller"].includes(DB.role);
 }
 
 function agregarPersonal(datos) {
@@ -2111,7 +2119,7 @@ function avancePunchItem(it) {
    puede reportar avance libremente hasta 99%, pero el cierre final
    queda para quien verifica en terreno o la jefatura. */
 const ROLES_CIERRE_SUBITEM = ["Líder de Terreno", "Jefe de Proyecto", "Gerencia", "Jefe de Producción"];
-function puedeCerrarSubitem() { return ROLES_CIERRE_SUBITEM.includes(DB.role); }
+function puedeCerrarSubitem() { return esAdministrador() || ROLES_CIERRE_SUBITEM.includes(DB.role); }
 /* Avance global del Punch List del proyecto: promedio simple entre
    tareas (cada tarea pesa igual, sin importar si tiene 2 o 130
    sub-ítems) — así "sumar cada tarea" da el 100% del conjunto. */
@@ -2662,7 +2670,7 @@ function renderDashboard() {
    nada que duplicar. */
 function renderFabricacion() {
   const proyectos = DB.proyectos.filter(p => p.tipo === "fabricacion");
-  const puedeCrear = DB.role==="Jefe de Proyecto" || DB.role==="Gerencia";
+  const puedeCrear = esAdministrador() || DB.role==="Jefe de Proyecto" || DB.role==="Gerencia";
   return `
   <div class="page-head">
     <div>
@@ -2897,7 +2905,7 @@ function ganttSVG(tareas, cpm) {
   </svg>`;
 }
 
-function puedeEditarPlanificacion() { return DB.role==="Jefe de Proyecto" || DB.role==="Gerencia"; }
+function puedeEditarPlanificacion() { return esAdministrador() || DB.role==="Jefe de Proyecto" || DB.role==="Gerencia"; }
 
 function renderPlanificacion() {
   if (!proyectosDelArea().length) {

@@ -551,6 +551,7 @@ const ESCALA_PERMISOS = {
    lo único que cambia es el filtro de qué proyectos entran. */
 let areaActiva = "electrico"; // "electrico" | "fabricacion"
 function proyectosDelArea() { return DB.proyectos.filter(p => (p.tipo||"electrico") === areaActiva); }
+function personalDelArea(tipoProyecto) { return DB.personal.filter(per => per.area===tipoProyecto || per.area==='ambas' || per.area===undefined); }
 function cambiarArea(nueva) {
   areaActiva = nueva;
   const disponibles = proyectosDelArea();
@@ -939,7 +940,10 @@ function aplicarEstadoRemoto(data) {
   DB.historial = data.historial || [];
   DB.proveedores = data.proveedores && data.proveedores.length ? data.proveedores : (DB.proveedores.length ? DB.proveedores : cloneProveedoresSeed());
   DB.personal = data.personal && data.personal.length ? data.personal : (DB.personal.length ? DB.personal : clonePersonalSeed());
-  DB.personal.forEach(per => { if (per.telefono===undefined) per.telefono = ""; });
+  DB.personal.forEach(per => {
+    if (per.telefono===undefined) per.telefono = "";
+    if (per.area===undefined) per.area = ["Jefe de Producción","Operario"].includes(per.cargo) ? "fabricacion" : "electrico";
+  });
   DB.asignaciones = data.asignaciones || [];
   DB.bodegaGeneral = data.bodegaGeneral || [];
   DB.updatedAt = data.updatedAt || null;
@@ -1026,15 +1030,22 @@ async function cargarEstadoInicial() {
     stateRef.on('value', (snapshot) => {
       const data = snapshot.val();
       if (data && data.updatedAt && data.updatedAt !== DB.updatedAt) {
+        // Antes esto se descartaba entero si había un modal abierto — el
+        // dato se perdía para siempre (nunca se reintentaba), y por eso
+        // a veces una OC quedaba "guardada" pero el ciclo no avanzaba
+        // hasta recargar la página. Ahora SIEMPRE se aplica a DB.*; lo
+        // único que se aplaza con el modal abierto es el refresco visual
+        // (para no molestar a alguien a mitad de un formulario) — al
+        // cerrar el modal, el siguiente renderAll() ya toma el dato al día.
+        aplicarEstadoRemoto(data);
+        DB.proyectos.forEach(p => {
+          p.avanceCache = avanceGlobal(p);
+          p.semaforoCache = semaforo(p);
+        });
+        if (!DB.proyectos.find(p => p.id === DB.proyectoActivo)) {
+          DB.proyectoActivo = DB.proyectos[0]?.id;
+        }
         if (!modalAbierto) {
-          aplicarEstadoRemoto(data);
-          DB.proyectos.forEach(p => {
-            p.avanceCache = avanceGlobal(p);
-            p.semaforoCache = semaforo(p);
-          });
-          if (!DB.proyectos.find(p => p.id === DB.proyectoActivo)) {
-            DB.proyectoActivo = DB.proyectos[0]?.id;
-          }
           renderAll();
           toast("Se actualizó la información — un colaborador guardó cambios.", "ok");
         }
@@ -1734,7 +1745,7 @@ function agregarPersonal(datos) {
   if (!puedeGestionarPersonalRoster()) { toast(`Tu rol (${DB.role}) no puede editar la dotación.`, "danger"); return false; }
   if (!datos.nombre || !datos.nombre.trim()) { toast("Indica el nombre.", "danger"); return false; }
   const id = "PERS-"+Math.random().toString(36).slice(2,8).toUpperCase();
-  DB.personal.push({ id, nombre:datos.nombre.trim(), cargo:datos.cargo||"", telefono:(datos.telefono||"").trim(), tipo:datos.tipo||"Interno", notas:datos.notas||"" });
+  DB.personal.push({ id, nombre:datos.nombre.trim(), cargo:datos.cargo||"", telefono:(datos.telefono||"").trim(), tipo:datos.tipo||"Interno", area:datos.area||"electrico", notas:datos.notas||"" });
   registrarHistorial({proyecto:"—", accion:"Crear", detalle:`Persona agregada a la dotación: ${datos.nombre} (${datos.cargo})`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
   toast("Persona agregada a la dotación.", "ok");
   guardarEstado();
@@ -1746,6 +1757,7 @@ function editarPersonal(id, datos) {
   if (!per) return false;
   per.nombre = datos.nombre||per.nombre; per.cargo = datos.cargo||per.cargo;
   per.telefono = datos.telefono!==undefined ? datos.telefono.trim() : per.telefono;
+  per.area = datos.area||per.area;
   per.tipo = datos.tipo||per.tipo; per.notas = datos.notas!==undefined ? datos.notas : per.notas;
   registrarHistorial({proyecto:"—", accion:"Modificar", detalle:`Dotación editada: ${per.nombre}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
   toast("Datos actualizados.", "ok");
@@ -2260,7 +2272,7 @@ function modalAsignarSubitem(pid, punchId, subId) {
     <div class="modal-body">
       <div class="hint" style="margin-bottom:10px;">Puedes elegir más de una persona para este sub-ítem.</div>
       <div class="stack" style="gap:2px; max-height:280px; overflow-y:auto;">
-        ${DB.personal.map(per => `
+        ${personalDelArea(p.tipo||"electrico").map(per => `
           <label style="display:flex; align-items:center; gap:8px; padding:7px 4px; cursor:pointer; border-bottom:1px solid var(--line-soft);">
             <input type="checkbox" value="${per.id}" ${seleccionados.has(per.id)?'checked':''} style="width:auto;">
             <span class="small">${per.nombre} <span class="muted">— ${per.cargo}</span></span>
@@ -2925,12 +2937,16 @@ function renderPlanificacion() {
 }
 
 // --- Compras ---
+let filtroProveedorCompras = "";
 function renderCompras() {
   if (!proyectosDelArea().length) {
     return `<div class="page-head"><div><h1>Compras</h1></div></div>
     <div class="empty-state card">Aún no hay proyectos en el tablero.</div>`;
   }
   const p = proy();
+  const proveedoresDelProyecto = [...new Set(p.cotizaciones.map(c=>c.proveedor).filter(Boolean))].sort();
+  const cotizacionesFiltradas = [...p.cotizaciones].reverse().sort((a,b) => (b.fecha||'').localeCompare(a.fecha||''))
+    .filter(c => !filtroProveedorCompras || c.proveedor===filtroProveedorCompras);
   return `
   <div class="page-head">
     <div>
@@ -2938,13 +2954,17 @@ function renderCompras() {
       <div class="page-desc">Una cotización puede traer varios ítems. Monto neto = sin IVA. Cada etapa tiene su propia acción: solicitar OC, registrar N° de OC, notificar despacho, registrar recepción.</div>
     </div>
     <div class="flex-gap">${selectorProyectos()}
+      <select onchange="filtroProveedorCompras=this.value; renderAll();" style="width:auto; font-size:12.5px; padding:8px 11px; border-radius:8px; border:1px solid var(--line); background:var(--card);">
+        <option value="">Todos los proveedores</option>
+        ${proveedoresDelProyecto.map(prov => `<option value="${prov}" ${filtroProveedorCompras===prov?'selected':''}>${prov}</option>`).join('')}
+      </select>
       <button class="btn" onclick="modalProveedores()">Proveedores</button>
       <button class="btn btn-primary" onclick="modalCotizacion('${p.id}')">+ Nueva cotización</button>
     </div>
   </div>
 
   <div class="stack">
-  ${p.cotizaciones.length ? [...p.cotizaciones].reverse().sort((a,b) => (b.fecha||'').localeCompare(a.fecha||'')).map(c => {
+  ${cotizacionesFiltradas.length ? cotizacionesFiltradas.map(c => {
     const totalNeto = totalNetoCotizacion(c);
     return `<div class="card">
       <div class="flex-between" style="flex-wrap:wrap; gap:8px;">
@@ -2975,7 +2995,7 @@ function renderCompras() {
         ${c.linkOC ? `<a href="${c.linkOC}" target="_blank" rel="noopener" class="btn btn-sm btn-ghost">🔗 OC</a>` : ''}
       </div>
     </div>`;
-  }).join('') : `<div class="empty-state card">Este proyecto aún no tiene cotizaciones registradas.</div>`}
+  }).join('') : (p.cotizaciones.length ? `<div class="empty-state card">Ningún proveedor "${filtroProveedorCompras}" tiene cotizaciones en este proyecto.</div>` : `<div class="empty-state card">Este proyecto aún no tiene cotizaciones registradas.</div>`)}
   </div>
   <div class="hint" style="margin-top:10px;">Regla de cierre: la Posta 13 no puede marcarse "Completado" hasta que todas las cotizaciones long-lead estén en "Recibido".</div>
   `;
@@ -3644,11 +3664,12 @@ function renderPersonal() {
   <div class="section-label">Dotación</div>
   <div class="table-wrap" style="margin-bottom:8px;">
     <table>
-      <tr><th>Nombre</th><th>Cargo</th><th>Teléfono</th><th>Tipo</th><th>Notas</th>${puedeRoster?'<th></th>':''}</tr>
+      <tr><th>Nombre</th><th>Cargo</th><th>Área</th><th>Teléfono</th><th>Tipo</th><th>Notas</th>${puedeRoster?'<th></th>':''}</tr>
       ${DB.personal.map(per => `
         <tr>
           <td><b class="small">${per.nombre}</b></td>
           <td class="small">${per.cargo}</td>
+          <td>${per.area==='fabricacion'?'<span class="badge b-blue"><span class="dot"></span>🔧 Fabricación</span>':per.area==='ambas'?'<span class="badge b-gris"><span class="dot"></span>Ambas</span>':'<span class="badge b-amarillo"><span class="dot"></span>⚡ Eléctrico</span>'}</td>
           <td class="mono small">${per.telefono||'<span class="muted">sin registrar</span>'}</td>
           <td>${per.tipo==="Externo" ? '<span class="badge b-amarillo"><span class="dot"></span>Externo</span>' : '<span class="badge b-gris"><span class="dot"></span>Interno</span>'}</td>
           <td class="small muted">${per.notas || (per.tipo==="Externo" ? '(sin asignar — edita para anotar quién es)' : '—')}</td>
@@ -3765,6 +3786,13 @@ function modalPersonalForm(id) {
       <label class="field-label">Cargo</label>
       <input type="text" id="perCargo" value="${per?per.cargo:''}" list="cargosList" placeholder="Ej: Técnico de Terreno">
       <datalist id="cargosList">${ROLES.map(r=>`<option value="${r}">`).join('')}</datalist>
+      <label class="field-label">Área</label>
+      <select id="perArea">
+        <option value="electrico" ${(!per||per.area==='electrico')?'selected':''}>⚡ Eléctrico</option>
+        <option value="fabricacion" ${per&&per.area==='fabricacion'?'selected':''}>🔧 Fabricación</option>
+        <option value="ambas" ${per&&per.area==='ambas'?'selected':''}>Ambas áreas</option>
+      </select>
+      <div class="hint">Define en qué área puede ser asignado a tareas del Punch List y postas.</div>
       <label class="field-label">Teléfono (WhatsApp)</label>
       <input type="text" id="perTelefono" value="${per?per.telefono||'':''}" placeholder="Ej: +56912345678">
       <div class="hint">Con el código de país incluido (+56...) — se usa para el botón de notificar por WhatsApp.</div>
@@ -3780,7 +3808,7 @@ function modalPersonalForm(id) {
       ${per ? `<button class="btn btn-danger" onclick="if(confirm('¿Quitar a ${per.nombre.replace(/'/g,"")} de la dotación?')){ eliminarPersonal('${per.id}'); closeModal(); renderAll(); }">Eliminar</button>` : ''}
       <button class="btn" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-primary" onclick="
-        const d = { nombre: document.getElementById('perNombre').value, cargo: document.getElementById('perCargo').value, telefono: document.getElementById('perTelefono').value, tipo: document.getElementById('perTipo').value, notas: document.getElementById('perNotas').value };
+        const d = { nombre: document.getElementById('perNombre').value, cargo: document.getElementById('perCargo').value, telefono: document.getElementById('perTelefono').value, tipo: document.getElementById('perTipo').value, area: document.getElementById('perArea').value, notas: document.getElementById('perNotas').value };
         const ok = ${per? `editarPersonal('${per.id}', d)` : `agregarPersonal(d)`};
         if(ok){ closeModal(); renderAll(); }">${per?'Guardar':'Agregar'}</button>
     </div>
@@ -4362,7 +4390,7 @@ function modalPunchForm(pid, id) {
       <div class="hint">Con ambas fechas cargadas, esta tarea aparece sola en la carta Gantt (Planificación) y se mantiene sincronizada.</div>
       <label class="field-label">Responsables de la tarea (opcional, puedes elegir varios)</label>
       <select id="punchResponsable" multiple size="4" style="height:auto;">
-        ${DB.personal.map(per => `<option value="${per.id}" ${it&&(it.asignadoPersonaIds||[]).includes(per.id)?'selected':''}>${per.nombre} — ${per.cargo}</option>`).join('')}
+        ${personalDelArea(p.tipo||"electrico").map(per => `<option value="${per.id}" ${it&&(it.asignadoPersonaIds||[]).includes(per.id)?'selected':''}>${per.nombre} — ${per.cargo}</option>`).join('')}
       </select>
       <div class="hint">Mantén Ctrl (Cmd en Mac) presionado para elegir varias personas. Útil sobre todo si la tarea no tiene sub-ítems. Si los tiene, puedes además asignar cada sub-ítem por separado en el detalle.</div>
     </div>

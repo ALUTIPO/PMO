@@ -2004,6 +2004,72 @@ function repararIdsDuplicadosCotizaciones() {
   renderAll();
 }
 
+/* Envía sobrante de material desde la bodega de UN proyecto hacia la
+   Bodega General — para cuando termina un proyecto y queda material
+   que sirve para otros, o simplemente para ir armando la base de
+   productos que después se exporta a Bsale. A diferencia de la bodega
+   de proyecto (que no maneja precio), acá se exige el precio unitario
+   porque es justo el dato que falta para poder subirlo a Bsale. Si ya
+   existe un producto con ese nombre en Bodega General, sólo suma
+   cantidad y promedia el precio (mismo criterio que un ingreso normal);
+   si no existe, lo crea. */
+function enviarABodegaGeneral(pid, codigo, cantidad, nombreProducto, precioUnitario) {
+  if (!puedeGestionarBodega()) { toast(`Tu rol (${DB.role}) no gestiona bodega.`, "danger"); return false; }
+  const p = proy(pid);
+  const b = p?.bodega.find(x => x.codigo === codigo);
+  if (!b) return false;
+  const cant = Number(cantidad);
+  if (isNaN(cant) || cant <= 0) { toast("Indica una cantidad válida.", "danger"); return false; }
+  if (cant > b.stock) { toast(`Solo hay ${b.stock} ${b.unidad} disponibles en este proyecto.`, "danger"); return false; }
+  const nombre = (nombreProducto||"").trim() || b.material;
+  const precio = Number(precioUnitario);
+  if (!precio || precio <= 0) { toast("Indica el precio unitario — es lo que hace falta para poder subirlo a Bsale.", "danger"); return false; }
+
+  b.stock -= cant;
+
+  let destino = buscarBodegaGeneralPorNombre(nombre);
+  if (destino) {
+    const antes = destino.stock;
+    const precioAntes = destino.precioUnitario || 0;
+    destino.precioUnitario = Math.round(((antes*precioAntes) + (cant*precio)) / (antes+cant));
+    destino.stock = antes + cant;
+  } else {
+    destino = { codigo:"MAT-G-"+String(1000+DB.bodegaGeneral.length+Math.floor(Math.random()*900)), material:nombre, stock:cant, unidad:b.unidad, minimo:0, precioUnitario:precio };
+    DB.bodegaGeneral.push(destino);
+  }
+
+  registrarHistorial({proyecto:p.codigo+" → General", accion:"Modificar", detalle:`${cant} ${b.unidad} de "${nombre}" enviados de ${p.codigo} a Bodega General a $${precio}/u`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"});
+  toast(`${cant} ${b.unidad} de ${nombre} enviados a Bodega General.`, "ok");
+  guardarEstado();
+  return true;
+}
+function modalEnviarABodegaGeneral(pid, codigo) {
+  const p = proy(pid);
+  const b = p?.bodega.find(x => x.codigo === codigo);
+  if (!b) return;
+  if (!puedeGestionarBodega()) { toast(`Tu rol (${DB.role}) no gestiona bodega.`, "danger"); return; }
+  openModal(`
+    <div class="modal-head"><h3>Enviar a Bodega General</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <p class="small muted">Desde <b>${p.codigo}</b> — stock disponible: <b>${b.stock} ${b.unidad}</b></p>
+      <label class="field-label">Cantidad a enviar</label>
+      <input type="text" id="ebgCantidad" value="${b.stock}">
+      <label class="field-label">Nombre del producto (para Bsale)</label>
+      <input type="text" id="ebgNombre" value="${b.material}">
+      <div class="hint">Confírmalo o corrígelo — este es el nombre con el que va a quedar en Bodega General.</div>
+      <label class="field-label">Precio unitario</label>
+      <input type="text" id="ebgPrecio" placeholder="Ej: 12500">
+      <div class="hint">Obligatorio: es el dato que falta para poder exportar este producto a Bsale. Si ya existe en Bodega General, se promedia con el precio que tenía.</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="
+        const ok = enviarABodegaGeneral('${pid}','${codigo}', document.getElementById('ebgCantidad').value, document.getElementById('ebgNombre').value, document.getElementById('ebgPrecio').value);
+        if(ok){ closeModal(); renderAll(); }">Enviar</button>
+    </div>
+  `);
+}
+
 function eliminarCotizacion(pid, cotId) {
   const p = proy(pid);
   if (!puedeGestionarCompras()) {
@@ -3147,7 +3213,10 @@ function renderBodega() {
       <tr><th>Código</th><th>Material</th><th>Stock</th><th>Mínimo</th><th>Estado</th>${puede?'<th></th>':''}</tr>
       ${p.bodega.length ? p.bodega.map(b => `
         <tr><td class="mono">${b.codigo}</td><td>${b.material}</td><td class="mono">${b.stock} ${b.unidad}</td><td class="mono muted small">${b.minimo} ${b.unidad}</td><td>${badgeStock(calcularEstadoStock(b))}</td>
-        ${puede? `<td><button class="btn btn-sm" onclick="modalAjustarStock('${p.id}','${b.codigo}')">Actualizar stock</button></td>`:''}</tr>
+        ${puede? `<td class="flex-gap">
+          <button class="btn btn-sm" onclick="modalAjustarStock('${p.id}','${b.codigo}')">Actualizar stock</button>
+          <button class="btn btn-sm" onclick="modalEnviarABodegaGeneral('${p.id}','${b.codigo}')" ${b.stock<=0?'disabled':''} title="Enviar sobrante a Bodega General, con precio unitario, para la base de Bsale">→ Bodega General</button>
+        </td>`:''}</tr>
       `).join('') : `<tr><td colspan="${puede?6:5}"><div class="empty-state">Sin registros de bodega para este proyecto. ${puede?'Se crean automáticamente al registrar una recepción de compra, o puedes agregar uno manualmente.':''}</div></td></tr>`}
     </table>
   </div>
@@ -4229,6 +4298,29 @@ async function enviarBitacoraPunch(proyectoId, punchId, subId) {
 
 let filtroGaleriaProyecto = "todos";
 let _galeriaFotosFlat = [];
+/* =====================================================================
+   CUADRO DE CARGA — incrusta la herramienta "Herramientas Eléctricas"
+   (armada aparte, en otro hilo) dentro de un iframe. Vive como archivo
+   independiente en el mismo repositorio (mismo origen), así que el
+   iframe la carga directo, sin depender de otro sitio ni arriesgar que
+   su código choque con el de Alutipo PMO — un iframe está aislado.
+   Si en el futuro se quiere una integración más profunda (compartir
+   datos con el resto de la app en vez de solo visualizarla), habría
+   que fusionar su código como una página más, en vez de un iframe.
+   ===================================================================== */
+function renderCuadroCarga() {
+  return `
+  <div class="page-head">
+    <div>
+      <h1>Herramienta Eléctrica</h1>
+      <div class="page-desc">Cuadro de Cargas y Requerimientos Eléctricos — vista incrustada, no comparte datos con el resto de Alutipo PMO todavía. Pensada para poder sumar otras herramientas eléctricas acá mismo en el futuro.</div>
+    </div>
+    <a class="btn btn-sm" href="herramienta-electrica.html" target="_blank" rel="noopener">Abrir en pestaña nueva ↗</a>
+  </div>
+  <iframe src="herramienta-electrica.html" style="width:100%; height:calc(100vh - 190px); border:1px solid var(--line); border-radius:var(--radius); background:#fff;" title="Herramienta Eléctrica"></iframe>
+  `;
+}
+
 function renderGaleria() {
   const idsArea = new Set(proyectosDelArea().map(p=>p.id));
   const todasEntradas = [];
@@ -4497,7 +4589,7 @@ const ESTADO_REQ_INFO = {
 const ESTADO_REQ_SIGUIENTE = {abierta:"en_proceso", en_proceso:"resuelta", resuelta:null};
 
 let contextoChatReq = "proyecto"; // "proyecto" | "general"
-let panelReqAbierto = true;
+let panelReqAbierto = false;
 let filtroReq = "todas";
 
 function calcularUrgenciaReq(bloquea, resuelveOtro) {
@@ -6093,6 +6185,7 @@ function NAV_ACTUAL() {
       {id:"punch", label:"Punch List", icon:iconCheck()},
       {id:"requerimientos", label:"Requerimientos", icon:iconChat()},
       {id:"galeria", label:"Galería", icon:iconGallery()},
+      {id:"cuadroCarga", label:"Herramienta Eléctrica", icon:iconLayers()},
       {id:"reaperturas", label:"Reaperturas", icon:iconRefresh()},
     ]},
   ];
@@ -6274,7 +6367,7 @@ function renderAll() {
   document.getElementById("topbarCrumb").textContent = "ALUTIPO-PMO / "+currentPage;
   const renderers = {
     dashboard: renderDashboard, miPanel: renderMiPanel, panelEquipo: renderPanelEquipo, bodegaGeneral: renderBodegaGeneral, personal: renderPersonal, proyecto360: renderProyecto360, planificacion: renderPlanificacion, compras: renderCompras,
-    presupuesto: renderPresupuesto, bodega: renderBodega, punch: renderPunch, requerimientos: renderRequerimientos, galeria: renderGaleria,
+    presupuesto: renderPresupuesto, bodega: renderBodega, punch: renderPunch, requerimientos: renderRequerimientos, galeria: renderGaleria, cuadroCarga: renderCuadroCarga,
     fabricacion: renderFabricacion,
     reaperturas: renderReaperturas, copiloto: renderCopiloto, auditoria: renderAuditoria, actividad: renderActividad,
   };

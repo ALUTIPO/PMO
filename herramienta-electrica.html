@@ -368,6 +368,15 @@
 <div id="cargaInfo" style="padding:6px 14px; font-size:11.5px; font-family:var(--mono); display:flex; align-items:center; gap:10px; flex-wrap:wrap;"></div>
 <div id="historialCargas" style="padding:0 14px 8px; font-size:11px; color:var(--text-dim);"></div>
 
+<div style="margin:0 14px 10px; border:1px solid #d7dce2; border-radius:10px; background:#fff; padding:12px 14px;">
+  <div style="font-size:11px; color:var(--text-dim); text-transform:uppercase; letter-spacing:.03em; margin-bottom:8px;">Preguntas rápidas sobre este Cuadro de Carga</div>
+  <div style="display:flex; gap:8px;">
+    <input type="text" id="qaInput" placeholder="Ej: ¿cuántos motores con VFD hay? · ¿qué potencia tiene M156? · grupos DOL" style="flex:1; padding:8px 10px; border:1px solid #d7dce2; border-radius:7px; font-size:13px;">
+    <button class="btn primary" id="qaBtn" style="font-weight:600;">Preguntar</button>
+  </div>
+  <div id="qaLog" style="margin-top:10px; max-height:220px; overflow-y:auto;"></div>
+</div>
+
 <div class="panel-meta" id="panelMeta"></div>
 
 <main>
@@ -13298,6 +13307,132 @@
       tabsEl.appendChild(t);
     });
   }
+
+  /* =====================================================================
+     PREGUNTAS RÁPIDAS SOBRE EL CUADRO DE CARGA — no es IA: son conteos y
+     búsquedas exactas sobre los datos ya cargados en DATA. Vive en el
+     mismo bloque que DATA/init() a propósito, para no repetir el problema
+     de alcance de variables entre <script> distintos que ya nos pasó con
+     Firebase. Reconoce: conteos por método de arranque, por tipo de
+     carga, por tablero, cargas sin dato, potencia total, y la ficha
+     completa de un tag/item específico si aparece mencionado.
+     ===================================================================== */
+  function normalizarTextoQA(s){
+    return (s||'').toString().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+  }
+  function todosLosNodosQA(){ return Object.values(DATA.nodes||{}); }
+  function valoresDistintosQA(campo){
+    const set = new Set();
+    todosLosNodosQA().forEach(n => { if(n[campo]) set.add(String(n[campo]).trim()); });
+    return Array.from(set);
+  }
+  function fichaNodoQA(n){
+    const partes = [];
+    if(n.label) partes.push('Descripción: ' + n.label);
+    if(n.power_kw) partes.push('Potencia: ' + n.power_kw + ' kW');
+    if(n.voltage) partes.push('Voltaje: ' + n.voltage + ' V');
+    if(n.load_type) partes.push('Tipo de carga: ' + n.load_type);
+    if(n.starting_method) partes.push('Método de arranque: ' + n.starting_method);
+    if(n.current_a) partes.push('Corriente: ' + n.current_a + ' A');
+    if(n.devices && n.devices.length) partes.push('Dispositivos: ' + n.devices.map(d=>d.code).filter(Boolean).join(', '));
+    return (n.tag || n.item_no || n.id) + (partes.length ? ' — ' + partes.join(' · ') : ' — sin más datos registrados.');
+  }
+
+  function responderConsultaQA(pregunta){
+    if(!DATA || !DATA.nodes) return 'Todavía no hay un Cuadro de Carga cargado para consultar.';
+    const q = normalizarTextoQA(pregunta);
+    const nodos = todosLosNodosQA();
+    const tokens = q.split(/[^a-z0-9]+/).filter(Boolean);
+
+    // 1) ¿La pregunta menciona un tag/item específico? Prioridad total —
+    //    "qué potencia tiene el motor M156" igual encuentra M156 aunque
+    //    el resto de la frase no calce con nada más.
+    for(const n of nodos){
+      const candidatos = [n.tag, n.item_no].filter(Boolean).map(normalizarTextoQA);
+      if(candidatos.some(c => c && tokens.includes(c))){
+        return fichaNodoQA(n);
+      }
+    }
+
+    // 2) Conteo por método de arranque (VFD, DOL, Star-Delta, Soft, etc.)
+    //    — se compara contra los valores REALES presentes en los datos
+    //    cargados, no una lista fija adivinada.
+    const metodos = valoresDistintosQA('starting_method');
+    const metodoMatch = metodos.find(m => {
+      const mn = normalizarTextoQA(m);
+      return q.includes(mn) || mn.includes(q.replace(/cuant\w*|motor\w*|carga\w*|hay|con|grupo\w*|de|del|el|la|los|las|\?/g,'').trim());
+    });
+    if(metodoMatch && /cuant|list|cuales/.test(q)){
+      const enc = nodos.filter(n => n.kind==='load' && normalizarTextoQA(n.starting_method||'')===normalizarTextoQA(metodoMatch));
+      return 'Hay ' + enc.length + ' carga(s) con método de arranque "' + metodoMatch + '": ' + (enc.map(n=>n.tag||n.item_no).filter(Boolean).join(', ') || '—');
+    }
+
+    // 2.5) Conteo/listado por potencia (kW) — exacta, o "más de"/"menos de".
+    //      Se acepta coma o punto decimal ("1,5kw" o "1.5 kw").
+    const matchPotencia = q.match(/(\d+[.,]?\d*)\s*kw/);
+    if(matchPotencia){
+      const valor = parseFloat(matchPotencia[1].replace(',', '.'));
+      let comparador, etiqueta;
+      if(/mas de|mayor|superior|arriba/.test(q)){ comparador = (p)=>p>valor; etiqueta = 'con más de '+valor+' kW'; }
+      else if(/menos de|menor|inferior|abajo/.test(q)){ comparador = (p)=>p<valor; etiqueta = 'con menos de '+valor+' kW'; }
+      else { comparador = (p)=>Math.abs(p-valor)<0.01; etiqueta = 'de '+valor+' kW'; }
+      const enc = nodos.filter(n => n.kind==='load' && n.power_kw && comparador(Number(n.power_kw)));
+      return 'Hay ' + enc.length + ' carga(s)/motor(es) ' + etiqueta + ': ' + (enc.map(n=>n.tag||n.item_no).filter(Boolean).join(', ') || '—');
+    }
+
+    // 3) "Grupos" — protecciones/accionamientos que sirven a más de una
+    //    carga (member_rows > 1), opcionalmente filtrando por el código
+    //    de dispositivo mencionado (ej. "grupos dol").
+    if(q.includes('grupo')){
+      let grupos = nodos.filter(n => (n.kind==='protection' || n.kind==='actuator') && n.member_rows && n.member_rows.length > 1);
+      const codigoMatch = tokens.find(t => t.length>=2 && grupos.some(g => (g.devices||[]).some(d => normalizarTextoQA(d.code||'').includes(t))));
+      if(codigoMatch){
+        grupos = grupos.filter(g => (g.devices||[]).some(d => normalizarTextoQA(d.code||'').includes(codigoMatch)));
+      }
+      return 'Hay ' + grupos.length + ' grupo(s)' + (codigoMatch ? ' de tipo "'+codigoMatch+'"' : '') + ': ' + (grupos.map(g=>g.tag||g.id).filter(Boolean).join(', ') || '—');
+    }
+
+    // 4) Tableros/paneles
+    if(q.includes('tablero') || q.includes('panel')){
+      return 'Hay ' + DATA.panels.length + ' tablero(s): ' + DATA.panels.join(', ');
+    }
+
+    // 5) Potencia total
+    if(q.includes('potencia') && (q.includes('total') || q.includes('suma'))){
+      const total = nodos.filter(n=>n.kind==='load' && n.power_kw).reduce((s,n)=>s+Number(n.power_kw||0),0);
+      return 'Potencia total de las cargas registradas: ' + total.toFixed(1) + ' kW.';
+    }
+
+    // 6) Cargas sin método de arranque definido (chequeo de datos incompletos)
+    if(q.includes('sin partida') || q.includes('sin metodo') || (q.includes('incompleta') && q.includes('carga'))){
+      const faltantes = nodos.filter(n => n.kind==='load' && !n.starting_method);
+      return faltantes.length + ' carga(s) sin método de arranque definido: ' + (faltantes.map(n=>n.tag||n.item_no).filter(Boolean).join(', ') || 'ninguna — todas están completas.');
+    }
+
+    // 7) Total de motores/cargas
+    if(/cuant/.test(q) && (q.includes('motor') || q.includes('carga'))){
+      const total = nodos.filter(n=>n.kind==='load').length;
+      return 'Hay ' + total + ' carga(s)/motor(es) en total en el Cuadro de Carga cargado.';
+    }
+
+    return 'No reconocí esa pregunta. Puedo responder cosas como: "¿cuántos motores con VFD hay?", "¿cuántos de 1.5kW hay?", "¿cuántos con más de 5kW?", "¿cuántos grupos DOL hay?", "¿cuántos tableros hay?", "potencia total", "cargas sin partida definida", o preguntar directo por un tag (ej: "M156").';
+  }
+
+  const qaInput = document.getElementById('qaInput');
+  const qaLog = document.getElementById('qaLog');
+  function qaPreguntar(){
+    if(!qaInput || !qaInput.value.trim()) return;
+    const pregunta = qaInput.value.trim();
+    const respuesta = responderConsultaQA(pregunta);
+    const bloque = document.createElement('div');
+    bloque.style.marginBottom = '10px';
+    bloque.innerHTML = '<div style="font-weight:600; font-size:12.5px;">' + pregunta + '</div>' +
+      '<div style="font-size:12.5px; color:var(--text-dim); margin-top:2px;">' + respuesta + '</div>';
+    qaLog.insertBefore(bloque, qaLog.firstChild);
+    qaInput.value = '';
+  }
+  if(document.getElementById('qaBtn')) document.getElementById('qaBtn').addEventListener('click', qaPreguntar);
+  if(qaInput) qaInput.addEventListener('keydown', function(e){ if(e.key==='Enter') qaPreguntar(); });
 
   function countLoads(nodeId){
     const n = DATA.nodes[nodeId];

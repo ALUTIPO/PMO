@@ -702,8 +702,17 @@ function migrarProyecto(p) {
 }
 
 function totalNetoCotizacion(c) {
-  // "monto neto" ingresado por línea YA es el total de esa línea (sin IVA),
-  // no un precio unitario — así lo pidió el usuario. No se multiplica por cantidad.
+  // Cada línea ya trae su propio total (costoNeto × cantidad, con su
+  // descuento de línea si tiene) guardado en montoNeto — por compatibilidad
+  // con todo lo que ya suma este campo (Presupuesto, historial, tablas).
+  // Acá arriba se aplica además el descuento GLOBAL de la cotización
+  // completa (distinto del descuento por producto, que ya está incluido
+  // en cada montoNeto).
+  const suma = (c.items||[]).reduce((s,it)=> s + (Number(it.montoNeto)||0), 0);
+  const descGlobal = Number(c.descuentoGlobalPct)||0;
+  return Math.round(suma * (1 - descGlobal/100));
+}
+function sumaCostoCotizacion(c) {
   return (c.items||[]).reduce((s,it)=> s + (Number(it.montoNeto)||0), 0);
 }
 
@@ -1632,17 +1641,23 @@ function ajustarStockBodega(pid, codigo, tipo, cantidad, motivo) {
 }
 
 /* Ingreso automático a bodega cuando se registra una recepción — busca el
-   material por nombre y suma; si no existe, lo crea. No pide confirmación
-   (se dispara junto con registrarRecepcion) pero queda igual de trazado
-   en el historial. */
+   material por CÓDIGO (si el ítem trae uno, ej. "ELEC.CONT40A") o si no
+   por nombre; si no existe, lo crea. Si el ítem trae costo neto (precio
+   unitario, del nuevo formato de cotización), queda guardado en
+   precioUnitario — así, cuando más tarde alguien lo envíe manualmente a
+   Bodega General, el precio y el nombre ya están ahí, sin preguntar de
+   nuevo. No pide confirmación (se dispara junto con registrarRecepcion)
+   pero queda igual de trazado en el historial. */
 function ingresarBodegaPorRecepcion(p, itemsRecibidos, factura) {
   itemsRecibidos.forEach(it => {
     if (!it.cantidad || it.cantidad <= 0) return;
-    let b = buscarBodegaPorNombre(p, it.descripcion);
+    let b = it.codigo ? p.bodega.find(x => x.codigo === it.codigo) : null;
+    if (!b) b = buscarBodegaPorNombre(p, it.descripcion);
     if (!b) {
-      b = { codigo:"MAT-"+String(1000+p.bodega.length+Math.floor(Math.random()*900)), material: it.descripcion, stock:0, unidad: it.unidad||"unidad", minimo:0 };
+      b = { codigo: it.codigo || ("MAT-"+String(1000+p.bodega.length+Math.floor(Math.random()*900))), material: it.descripcion, stock:0, unidad: it.unidad||"unidad", minimo:0 };
       p.bodega.push(b);
     }
+    if (it.costoNeto) b.precioUnitario = it.costoNeto;
     const antes = b.stock;
     b.stock = antes + it.cantidad;
     registrarHistorial({proyecto:p.codigo, accion:"Modificar", detalle:`Ingreso automático a bodega desde recepción (factura ${factura}): ${b.material} +${it.cantidad} ${b.unidad} (${antes} → ${b.stock})`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
@@ -1659,6 +1674,10 @@ function ingresarBodegaPorRecepcion(p, itemsRecibidos, factura) {
 function buscarBodegaGeneralPorNombre(nombre) {
   const n = (nombre||"").trim().toLowerCase();
   return DB.bodegaGeneral.find(b => b.material.trim().toLowerCase() === n);
+}
+function buscarBodegaGeneralPorCodigo(codigo) {
+  const c = (codigo||"").trim().toLowerCase();
+  return DB.bodegaGeneral.find(b => (b.codigo||"").trim().toLowerCase() === c);
 }
 
 function agregarProductoBodegaGeneral(datos) {
@@ -1876,7 +1895,7 @@ function registrarRecepcion(pid, cotId, datos) {
     const cantidadEsta = Math.min(Number(sel.cantidad)||0, Math.max(0, pendiente));
     if (cantidadEsta <= 0) return;
     it.cantidadRecibida = (Number(it.cantidadRecibida)||0) + cantidadEsta;
-    itemsParaBodega.push({ descripcion: it.descripcion, cantidad: cantidadEsta, unidad: it.unidad });
+    itemsParaBodega.push({ descripcion: it.descripcion, cantidad: cantidadEsta, unidad: it.unidad, codigo: it.codigo||"", costoNeto: it.costoNeto||0 });
   });
 
   if (!itemsParaBodega.length) {
@@ -1926,10 +1945,18 @@ function guardarCotizacion(pid, cotId, datos) {
   } else {
     const itemsValidos = (datos.items||[]).filter(it => it.descripcion && it.descripcion.trim());
     if (!itemsValidos.length) { toast("Agrega al menos un ítem con descripción.", "danger"); return false; }
-    items = itemsValidos.map((it, i) => ({
-      id: i+1, descripcion: it.descripcion.trim(), cantidad: Number(it.cantidad)||1,
-      unidad: it.unidad||"unidad", montoNeto: Number(it.montoNeto)||0, cantidadRecibida: 0,
-    }));
+    items = itemsValidos.map((it, i) => {
+      const cantidad = Number(it.cantidad)||1;
+      const costoNeto = Number(it.costoNeto)||0;
+      const descuentoPct = Number(it.descuentoPct)||0;
+      const codigo = (it.codigo||"").trim() ? "ELEC."+(it.codigo||"").trim().replace(/^ELEC\./i,'') : "";
+      return {
+        id: i+1, codigo, descripcion: it.descripcion.trim(), cantidad,
+        unidad: it.unidad||"unidad", costoNeto, descuentoPct,
+        montoNeto: Math.round(cantidad * costoNeto * (1 - descuentoPct/100)),
+        cantidadRecibida: 0,
+      };
+    });
   }
 
   if (cotId) {
@@ -1939,7 +1966,7 @@ function guardarCotizacion(pid, cotId, datos) {
       numeroCotizacion: datos.numeroCotizacion||"", proveedor: datos.proveedor,
       referencia: datos.referencia||"", importancia: datos.importancia||"Media",
       linkSharepoint: datos.linkSharepoint||"", longLead: !!datos.longLead,
-      fechaEstim: datos.fechaEstim||"", items,
+      fechaEstim: datos.fechaEstim||"", items, descuentoGlobalPct: Number(datos.descuentoGlobalPct)||0,
     });
     if (datos.numeroOC !== undefined) c.numeroOC = datos.numeroOC;
     if (datos.linkOC !== undefined) c.linkOC = datos.linkOC;
@@ -1952,6 +1979,7 @@ function guardarCotizacion(pid, cotId, datos) {
       fecha: hoyISO(), referencia: datos.referencia||"", importancia: datos.importancia||"Media",
       linkSharepoint: datos.linkSharepoint||"", estado: "Cotizando",
       longLead: !!datos.longLead, fechaEstim: datos.fechaEstim||"", items,
+      descuentoGlobalPct: Number(datos.descuentoGlobalPct)||0,
       numeroOC: "", linkOC: "", recepciones: [],
     });
     registrarHistorial({proyecto:p.codigo, accion:"Crear", detalle:`Nueva cotización: ${datos.proveedor} (${id})`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
@@ -2058,8 +2086,8 @@ function modalEnviarABodegaGeneral(pid, codigo) {
       <input type="text" id="ebgNombre" value="${b.material}">
       <div class="hint">Confírmalo o corrígelo — este es el nombre con el que va a quedar en Bodega General.</div>
       <label class="field-label">Precio unitario</label>
-      <input type="text" id="ebgPrecio" placeholder="Ej: 12500">
-      <div class="hint">Obligatorio: es el dato que falta para poder exportar este producto a Bsale. Si ya existe en Bodega General, se promedia con el precio que tenía.</div>
+      <input type="text" id="ebgPrecio" value="${b.precioUnitario||''}" placeholder="Ej: 12500">
+      <div class="hint">${b.precioUnitario ? 'Ya viene precargado desde la cotización que ingresó este material — corrígelo si cambió.' : 'Obligatorio: es el dato que falta para poder exportar este producto a Bsale.'} Si ya existe en Bodega General, se promedia con el precio que tenía.</div>
     </div>
     <div class="modal-foot">
       <button class="btn" onclick="closeModal()">Cancelar</button>
@@ -3083,12 +3111,14 @@ function renderCompras() {
   <div class="stack">
   ${cotizacionesFiltradas.length ? cotizacionesFiltradas.map(c => {
     const totalNeto = totalNetoCotizacion(c);
+    const sumaCosto = sumaCostoCotizacion(c);
+    const tieneDescGlobal = Number(c.descuentoGlobalPct) > 0;
     return `<div class="card">
       <div class="flex-between" style="flex-wrap:wrap; gap:8px;">
         <div>
           <div class="mono muted small">${c.id}${c.numeroCotizacion?` · N° cot. ${c.numeroCotizacion}`:''}${c.numeroOC?` · N° OC ${c.numeroOC}`:''}</div>
           <h3 style="margin-top:2px;">${c.proveedor}${c.referencia?` — ${c.referencia}`:''}</h3>
-          <p class="hint" style="margin-top:2px;">${c.items.length} ítem${c.items.length!==1?'s':''} · Total neto ${money(totalNeto)}${c.longLead?' · <span style="color:var(--copper-dark)">long-lead</span>':''}</p>
+          <p class="hint" style="margin-top:2px;">${c.items.length} ítem${c.items.length!==1?'s':''} · ${tieneDescGlobal ? `Suma de costo ${money(sumaCosto)} · Descuento ${c.descuentoGlobalPct}% · Total ${money(totalNeto)}` : `Total neto ${money(totalNeto)}`}${c.longLead?' · <span style="color:var(--copper-dark)">long-lead</span>':''}</p>
           ${c.alerta ? `<div class="hint" style="color:var(--danger)">⚠ ${c.alerta}</div>` : ''}
           ${c.recepciones.length ? `<div class="hint" style="margin-top:4px;">📦 ${c.recepciones.map(r=>`factura ${r.factura} (${r.items.map(it=>`${it.cantidad} ${it.unidad} ${it.descripcion}`).join(', ')})`).join(' · ')}</div>` : ''}
         </div>
@@ -3096,11 +3126,11 @@ function renderCompras() {
       </div>
       <div class="table-wrap" style="margin-top:12px;">
         <table>
-          <tr><th>Descripción</th><th>Cant.</th><th>Unidad</th><th>Monto neto</th><th>Recibido</th></tr>
+          <tr><th>Código</th><th>Descripción</th><th>Cant.</th><th>Unidad</th><th>Monto neto</th><th>Recibido</th></tr>
           ${c.items.map(it => {
             const recibido = Number(it.cantidadRecibida)||0, total = Number(it.cantidad)||0;
             const completo = recibido >= total && total > 0;
-            return `<tr><td class="small">${it.descripcion}</td><td class="small">${it.cantidad}</td><td class="small">${it.unidad}</td><td class="mono small">${money(it.montoNeto)}</td><td class="small" style="color:${completo?'var(--ok)':(recibido>0?'var(--copper-dark)':'var(--muted)')}">${recibido}/${total}</td></tr>`;
+            return `<tr><td class="mono small muted">${it.codigo||'—'}</td><td class="small">${it.descripcion}</td><td class="small">${it.cantidad}</td><td class="small">${it.unidad}</td><td class="mono small">${money(it.montoNeto)}</td><td class="small" style="color:${completo?'var(--ok)':(recibido>0?'var(--copper-dark)':'var(--muted)')}">${recibido}/${total}</td></tr>`;
           }).join('')}
         </table>
       </div>
@@ -5418,16 +5448,40 @@ function modalNuevaReapertura(pid) {
   `);
 }
 
-/* ---- Cotización: ítems dinámicos dentro del modal ---- */
+/* ---- Cotización: ítems dinámicos dentro del modal ----
+   Código = el código real del producto, tal cual lo escribes — el
+   prefijo "ELEC." (que exige Bsale) se agrega solo al guardar, no hace
+   falta escribirlo. Costo Neto = precio UNITARIO (a diferencia del
+   diseño anterior, donde el monto era el total de la línea a mano).
+   El costo total de la línea (cantidad × costo neto × (1-%desc)) se
+   calcula solo y queda en montoNeto — así todo lo que ya suma ese
+   campo en otras partes de la app (Presupuesto, historial, tablas)
+   sigue funcionando sin tocarlo. */
 let _cotEditItems = [];
 
+function calcularMontoNetoItem(it) {
+  const cant = Number(it.cantidad)||0;
+  const costo = Number(it.costoNeto)||0;
+  const desc = Number(it.descuentoPct)||0;
+  return Math.round(cant * costo * (1 - desc/100));
+}
+
 function filaItemCotizacion(it, i) {
-  return `<div class="flex-gap" style="align-items:flex-start; margin-bottom:6px;" data-fila="${i}">
-    <input type="text" value="${it.descripcion||''}" placeholder="Descripción del ítem" style="flex:2;" oninput="_cotEditItems[${i}].descripcion=this.value">
-    <input type="text" value="${it.cantidad||1}" placeholder="Cant." style="flex:0.6; min-width:50px;" oninput="_cotEditItems[${i}].cantidad=this.value">
-    <input type="text" value="${it.unidad||'unidad'}" placeholder="Unidad" style="flex:0.8; min-width:70px;" oninput="_cotEditItems[${i}].unidad=this.value">
-    <input type="text" value="${it.montoNeto||0}" placeholder="Monto neto" style="flex:1;" oninput="_cotEditItems[${i}].montoNeto=this.value; refrescarTotalCotizacionUI();">
-    <button class="btn btn-sm btn-danger" style="flex:0;" onclick="quitarFilaItemCotizacion(${i})" title="Quitar ítem">✕</button>
+  it.montoNeto = calcularMontoNetoItem(it);
+  const codigoCompleto = it.codigo ? "ELEC."+it.codigo.replace(/^ELEC\./i,'') : "";
+  const existente = codigoCompleto ? buscarBodegaGeneralPorCodigo(codigoCompleto) : null;
+  return `<div style="border:1px solid var(--line-soft); border-radius:8px; padding:8px 10px; margin-bottom:8px;" data-fila="${i}">
+    <div class="flex-gap" style="align-items:flex-start;">
+      <input type="text" value="${it.codigo||''}" placeholder="Código producto" style="flex:0.9; min-width:90px;" oninput="_cotEditItems[${i}].codigo=this.value; refrescarItemsCotizacionUI();">
+      <input type="text" value="${it.descripcion||''}" placeholder="Descripción / nombre del producto" style="flex:2;" oninput="_cotEditItems[${i}].descripcion=this.value">
+      <input type="text" value="${it.cantidad||1}" placeholder="Cant." style="flex:0.5; min-width:50px;" oninput="_cotEditItems[${i}].cantidad=this.value; refrescarItemsCotizacionUI();">
+      <input type="text" value="${it.unidad||'unidad'}" placeholder="Unidad" style="flex:0.6; min-width:65px;" oninput="_cotEditItems[${i}].unidad=this.value">
+      <input type="text" value="${it.costoNeto||0}" placeholder="Costo neto (u.)" style="flex:0.8; min-width:80px;" oninput="_cotEditItems[${i}].costoNeto=this.value; refrescarItemsCotizacionUI();">
+      <input type="text" value="${it.descuentoPct||0}" placeholder="% desc." style="flex:0.5; min-width:55px;" oninput="_cotEditItems[${i}].descuentoPct=this.value; refrescarItemsCotizacionUI();">
+      <div style="flex:0.9; min-width:85px; font-family:'IBM Plex Mono',monospace; font-size:12px; padding-top:9px; text-align:right;">${money(it.montoNeto)}</div>
+      <button class="btn btn-sm btn-danger" style="flex:0;" onclick="quitarFilaItemCotizacion(${i})" title="Quitar ítem">✕</button>
+    </div>
+    ${codigoCompleto && existente ? `<div class="hint" style="margin-top:5px; color:var(--copper-dark);">⚠ "${codigoCompleto}" ya existe en Bodega General: ${existente.material} a ${money(existente.precioUnitario||0)}/u. Este ítem quedará registrado con ${money(it.costoNeto||0)}/u — recuerda decidir si actualizas el precio cuando lo envíes a Bodega General.</div>` : ''}
   </div>`;
 }
 function refrescarItemsCotizacionUI() {
@@ -5439,16 +5493,18 @@ function refrescarItemsCotizacionUI() {
 function refrescarTotalCotizacionUI() {
   const el = document.getElementById('cotTotalPreview');
   if (!el) return;
-  const total = _cotEditItems.reduce((s,it) => s + (Number(it.montoNeto)||0), 0);
-  el.textContent = `Total neto: ${money(total)} · + IVA (19%): ${money(Math.round(total*1.19))}`;
+  const suma = _cotEditItems.reduce((s,it) => s + calcularMontoNetoItem(it), 0);
+  const descGlobal = Number(document.getElementById('cotDescuentoGlobal')?.value)||0;
+  const total = Math.round(suma * (1 - descGlobal/100));
+  el.innerHTML = `Suma de costo: <b>${money(suma)}</b> &nbsp;·&nbsp; Descuento cotización: <b>${descGlobal}%</b> &nbsp;·&nbsp; Total cotización: <b>${money(total)}</b> &nbsp;·&nbsp; + IVA (19%): <b>${money(Math.round(total*1.19))}</b>`;
 }
 function agregarFilaItemCotizacion() {
-  _cotEditItems.push({descripcion:'', cantidad:1, unidad:'unidad', montoNeto:0});
+  _cotEditItems.push({codigo:'', descripcion:'', cantidad:1, unidad:'unidad', costoNeto:0, descuentoPct:0, montoNeto:0});
   refrescarItemsCotizacionUI();
 }
 function quitarFilaItemCotizacion(i) {
   _cotEditItems.splice(i,1);
-  if(!_cotEditItems.length) _cotEditItems.push({descripcion:'', cantidad:1, unidad:'unidad', montoNeto:0});
+  if(!_cotEditItems.length) _cotEditItems.push({codigo:'', descripcion:'', cantidad:1, unidad:'unidad', costoNeto:0, descuentoPct:0, montoNeto:0});
   refrescarItemsCotizacionUI();
 }
 
@@ -5491,8 +5547,12 @@ function modalCotizacion(pid, cotId) {
 
       <div class="divider"></div>
       <div class="flex-between"><label class="field-label" style="margin:0;">Ítems de esta cotización</label><button class="btn btn-sm" onclick="agregarFilaItemCotizacion()">+ Agregar ítem</button></div>
-      <div class="hint">El monto neto es el total de esa línea, sin IVA — no un precio unitario.</div>
+      <div class="hint">Costo neto = precio unitario. El costo total de cada línea se calcula solo (cantidad × costo neto, menos el % de descuento si el proveedor lo da por ese producto).</div>
       <div id="cotItemsContainer" style="margin-top:8px;"></div>
+      <div class="flex-gap" style="align-items:center; margin-top:6px;">
+        <label class="field-label" style="margin:0;">% Descuento de la cotización completa (opcional, aparte del descuento por producto)</label>
+        <input type="text" id="cotDescuentoGlobal" value="${c?c.descuentoGlobalPct||0:0}" style="width:70px;" oninput="refrescarTotalCotizacionUI();">
+      </div>
       <div id="cotTotalPreview" class="hint" style="margin-top:8px; font-weight:600;"></div>
     </div>
     <div class="modal-foot">
@@ -5504,6 +5564,7 @@ function modalCotizacion(pid, cotId) {
           proveedor: document.getElementById('cotProveedor').value.trim(),
           referencia: document.getElementById('cotReferencia').value.trim(),
           importancia: document.getElementById('cotImportancia').value,
+          descuentoGlobalPct: document.getElementById('cotDescuentoGlobal').value,
           fechaEstim: document.getElementById('cotFechaEstim').value.trim(),
           linkSharepoint: document.getElementById('cotLink').value.trim(),
           longLead: document.getElementById('cotLongLead').checked,

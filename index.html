@@ -321,6 +321,22 @@ tr:last-child td { border-bottom: none; }
   .messages{ max-height:none; }
 }
 
+/* ===================== COTIZACIÓN — cuadrícula de ítems ===================== */
+.cot-item-grid {
+  display: grid;
+  grid-template-columns: 120px 1fr 60px 85px 105px 75px 105px 34px;
+  gap: 8px; align-items: center;
+}
+.cot-item-header {
+  font-size: 10.5px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .03em;
+  padding: 0 2px 6px;
+}
+@media (max-width: 760px) {
+  .cot-item-grid { grid-template-columns: 1fr 1fr; }
+  .cot-item-header { display: none; }
+  .cot-item-total { grid-column: span 2; text-align: left !important; padding-top: 0 !important; }
+}
+
 /* ===================== VISOR DE FOTOS (estilo Instagram) ===================== */
 .visor-overlay {
   position: fixed; inset: 0; background: rgba(10,12,16,.94); z-index: 300;
@@ -5470,24 +5486,29 @@ function filaItemCotizacion(it, i) {
   it.montoNeto = calcularMontoNetoItem(it);
   const codigoCompleto = it.codigo ? "ELEC."+it.codigo.replace(/^ELEC\./i,'') : "";
   const existente = codigoCompleto ? buscarBodegaGeneralPorCodigo(codigoCompleto) : null;
-  return `<div style="border:1px solid var(--line-soft); border-radius:8px; padding:8px 10px; margin-bottom:8px;" data-fila="${i}">
-    <div class="flex-gap" style="align-items:flex-start;">
-      <input type="text" value="${it.codigo||''}" placeholder="Código producto" style="flex:0.9; min-width:90px;" oninput="_cotEditItems[${i}].codigo=this.value; refrescarItemsCotizacionUI();">
-      <input type="text" value="${it.descripcion||''}" placeholder="Descripción / nombre del producto" style="flex:2;" oninput="_cotEditItems[${i}].descripcion=this.value">
-      <input type="text" value="${it.cantidad||1}" placeholder="Cant." style="flex:0.5; min-width:50px;" oninput="_cotEditItems[${i}].cantidad=this.value; refrescarItemsCotizacionUI();">
-      <input type="text" value="${it.unidad||'unidad'}" placeholder="Unidad" style="flex:0.6; min-width:65px;" oninput="_cotEditItems[${i}].unidad=this.value">
-      <input type="text" value="${it.costoNeto||0}" placeholder="Costo neto (u.)" style="flex:0.8; min-width:80px;" oninput="_cotEditItems[${i}].costoNeto=this.value; refrescarItemsCotizacionUI();">
-      <input type="text" value="${it.descuentoPct||0}" placeholder="% desc." style="flex:0.5; min-width:55px;" oninput="_cotEditItems[${i}].descuentoPct=this.value; refrescarItemsCotizacionUI();">
-      <div style="flex:0.9; min-width:85px; font-family:'IBM Plex Mono',monospace; font-size:12px; padding-top:9px; text-align:right;">${money(it.montoNeto)}</div>
-      <button class="btn btn-sm btn-danger" style="flex:0;" onclick="quitarFilaItemCotizacion(${i})" title="Quitar ítem">✕</button>
+  return `<div style="border:1px solid var(--line-soft); border-radius:8px; padding:9px 10px; margin-bottom:8px;" data-fila="${i}">
+    <div class="cot-item-grid">
+      <input type="text" value="${it.codigo||''}" placeholder="Ej: CONT40A" oninput="_cotEditItems[${i}].codigo=this.value; refrescarItemsCotizacionUI();">
+      <input type="text" value="${it.descripcion||''}" placeholder="Ej: Contactor 40A trifásico" oninput="_cotEditItems[${i}].descripcion=this.value">
+      <input type="text" value="${it.cantidad||1}" oninput="_cotEditItems[${i}].cantidad=this.value; refrescarItemsCotizacionUI();">
+      <input type="text" value="${it.unidad||'unidad'}" oninput="_cotEditItems[${i}].unidad=this.value">
+      <input type="text" value="${it.costoNeto||0}" oninput="_cotEditItems[${i}].costoNeto=this.value; refrescarItemsCotizacionUI();">
+      <input type="text" value="${it.descuentoPct||0}" oninput="_cotEditItems[${i}].descuentoPct=this.value; refrescarItemsCotizacionUI();">
+      <div class="cot-item-total" style="font-family:'IBM Plex Mono',monospace; font-size:12.5px; font-weight:600; text-align:right;">${money(it.montoNeto)}</div>
+      <button class="btn btn-sm btn-danger" onclick="quitarFilaItemCotizacion(${i})" title="Quitar ítem">✕</button>
     </div>
-    ${codigoCompleto && existente ? `<div class="hint" style="margin-top:5px; color:var(--copper-dark);">⚠ "${codigoCompleto}" ya existe en Bodega General: ${existente.material} a ${money(existente.precioUnitario||0)}/u. Este ítem quedará registrado con ${money(it.costoNeto||0)}/u — recuerda decidir si actualizas el precio cuando lo envíes a Bodega General.</div>` : ''}
+    ${codigoCompleto && existente ? `<div class="hint" style="margin-top:6px; color:var(--copper-dark);">⚠ "${codigoCompleto}" ya existe en Bodega General: ${existente.material} a ${money(existente.precioUnitario||0)}/u. Este ítem quedará registrado con ${money(it.costoNeto||0)}/u — recuerda decidir si actualizas el precio cuando lo envíes a Bodega General.</div>` : ''}
+  </div>`;
+}
+function encabezadoItemsCotizacion() {
+  return `<div class="cot-item-grid cot-item-header">
+    <div>Código</div><div>Descripción</div><div>Cant.</div><div>Unidad</div><div>Costo neto (u.)</div><div>% Desc.</div><div style="text-align:right;">Total línea</div><div></div>
   </div>`;
 }
 function refrescarItemsCotizacionUI() {
   const cont = document.getElementById('cotItemsContainer');
   if (!cont) return;
-  cont.innerHTML = _cotEditItems.map(filaItemCotizacion).join('') || '<div class="hint">Sin ítems — agrega al menos uno.</div>';
+  cont.innerHTML = (_cotEditItems.length ? encabezadoItemsCotizacion() : '') + (_cotEditItems.map(filaItemCotizacion).join('') || '<div class="hint">Sin ítems — agrega al menos uno.</div>');
   refrescarTotalCotizacionUI();
 }
 function refrescarTotalCotizacionUI() {
@@ -5574,7 +5595,7 @@ function modalCotizacion(pid, cotId) {
         });
         if(ok){ closeModal(); renderAll(); }">${c?'Guardar cambios':'Crear cotización'}</button>
     </div>
-  `, 640);
+  `, 920);
   refrescarItemsCotizacionUI();
 }
 

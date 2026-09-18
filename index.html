@@ -444,6 +444,11 @@ table { min-width: 560px; }
 // ================================================================
 // 1. CONFIGURACIÓN DE FIREBASE
 // ================================================================
+/* Súbela cada vez que se suba una versión nueva del index.html — sirve
+   para verificar a simple vista, mirando la esquina superior de la
+   app, que el navegador está usando el archivo recién subido y no uno
+   viejo guardado en caché. Se muestra en la barra superior. */
+const APP_VERSION = "1.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -497,8 +502,7 @@ const notificacionesTokensRef = database.ref('notificacionesTokens');
    "Certificados push web" → Generar par de claves. Sin esto, pedir el
    token de notificación falla. */
 const VAPID_KEY_FCM = "PENDIENTE_REEMPLAZAR_CON_LA_CLAVE_VAPID_REAL";
-let messaging = null;
-try { messaging = firebase.messaging(); } catch(e) { console.warn("Este navegador no soporta notificaciones push.", e); }
+let messaging = null; // se crea recién dentro de activarNotificaciones() — nada de Messaging corre solo al cargar la página
 const functionsFB = firebase.functions();
 let miPresenciaRef = null;
 let listaConectados = [];
@@ -5755,7 +5759,10 @@ async function registrarServiceWorker() {
    tiene que partir de una acción explícita de la persona, nunca solo,
    o la mayoría de los navegadores lo bloquean o lo ignoran. */
 async function activarNotificaciones() {
-  if (!messaging) { toast("Este navegador no soporta notificaciones push.", "danger"); return; }
+  if (!messaging) {
+    try { messaging = firebase.messaging(); }
+    catch (e) { toast("Este navegador no soporta notificaciones push.", "danger"); return; }
+  }
   if (VAPID_KEY_FCM.startsWith("PENDIENTE")) {
     toast("Falta configurar la clave VAPID de Firebase antes de poder activar esto — avísale a quien administra la cuenta.", "danger");
     return;
@@ -7314,7 +7321,7 @@ function renderAll() {
   shell();
   actualizarBotonNotificaciones();
   document.getElementById("topbarTitle").textContent = NAV_ACTUAL().flatMap(g => g.items).find(i => i.id === currentPage)?.label || "";
-  document.getElementById("topbarCrumb").textContent = "ALUTIPO-PMO / "+currentPage;
+  document.getElementById("topbarCrumb").textContent = "ALUTIPO-PMO / "+currentPage+" · V"+APP_VERSION;
   const renderers = {
     dashboard: renderDashboard, miPanel: renderMiPanel, panelEquipo: renderPanelEquipo, bodegaGeneral: renderBodegaGeneral, personal: renderPersonal, proyecto360: renderProyecto360, planificacion: renderPlanificacion, compras: renderCompras,
     presupuesto: renderPresupuesto, bodega: renderBodega, reporteMateriales: renderReporteMateriales, comprasDirectas: renderComprasDirectas, punch: renderPunch, requerimientos: renderRequerimientos, galeria: renderGaleria, cuadroCarga: renderCuadroCarga,

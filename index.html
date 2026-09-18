@@ -13,6 +13,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-storage-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-functions-compat.js"></script>
 <!-- SheetJS: genera el .xlsx real de exportación de Bodega para Bsale, y del reporte de KPIs -->
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <!-- jsPDF + autoTable: genera el reporte de KPIs en PDF -->
@@ -340,6 +341,20 @@ tr:last-child td { border-bottom: none; }
   .cot-item-header { display: none; }
   .cot-item-total { grid-column: span 2; text-align: left !important; padding-top: 0 !important; }
 }
+.cd-item-grid {
+  display: grid;
+  grid-template-columns: 110px 1fr 60px 100px 100px 34px;
+  gap: 8px; align-items: center;
+}
+.cd-item-header {
+  font-size: 10.5px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .03em;
+  padding: 0 2px 6px;
+}
+@media (max-width: 700px) {
+  .cd-item-grid { grid-template-columns: 1fr 1fr; }
+  .cd-item-header { display: none; }
+  .cd-item-total { grid-column: span 2; text-align: left !important; padding-top: 0 !important; }
+}
 
 /* ===================== VISOR DE FOTOS (estilo Instagram) ===================== */
 .visor-overlay {
@@ -481,9 +496,10 @@ const notificacionesTokensRef = database.ref('notificacionesTokens');
    Firebase Console → Configuración del proyecto → Cloud Messaging →
    "Certificados push web" → Generar par de claves. Sin esto, pedir el
    token de notificación falla. */
-const VAPID_KEY_FCM = "BNbxZ09ZIGGCKPxngZJFoq56bjRqnLkK5x43HJjyG-K_1oq3Ov8f0WJhi57VRF18SHfEblKKg4-lsenaiz7hzK8";
+const VAPID_KEY_FCM = "PENDIENTE_REEMPLAZAR_CON_LA_CLAVE_VAPID_REAL";
 let messaging = null;
 try { messaging = firebase.messaging(); } catch(e) { console.warn("Este navegador no soporta notificaciones push.", e); }
+const functionsFB = firebase.functions();
 let miPresenciaRef = null;
 let listaConectados = [];
 let usuarioAuth = null; // el objeto de Firebase Auth de la sesión actual
@@ -638,6 +654,13 @@ function migrarProyecto(p) {
   if(!p.reaperturas) p.reaperturas = [];
   if(!p.punch) p.punch = [];
   if(!p.comprasDirectas) p.comprasDirectas = [];
+  p.comprasDirectas.forEach(cd => {
+    if (!cd.items && cd.descripcion) {
+      cd.items = [{ id:1, codigo:"", descripcion:cd.descripcion, cantidad:1, unidad:"unidad", costoNeto:cd.montoEstimado||0, montoNeto:cd.montoEstimado||0 }];
+      delete cd.descripcion;
+    }
+    if (!cd.items) cd.items = [];
+  });
   if(p.clienteFinal===undefined) p.clienteFinal = "";
   if(p.modoCierre===undefined) p.modoCierre = false;
   p.punch.forEach(it => {
@@ -2579,6 +2602,32 @@ function crearReapertura(pid, posta, motivo) {
   guardarEstado();
 }
 
+/* Llama a la función "copiloto" (Genkit + Gemini) desplegada en Cloud
+   Functions — no hay ninguna clave de IA en este archivo ni en el
+   navegador de nadie; la clave vive segura del lado del servidor. */
+async function preguntarCopilotoIA(pid) {
+  const input = document.getElementById("copilotoPregunta");
+  const pregunta = input.value.trim();
+  if (!pregunta) return;
+  const btn = document.getElementById("copilotoBtn");
+  const log = document.getElementById("copilotoChatLog");
+  const bloque = document.createElement("div");
+  bloque.style.marginBottom = "12px";
+  bloque.innerHTML = `<div style="font-weight:600; font-size:13px;">${pregunta}</div><div class="hint" style="margin-top:4px;">Pensando…</div>`;
+  log.insertBefore(bloque, log.firstChild);
+  input.value = "";
+  btn.disabled = true;
+  try {
+    const llamar = functionsFB.httpsCallable("copiloto");
+    const resultado = await llamar({ proyectoId: pid, pregunta });
+    bloque.querySelector(".hint").outerHTML = `<div style="font-size:13px; margin-top:4px; white-space:pre-wrap;">${(resultado.data && resultado.data.respuesta) || "No hubo respuesta."}</div>`;
+  } catch (err) {
+    bloque.querySelector(".hint").outerHTML = `<div style="font-size:13px; margin-top:4px; color:var(--danger);">Error: ${err.message||err}</div>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 function analizarProyectoIA(pid) {
   const p = proy(pid);
   const nuevos = [];
@@ -3247,19 +3296,28 @@ function badgeCompraDirecta(e) {
   return `<span class="badge b-${map[e]||'gris'}"><span class="dot"></span>${e}</span>`;
 }
 
+function resumenItemsCompraDirecta(items, maxLargo) {
+  const texto = (items||[]).map(it => `${it.cantidad} ${it.unidad||'unidad'} ${it.descripcion}`).join(', ');
+  return maxLargo && texto.length > maxLargo ? texto.slice(0, maxLargo)+'…' : texto;
+}
 function solicitarCompraDirecta(pid, datos) {
   const p = proy(pid);
-  if (!datos.descripcion || !datos.descripcion.trim()) { toast("Describe qué necesitas comprar.", "danger"); return false; }
-  const monto = Number(datos.montoEstimado)||0;
+  const itemsValidos = (datos.items||[]).filter(it => it.descripcion && it.descripcion.trim());
+  if (!itemsValidos.length) { toast("Agrega al menos un producto con descripción.", "danger"); return false; }
+  const items = itemsValidos.map((it, i) => {
+    const cantidad = Number(it.cantidad)||1, costoNeto = Number(it.costoNeto)||0;
+    return { id:i+1, codigo:(it.codigo||"").trim(), descripcion: it.descripcion.trim(), cantidad, unidad: it.unidad||"unidad", costoNeto, montoNeto: Math.round(cantidad*costoNeto) };
+  });
+  const monto = items.reduce((s,it)=>s+it.montoNeto, 0);
   const id = "CD-"+Math.random().toString(36).slice(2,7).toUpperCase();
   p.comprasDirectas.push({
-    id, descripcion: datos.descripcion.trim(), motivo: (datos.motivo||"").trim(), montoEstimado: monto,
+    id, items, motivo: (datos.motivo||"").trim(), montoEstimado: monto,
     solicitadoPor: DB.usuario, rolSolicitante: DB.role, fechaSolicitud: hoyISO(),
     estado: "Solicitada",
     comentarioAutorizacion: "", autorizadoPor: "", fechaAutorizacion: "",
-    metodoPago: "", codigoVoucher: "", numeroFactura: "", montoReal: 0, proveedor: "", fechaCompra: "", registradoPor: "",
+    metodoPago: "", codigoVoucher: "", numeroFactura: "", montoReal: 0, proveedor: "", fechaCompra: "", registradoPor: "", archivoComprobante: "",
   });
-  registrarHistorial({proyecto:p.codigo, accion:"Crear", detalle:`Compra directa solicitada: ${datos.descripcion} (~${money(monto)})`, usuario:DB.usuario+" · "+DB.role, criticidad: monto>=MONTO_MAX_COMPRA_DIRECTA?"Alta":"Media"});
+  registrarHistorial({proyecto:p.codigo, accion:"Crear", detalle:`Compra directa solicitada: ${resumenItemsCompraDirecta(items,120)} (~${money(monto)})`, usuario:DB.usuario+" · "+DB.role, criticidad: monto>=MONTO_MAX_COMPRA_DIRECTA?"Alta":"Media"});
   toast("Solicitud enviada — queda pendiente de autorización del Jefe de Proyecto.", "ok");
   guardarEstado();
   return true;
@@ -3274,7 +3332,7 @@ function autorizarCompraDirecta(pid, id, aprobar, comentario) {
   cd.comentarioAutorizacion = (comentario||"").trim();
   cd.autorizadoPor = DB.usuario;
   cd.fechaAutorizacion = hoyISO();
-  registrarHistorial({proyecto:p.codigo, accion: aprobar?"Aprobar":"Modificar", detalle:`Compra directa "${cd.descripcion}" ${aprobar?'autorizada':'rechazada'}${cd.comentarioAutorizacion?': '+cd.comentarioAutorizacion:''}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"});
+  registrarHistorial({proyecto:p.codigo, accion: aprobar?"Aprobar":"Modificar", detalle:`Compra directa "${resumenItemsCompraDirecta(cd.items,80)}" ${aprobar?'autorizada':'rechazada'}${cd.comentarioAutorizacion?': '+cd.comentarioAutorizacion:''}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"});
   toast(`Solicitud ${aprobar?'autorizada':'rechazada'}.`, "ok");
   guardarEstado();
   return true;
@@ -3299,40 +3357,82 @@ function registrarCompraDirecta(pid, id, datos) {
     registradoPor: DB.usuario,
     estado: "Registrada",
   });
-  registrarHistorial({proyecto:p.codigo, accion:"Modificar", detalle:`Compra directa registrada: ${cd.descripcion} — ${money(cd.montoReal)} (${cd.metodoPago})`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"});
+  registrarHistorial({proyecto:p.codigo, accion:"Modificar", detalle:`Compra directa registrada: ${resumenItemsCompraDirecta(cd.items,80)} — ${money(cd.montoReal)} (${cd.metodoPago})`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"});
   toast("Compra registrada y sumada al presupuesto ejecutado.", "ok");
   guardarEstado();
   return true;
 }
 
+let _cdEditItems = [];
+function calcularMontoNetoItemCD(it) { return Math.round((Number(it.cantidad)||0) * (Number(it.costoNeto)||0)); }
+function filaItemCompraDirecta(it, i) {
+  it.montoNeto = calcularMontoNetoItemCD(it);
+  return `<div style="border:1px solid var(--line-soft); border-radius:8px; padding:9px 10px; margin-bottom:8px;" data-fila="${i}">
+    <div class="cd-item-grid">
+      <input type="text" id="cdCodigo${i}" value="${it.codigo||''}" placeholder="Código (opc.)" oninput="_cdEditItems[${i}].codigo=this.value">
+      <input type="text" id="cdDesc${i}" value="${it.descripcion||''}" placeholder="Ej: 2 prensaestopas M25" oninput="_cdEditItems[${i}].descripcion=this.value">
+      <input type="text" id="cdCant${i}" value="${it.cantidad||1}" oninput="_cdEditItems[${i}].cantidad=this.value; actualizarTotalLineaCD(${i});">
+      <input type="text" id="cdUnidad${i}" value="${it.unidad||'unidad'}" placeholder="Unidad" oninput="_cdEditItems[${i}].unidad=this.value">
+      <input type="text" id="cdCostoNeto${i}" value="${it.costoNeto||0}" placeholder="Costo unit." oninput="_cdEditItems[${i}].costoNeto=this.value; actualizarTotalLineaCD(${i});">
+      <button class="btn btn-sm btn-danger" onclick="quitarFilaItemCompraDirecta(${i})" title="Quitar producto">✕</button>
+    </div>
+    <div id="cdTotalLinea${i}" class="hint" style="text-align:right; margin-top:2px; font-family:'IBM Plex Mono',monospace;">${money(it.montoNeto)}</div>
+  </div>`;
+}
+function encabezadoItemsCompraDirecta() {
+  return `<div class="cd-item-grid cd-item-header">
+    <div>Código</div><div>Descripción</div><div>Cant.</div><div>Unidad</div><div>Costo unit.</div><div></div>
+  </div>`;
+}
+function refrescarItemsCompraDirectaUI() {
+  const cont = document.getElementById('cdItemsContainer');
+  if (!cont) return;
+  cont.innerHTML = (_cdEditItems.length ? encabezadoItemsCompraDirecta() : '') + (_cdEditItems.map(filaItemCompraDirecta).join('') || '<div class="hint">Sin productos — agrega al menos uno.</div>');
+  refrescarTotalCompraDirectaUI();
+}
+function actualizarTotalLineaCD(i) {
+  const it = _cdEditItems[i];
+  if (!it) return;
+  const el = document.getElementById('cdTotalLinea'+i);
+  if (el) el.textContent = money(calcularMontoNetoItemCD(it));
+  refrescarTotalCompraDirectaUI();
+}
+function refrescarTotalCompraDirectaUI() {
+  const el = document.getElementById('cdTotalPreview');
+  if (!el) return;
+  const total = _cdEditItems.reduce((s,it) => s + calcularMontoNetoItemCD(it), 0);
+  el.innerHTML = `Total estimado: <b>${money(total)}</b>` + (total >= MONTO_MAX_COMPRA_DIRECTA ? ` — <span style="color:var(--copper-dark);">⚠ supera el tope recomendado de ${money(MONTO_MAX_COMPRA_DIRECTA)}, considera Cotización normal</span>` : '');
+}
+function agregarFilaItemCompraDirecta() {
+  _cdEditItems.push({codigo:'', descripcion:'', cantidad:1, unidad:'unidad', costoNeto:0, montoNeto:0});
+  refrescarItemsCompraDirectaUI();
+}
+function quitarFilaItemCompraDirecta(i) {
+  _cdEditItems.splice(i,1);
+  if (!_cdEditItems.length) _cdEditItems.push({codigo:'', descripcion:'', cantidad:1, unidad:'unidad', costoNeto:0, montoNeto:0});
+  refrescarItemsCompraDirectaUI();
+}
 function modalSolicitarCompraDirecta(pid) {
+  _cdEditItems = [{codigo:'', descripcion:'', cantidad:1, unidad:'unidad', costoNeto:0, montoNeto:0}];
   openModal(`
     <div class="modal-head"><h3>Solicitar compra directa</h3><button class="close-x" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
-      <div class="hint" style="margin-bottom:10px;">Para compras rápidas sin cotización formal (ej. ferretería) — queda pendiente de autorización del Jefe de Proyecto antes de poder registrarse.</div>
-      <label class="field-label">¿Qué necesitas comprar?</label>
-      <input type="text" id="cdDescripcion" placeholder="Ej: 2 prensaestopas M25">
+      <div class="hint" style="margin-bottom:10px;">Para compras rápidas sin cotización formal (ej. ferretería) — queda pendiente de autorización del Jefe de Proyecto antes de poder registrarse. Puedes agregar varios productos a la misma solicitud.</div>
       <label class="field-label">Motivo — por qué es directa y urgente</label>
       <textarea id="cdMotivo" rows="2" placeholder="Ej: falta en bodega y detiene el armado del tablero"></textarea>
-      <label class="field-label">Monto estimado</label>
-      <input type="text" id="cdMonto" placeholder="Ej: 15000" oninput="avisoMontoCompraDirecta()">
-      <div id="cdAvisoMonto"></div>
+      <div class="divider"></div>
+      <div class="flex-between"><label class="field-label" style="margin:0;">Productos a comprar</label><button class="btn btn-sm" onclick="agregarFilaItemCompraDirecta()">+ Agregar producto</button></div>
+      <div id="cdItemsContainer" style="margin-top:8px;"></div>
+      <div id="cdTotalPreview" class="hint" style="margin-top:8px; font-weight:600;"></div>
     </div>
     <div class="modal-foot">
       <button class="btn" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-primary" onclick="
-        const ok = solicitarCompraDirecta('${pid}', { descripcion:document.getElementById('cdDescripcion').value, motivo:document.getElementById('cdMotivo').value, montoEstimado:document.getElementById('cdMonto').value });
+        const ok = solicitarCompraDirecta('${pid}', { motivo:document.getElementById('cdMotivo').value, items:_cdEditItems });
         if(ok){ closeModal(); renderAll(); }">Enviar solicitud</button>
     </div>
-  `);
-}
-function avisoMontoCompraDirecta() {
-  const el = document.getElementById('cdAvisoMonto');
-  if (!el) return;
-  const monto = Number(document.getElementById('cdMonto').value)||0;
-  el.innerHTML = monto >= MONTO_MAX_COMPRA_DIRECTA
-    ? `<div class="hint" style="color:var(--copper-dark); margin-top:6px;">⚠ Este monto es igual o mayor al tope recomendado de ${money(MONTO_MAX_COMPRA_DIRECTA)} para compra directa — considera si no debería ir por Cotización normal. Aun así puedes solicitarla.</div>`
-    : '';
+  `, 780);
+  refrescarItemsCompraDirectaUI();
 }
 function modalAutorizarCompraDirecta(pid, id) {
   const p = proy(pid);
@@ -3341,9 +3441,14 @@ function modalAutorizarCompraDirecta(pid, id) {
   openModal(`
     <div class="modal-head"><h3>Autorizar solicitud</h3><button class="close-x" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
-      <p><b>${cd.descripcion}</b></p>
       <p class="small muted">${cd.motivo||'sin motivo detallado'}</p>
-      <p class="small">Monto estimado: <b>${money(cd.montoEstimado)}</b> · Solicitado por ${cd.solicitadoPor} el ${cd.fechaSolicitud}</p>
+      <div class="table-wrap" style="margin:8px 0;">
+        <table>
+          <tr><th>Código</th><th>Producto</th><th>Cant.</th><th>Costo unit.</th><th>Total</th></tr>
+          ${(cd.items||[]).map(it => `<tr><td class="mono small muted">${it.codigo||'—'}</td><td class="small">${it.descripcion}</td><td class="small">${it.cantidad} ${it.unidad}</td><td class="mono small">${money(it.costoNeto)}</td><td class="mono small">${money(it.montoNeto)}</td></tr>`).join('')}
+        </table>
+      </div>
+      <p class="small">Monto estimado total: <b>${money(cd.montoEstimado)}</b> · Solicitado por ${cd.solicitadoPor} el ${cd.fechaSolicitud}</p>
       ${cd.montoEstimado>=MONTO_MAX_COMPRA_DIRECTA ? `<div class="hint" style="color:var(--danger);">⚠ Supera el tope recomendado de ${money(MONTO_MAX_COMPRA_DIRECTA)} para compra directa.</div>` : ''}
       <label class="field-label">Comentario (obligatorio si rechazas)</label>
       <textarea id="cdComentarioAut" rows="2" placeholder="Ej: aprobado, es realmente urgente / rechazado, usar cotización normal"></textarea>
@@ -3356,7 +3461,7 @@ function modalAutorizarCompraDirecta(pid, id) {
         const ok = autorizarCompraDirecta('${pid}','${id}', true, document.getElementById('cdComentarioAut').value);
         if(ok){ closeModal(); renderAll(); }">Autorizar</button>
     </div>
-  `);
+  `, 700);
 }
 function togglePagoCompraDirecta() {
   const m = document.getElementById('cdMetodoPago').value;
@@ -3368,8 +3473,14 @@ function modalRegistrarCompraDirecta(pid, id) {
   const cd = p.comprasDirectas.find(x=>x.id===id);
   if (!cd) return;
   openModal(`
-    <div class="modal-head"><h3>Registrar compra — ${cd.descripcion}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>Registrar compra</h3><button class="close-x" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
+      <div class="table-wrap" style="margin-bottom:12px;">
+        <table>
+          <tr><th>Producto</th><th>Cant.</th><th>Estimado</th></tr>
+          ${(cd.items||[]).map(it => `<tr><td class="small">${it.descripcion}</td><td class="small">${it.cantidad} ${it.unidad}</td><td class="mono small">${money(it.montoNeto)}</td></tr>`).join('')}
+        </table>
+      </div>
       <label class="field-label">Método de pago</label>
       <select id="cdMetodoPago" onchange="togglePagoCompraDirecta()">
         <option value="">Selecciona…</option>
@@ -3396,7 +3507,7 @@ function modalRegistrarCompraDirecta(pid, id) {
       <button class="btn" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-primary" id="cdGuardarBtn" onclick="registrarCompraDirectaConArchivo('${pid}','${id}')">Registrar compra</button>
     </div>
-  `);
+  `, 620);
 }
 async function registrarCompraDirectaConArchivo(pid, id) {
   const p = proy(pid);
@@ -3447,9 +3558,9 @@ function renderComprasDirectas() {
       <div class="flex-between" style="flex-wrap:wrap; gap:8px;">
         <div>
           <div class="mono muted small">${cd.id} · ${cd.fechaSolicitud}</div>
-          <h3 style="margin-top:2px;">${cd.descripcion}</h3>
+          <h3 style="margin-top:2px;">${resumenItemsCompraDirecta(cd.items, 90)}</h3>
           <p class="hint" style="margin-top:2px;">${cd.motivo||'sin motivo detallado'}</p>
-          <p class="small">Solicitado por <b>${cd.solicitadoPor}</b> · Estimado ${money(cd.montoEstimado)}</p>
+          <p class="small">Solicitado por <b>${cd.solicitadoPor}</b> · ${cd.items.length} producto(s) · Estimado ${money(cd.montoEstimado)}</p>
           ${cd.estado!=="Solicitada" ? `<p class="small muted">${cd.estado==="Rechazada"?"Rechazada":"Autorizada"} por ${cd.autorizadoPor} el ${cd.fechaAutorizacion}${cd.comentarioAutorizacion?': "'+cd.comentarioAutorizacion+'"':''}</p>` : ''}
           ${cd.estado==="Registrada" ? `<p class="small">Compra real: <b>${money(cd.montoReal)}</b> · ${cd.metodoPago}${cd.metodoPago==="Tarjeta"?(' · voucher '+cd.codigoVoucher):(' · factura/boleta '+cd.numeroFactura)} · ${cd.proveedor} · ${cd.fechaCompra}${cd.archivoComprobante?` · <a href="${cd.archivoComprobante}" target="_blank" rel="noopener">[ver comprobante]</a>`:''}</p>` : ''}
         </div>
@@ -5493,6 +5604,15 @@ function renderCopiloto() {
   </div>
 
   <div class="ai-note" style="margin-bottom:16px;">🤖 <b>Gobernanza de IA (PRD §10.4):</b> la IA asiste, no decide. Ningún hallazgo notifica a Gerencia ni cierra una tarea sin revisión humana explícita.</div>
+
+  <div class="card" style="margin-bottom:18px;">
+    <div><h3>Pregúntale al Copiloto</h3><p class="small muted" style="margin-top:2px;">Responde como ingeniero eléctrico senior y Project Manager, con los datos reales de este proyecto — no reglas fijas, una IA real (Gemini).</p></div>
+    <div class="flex-gap" style="margin-top:10px;">
+      <input type="text" id="copilotoPregunta" placeholder="Ej: ¿cómo viene el proyecto? ¿qué debería priorizar esta semana?" style="flex:1;" onkeydown="if(event.key==='Enter') preguntarCopilotoIA('${p.id}')">
+      <button class="btn btn-primary" id="copilotoBtn" onclick="preguntarCopilotoIA('${p.id}')">Preguntar</button>
+    </div>
+    <div id="copilotoChatLog" style="margin-top:12px; max-height:340px; overflow-y:auto;"></div>
+  </div>
 
   <div class="card" style="margin-bottom:18px;">
     <div class="flex-between">

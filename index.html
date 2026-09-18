@@ -481,7 +481,7 @@ const notificacionesTokensRef = database.ref('notificacionesTokens');
    Firebase Console → Configuración del proyecto → Cloud Messaging →
    "Certificados push web" → Generar par de claves. Sin esto, pedir el
    token de notificación falla. */
-const VAPID_KEY_FCM = "PENDIENTE_REEMPLAZAR_CON_LA_CLAVE_VAPID_REAL";
+const VAPID_KEY_FCM = "BNbxZ09ZIGGCKPxngZJFoq56bjRqnLkK5x43HJjyG-K_1oq3Ov8f0WJhi57VRF18SHfEblKKg4-lsenaiz7hzK8";
 let messaging = null;
 try { messaging = firebase.messaging(); } catch(e) { console.warn("Este navegador no soporta notificaciones push.", e); }
 let miPresenciaRef = null;

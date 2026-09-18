@@ -5737,13 +5737,15 @@ const RESPALDO_MAX_GUARDADOS = 4;
    quién) — eso vive en el pequeño proxy que se decida más adelante,
    no en el navegador.
    ===================================================================== */
+let _swRegistration = null;
 async function registrarServiceWorker() {
   if (!("serviceWorker" in navigator)) return; // navegador viejo, sin soporte
   try {
-    const registro = await navigator.serviceWorker.register("firebase-messaging-sw.js");
-    if (messaging) {
-      try { messaging.useServiceWorker(registro); } catch(e) {}
-    }
+    // Ruta relativa a propósito: así se registra bajo la carpeta real
+    // del sitio (ej. alutipo.github.io/PMO/...) y no en la raíz del
+    // dominio, que es donde Firebase Messaging intenta registrar uno
+    // propio si no le pasamos el nuestro explícitamente.
+    _swRegistration = await navigator.serviceWorker.register("firebase-messaging-sw.js");
   } catch (e) {
     console.warn("No se pudo registrar el service worker:", e);
   }
@@ -5758,13 +5760,15 @@ async function activarNotificaciones() {
     toast("Falta configurar la clave VAPID de Firebase antes de poder activar esto — avísale a quien administra la cuenta.", "danger");
     return;
   }
+  if (!_swRegistration) { await registrarServiceWorker(); }
+  if (!_swRegistration) { toast("No se pudo preparar el service worker en este navegador.", "danger"); return; }
   try {
     const permiso = await Notification.requestPermission();
     if (permiso !== "granted") {
       toast("No se activaron las notificaciones — el permiso quedó \""+permiso+"\". Puedes activarlo después desde la configuración del sitio en tu navegador.", "danger");
       return;
     }
-    const token = await messaging.getToken({ vapidKey: VAPID_KEY_FCM });
+    const token = await messaging.getToken({ vapidKey: VAPID_KEY_FCM, serviceWorkerRegistration: _swRegistration });
     if (!token) { toast("No se pudo obtener el token de notificación.", "danger"); return; }
     await notificacionesTokensRef.child(sanitizarEmailKey(usuarioAuth?.email||DB.usuario)).set({
       token, nombre: DB.usuario, rol: DB.role, actualizado: new Date().toISOString(),

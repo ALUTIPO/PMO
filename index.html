@@ -5776,6 +5776,7 @@ async function activarNotificaciones() {
     });
     toast("Notificaciones activadas en este dispositivo.", "ok");
     actualizarBotonNotificaciones();
+    activarEscuchaMensajesEnPrimerPlano();
   } catch (e) {
     toast("No se pudieron activar las notificaciones: "+(e.message||e), "danger");
   }
@@ -5789,8 +5790,11 @@ function actualizarBotonNotificaciones() {
 }
 /* Mientras la app está abierta y al frente, FCM no muestra la
    notificación del sistema sola — hay que mostrarla nosotros mismos
-   (acá, como un toast), porque la persona ya está mirando la pantalla. */
-if (messaging) {
+   (como un toast). Se activa recién dentro de activarNotificaciones(),
+   no acá arriba — así no se dispara ningún intento de la SDK de
+   Messaging mientras la persona no haya activado nada. */
+function activarEscuchaMensajesEnPrimerPlano() {
+  if (!messaging) return;
   try {
     messaging.onMessage(function (payload) {
       const titulo = (payload.notification && payload.notification.title) || "Alutipo PMO";

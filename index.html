@@ -12,7 +12,10 @@
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-storage-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-compat.js"></script>
+<!-- firebase-messaging-compat.js se carga bajo demanda, solo si se activan
+     notificaciones — ver cargarSdkMessaging() más abajo. Con solo tener este
+     script presente en la página, Firebase lo registra e intenta inicializarlo
+     solo, aunque nuestro código nunca lo use — así se evita del todo. -->
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-functions-compat.js"></script>
 <!-- SheetJS: genera el .xlsx real de exportación de Bodega para Bsale, y del reporte de KPIs -->
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
@@ -448,7 +451,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "1.0";
+const APP_VERSION = "1.1";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -5742,6 +5745,16 @@ const RESPALDO_MAX_GUARDADOS = 4;
    no en el navegador.
    ===================================================================== */
 let _swRegistration = null;
+function cargarSdkMessaging() {
+  return new Promise((resolve, reject) => {
+    if (typeof firebase !== "undefined" && firebase.messaging) { resolve(); return; }
+    const s = document.createElement("script");
+    s.src = "https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-compat.js";
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error("No se pudo cargar el módulo de notificaciones."));
+    document.head.appendChild(s);
+  });
+}
 async function registrarServiceWorker() {
   if (!("serviceWorker" in navigator)) return; // navegador viejo, sin soporte
   try {
@@ -5760,7 +5773,10 @@ async function registrarServiceWorker() {
    o la mayoría de los navegadores lo bloquean o lo ignoran. */
 async function activarNotificaciones() {
   if (!messaging) {
-    try { messaging = firebase.messaging(); }
+    try {
+      await cargarSdkMessaging();
+      messaging = firebase.messaging();
+    }
     catch (e) { toast("Este navegador no soporta notificaciones push.", "danger"); return; }
   }
   if (VAPID_KEY_FCM.startsWith("PENDIENTE")) {

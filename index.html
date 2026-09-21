@@ -451,7 +451,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "1.4";
+const APP_VERSION = "1.5";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -895,14 +895,15 @@ function clonePersonalSeed() { return JSON.parse(JSON.stringify(PERSONAL_SEED));
 const DIAS_OPCIONES = ["Lunes a viernes","Lunes a jueves","Lunes a miércoles","Lunes y martes","Solo lunes","Fin de semana","Personalizado"];
 
 /* Flota de camionetas — compartida a nivel de empresa, igual criterio que
-   Personal y Proveedores. Se asignan a un proyecto por rango de fechas,
-   igual que una persona, pero como registro independiente (una
-   camioneta no es "de" nadie en particular). */
+   Personal y Proveedores. La camioneta se elige DENTRO de la asignación
+   de cada persona (no es un registro aparte) — por eso acá solo vive el
+   catálogo con su capacidad de pasajeros, que es lo que permite avisar
+   si un vehículo ya está lleno para las fechas que se están asignando. */
 const VEHICULOS_SEED = [
-  {id:"VEH-01", nombre:"Camioneta RAM", patente:"", notas:""},
-  {id:"VEH-02", nombre:"Camioneta Nissan", patente:"", notas:""},
-  {id:"VEH-03", nombre:"Camioneta Hilux 2", patente:"", notas:""},
-  {id:"VEH-04", nombre:"Camioneta Partner nueva", patente:"", notas:""},
+  {id:"VEH-01", nombre:"Camioneta RAM", patente:"", capacidad:4, notas:""},
+  {id:"VEH-02", nombre:"Camioneta Nissan", patente:"", capacidad:4, notas:""},
+  {id:"VEH-03", nombre:"Camioneta Hilux 2", patente:"", capacidad:4, notas:""},
+  {id:"VEH-04", nombre:"Camioneta Partner nueva", patente:"", capacidad:2, notas:""},
 ];
 function cloneVehiculosSeed() { return JSON.parse(JSON.stringify(VEHICULOS_SEED)); }
 
@@ -1049,8 +1050,9 @@ function aplicarEstadoRemoto(data) {
     if (per.area===undefined) per.area = ["Jefe de Producción","Operario"].includes(per.cargo) ? "fabricacion" : "electrico";
   });
   DB.asignaciones = data.asignaciones || [];
-  DB.asignaciones.forEach(a => { if (a.enTerreno===undefined) a.enTerreno = true; });
+  DB.asignaciones.forEach(a => { if (a.enTerreno===undefined) a.enTerreno = true; if (a.vehiculoId===undefined) a.vehiculoId = ""; });
   DB.vehiculos = data.vehiculos && data.vehiculos.length ? data.vehiculos : (DB.vehiculos.length ? DB.vehiculos : cloneVehiculosSeed());
+  DB.vehiculos.forEach(v => { if (v.capacidad===undefined) v.capacidad = 4; });
   DB.asignacionesVehiculos = data.asignacionesVehiculos || [];
   DB.bodegaGeneral = data.bodegaGeneral || [];
   DB.updatedAt = data.updatedAt || null;
@@ -1899,6 +1901,14 @@ function eliminarPersonal(id) {
 function rangosSeSuperponen(inicioA, finA, inicioB, finB) {
   return inicioA <= finB && inicioB <= finA;
 }
+/* Cuántas asignaciones de personal ya usan este vehículo en fechas que
+   se cruzan con el rango dado — es la base tanto para la alarma de
+   capacidad como para mostrar "disponible/llena" en el selector. */
+function pasajerosVehiculoEnRango(vehiculoId, fechaInicio, fechaFin, excluirAsignacionId) {
+  if (!vehiculoId) return 0;
+  return DB.asignaciones.filter(a => a.vehiculoId===vehiculoId && a.id!==excluirAsignacionId && rangosSeSuperponen(a.fechaInicio, a.fechaFin, fechaInicio, fechaFin)).length;
+}
+
 function agregarAsignacion(datos) {
   if (!puedeGestionarAsignaciones()) { toast(`Tu rol (${DB.role}) no puede crear asignaciones de personal.`, "danger"); return false; }
   if (!datos.personaId) { toast("Selecciona una persona.", "danger"); return false; }
@@ -1916,11 +1926,20 @@ function agregarAsignacion(datos) {
     toast(`⚠ ${persona?persona.nombre:'Esta persona'} ya tiene asignación(es) que se cruzan en fechas con: ${otrosProyectos}. Se guardó igual — revisa si es intencional.`, "danger");
   }
 
+  if (datos.vehiculoId) {
+    const veh = DB.vehiculos.find(v => v.id === datos.vehiculoId);
+    const ocupados = pasajerosVehiculoEnRango(datos.vehiculoId, datos.fechaInicio, datos.fechaFin, null);
+    if (veh && ocupados >= veh.capacidad) {
+      toast(`🔴 ALARMA: ${veh.nombre} ya tiene ${ocupados}/${veh.capacidad} pasajero(s) asignados en fechas que se cruzan — esta persona lo deja sobrepasado. Se guardó igual, revisa quién va en cada vehículo.`, "danger");
+    }
+  }
+
   const id = "ASIG-"+Math.random().toString(36).slice(2,8).toUpperCase();
   DB.asignaciones.push({
     id, personaId: datos.personaId, proyectoId: datos.proyectoId,
     dias, fechaInicio: datos.fechaInicio, fechaFin: datos.fechaFin, notas: datos.notas||"",
     enTerreno: datos.enTerreno!==undefined ? !!datos.enTerreno : true,
+    vehiculoId: datos.vehiculoId || "",
   });
   registrarHistorial({proyecto:p?p.codigo:"—", accion:"Crear", detalle:`Asignación de personal: ${persona?persona.nombre:datos.personaId} (${dias}, ${datos.fechaInicio} a ${datos.fechaFin})`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
   toast("Asignación registrada.", "ok");
@@ -1932,11 +1951,19 @@ function editarAsignacion(id, datos) {
   const a = DB.asignaciones.find(x => x.id === id);
   if (!a) return false;
   if (datos.fechaFin < datos.fechaInicio) { toast("La fecha de fin no puede ser anterior a la de inicio.", "danger"); return false; }
+  if (datos.vehiculoId) {
+    const veh = DB.vehiculos.find(v => v.id === datos.vehiculoId);
+    const ocupados = pasajerosVehiculoEnRango(datos.vehiculoId, datos.fechaInicio, datos.fechaFin, a.id);
+    if (veh && ocupados >= veh.capacidad) {
+      toast(`🔴 ALARMA: ${veh.nombre} ya tiene ${ocupados}/${veh.capacidad} pasajero(s) asignados en fechas que se cruzan — esta persona lo deja sobrepasado. Se guardó igual, revisa quién va en cada vehículo.`, "danger");
+    }
+  }
   Object.assign(a, {
     personaId: datos.personaId, proyectoId: datos.proyectoId,
     dias: datos.dias==="Personalizado" ? (datos.diasCustom||"Personalizado") : datos.dias,
     fechaInicio: datos.fechaInicio, fechaFin: datos.fechaFin, notas: datos.notas||"",
     enTerreno: !!datos.enTerreno,
+    vehiculoId: datos.vehiculoId || "",
   });
   registrarHistorial({proyecto:"—", accion:"Modificar", detalle:`Asignación de personal editada: ${id}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
   toast("Asignación actualizada.", "ok");
@@ -1956,7 +1983,8 @@ function notificarAsignacionWhatsApp(id) {
   const per = DB.personal.find(x => x.id === a.personaId);
   const p = proy(a.proyectoId);
   if (!per) { toast("No se encontró a la persona.", "danger"); return; }
-  const mensaje = `Hola ${per.nombre.split(' ')[0]}! Te informamos que quedaste asignado al proyecto ${p?p.codigo:''}${p?(' — '+p.nombre):''}.\n\nDías: ${a.dias}\nDesde: ${a.fechaInicio}\nHasta: ${a.fechaFin}${a.notas?`\nNota: ${a.notas}`:''}\n\nCualquier duda, avísanos.`;
+  const veh = a.vehiculoId ? DB.vehiculos.find(v => v.id === a.vehiculoId) : null;
+  const mensaje = `Hola ${per.nombre.split(' ')[0]}! Te informamos que quedaste asignado al proyecto ${p?p.codigo:''}${p?(' — '+p.nombre):''}.\n\nDías: ${a.dias}\nDesde: ${a.fechaInicio}\nHasta: ${a.fechaFin}${veh?`\nCamioneta: ${veh.nombre}`:''}${a.notas?`\nNota: ${a.notas}`:''}\n\nCualquier duda, avísanos.`;
   abrirWhatsApp(per.telefono, mensaje);
 }
 
@@ -1973,7 +2001,7 @@ function agregarVehiculo(datos) {
   if (!puedeGestionarVehiculos()) { toast(`Tu rol (${DB.role}) no puede editar la flota de vehículos.`, "danger"); return false; }
   if (!datos.nombre || !datos.nombre.trim()) { toast("Indica el nombre del vehículo.", "danger"); return false; }
   const id = "VEH-"+Math.random().toString(36).slice(2,7).toUpperCase();
-  DB.vehiculos.push({ id, nombre: datos.nombre.trim(), patente: (datos.patente||"").trim(), notas: (datos.notas||"").trim() });
+  DB.vehiculos.push({ id, nombre: datos.nombre.trim(), patente: (datos.patente||"").trim(), capacidad: Number(datos.capacidad)||4, notas: (datos.notas||"").trim() });
   toast("Vehículo agregado a la flota.", "ok");
   guardarEstado();
   return true;
@@ -1982,15 +2010,15 @@ function editarVehiculo(id, datos) {
   if (!puedeGestionarVehiculos()) { toast(`Tu rol (${DB.role}) no puede editar la flota de vehículos.`, "danger"); return false; }
   const v = DB.vehiculos.find(x => x.id === id);
   if (!v) return false;
-  Object.assign(v, { nombre: datos.nombre||v.nombre, patente: datos.patente!==undefined?datos.patente.trim():v.patente, notas: datos.notas!==undefined?datos.notas.trim():v.notas });
+  Object.assign(v, { nombre: datos.nombre||v.nombre, patente: datos.patente!==undefined?datos.patente.trim():v.patente, capacidad: Number(datos.capacidad)||v.capacidad, notas: datos.notas!==undefined?datos.notas.trim():v.notas });
   toast("Vehículo actualizado.", "ok");
   guardarEstado();
   return true;
 }
 function eliminarVehiculo(id) {
   if (!puedeGestionarVehiculos()) { toast(`Tu rol (${DB.role}) no puede eliminar vehículos.`, "danger"); return; }
-  const enUso = DB.asignacionesVehiculos.some(a => a.vehiculoId === id);
-  if (enUso) { toast("No puedes eliminar este vehículo — tiene asignaciones registradas. Elimínalas primero.", "danger"); return; }
+  const enUso = DB.asignaciones.some(a => a.vehiculoId === id);
+  if (enUso) { toast("No puedes eliminar este vehículo — hay asignaciones de personal que lo usan. Quítaselo a esas asignaciones primero.", "danger"); return; }
   DB.vehiculos = DB.vehiculos.filter(x => x.id !== id);
   toast("Vehículo eliminado de la flota.", "ok");
   guardarEstado();
@@ -2005,6 +2033,8 @@ function modalVehiculoForm(id) {
       <input type="text" id="vehNombre" value="${v?v.nombre:''}" placeholder="Ej: Camioneta Ranger">
       <label class="field-label">Patente (opcional)</label>
       <input type="text" id="vehPatente" value="${v?v.patente||'':''}" placeholder="Ej: ABCD-12">
+      <label class="field-label">Capacidad de pasajeros</label>
+      <input type="text" id="vehCapacidad" value="${v?v.capacidad:4}" placeholder="Ej: 4">
       <label class="field-label">Notas</label>
       <textarea id="vehNotas" rows="2">${v?v.notas||'':''}</textarea>
     </div>
@@ -2012,96 +2042,9 @@ function modalVehiculoForm(id) {
       ${v ? `<button class="btn btn-danger" onclick="eliminarVehiculo('${v.id}'); closeModal(); renderAll();">Eliminar</button>` : ''}
       <button class="btn" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-primary" onclick="
-        const d = { nombre: document.getElementById('vehNombre').value, patente: document.getElementById('vehPatente').value, notas: document.getElementById('vehNotas').value };
+        const d = { nombre: document.getElementById('vehNombre').value, patente: document.getElementById('vehPatente').value, capacidad: document.getElementById('vehCapacidad').value, notas: document.getElementById('vehNotas').value };
         const ok = ${v ? `editarVehiculo('${v.id}', d)` : `agregarVehiculo(d)`};
         if(ok){ closeModal(); renderAll(); }">${v?'Guardar':'Agregar'}</button>
-    </div>
-  `);
-}
-
-function agregarAsignacionVehiculo(datos) {
-  if (!puedeGestionarVehiculos()) { toast(`Tu rol (${DB.role}) no puede asignar vehículos.`, "danger"); return false; }
-  if (!datos.vehiculoId) { toast("Selecciona un vehículo.", "danger"); return false; }
-  if (!datos.proyectoId) { toast("Selecciona un proyecto.", "danger"); return false; }
-  if (!datos.fechaInicio || !datos.fechaFin) { toast("Indica fecha de inicio y de fin.", "danger"); return false; }
-  if (datos.fechaFin < datos.fechaInicio) { toast("La fecha de fin no puede ser anterior a la de inicio.", "danger"); return false; }
-  const veh = DB.vehiculos.find(x => x.id === datos.vehiculoId);
-  const p = proy(datos.proyectoId);
-  const choques = DB.asignacionesVehiculos.filter(a => a.vehiculoId===datos.vehiculoId && rangosSeSuperponen(a.fechaInicio, a.fechaFin, datos.fechaInicio, datos.fechaFin));
-  if (choques.length) {
-    const otros = choques.map(a => proy(a.proyectoId)?.codigo||a.proyectoId).join(", ");
-    toast(`⚠ ${veh?veh.nombre:'Este vehículo'} ya está asignado en fechas que se cruzan con: ${otros}. Se guardó igual — revisa si es intencional.`, "danger");
-  }
-  const id = "ASIGVEH-"+Math.random().toString(36).slice(2,8).toUpperCase();
-  DB.asignacionesVehiculos.push({
-    id, vehiculoId: datos.vehiculoId, proyectoId: datos.proyectoId,
-    dias: datos.dias==="Personalizado" ? (datos.diasCustom||"Personalizado") : datos.dias,
-    fechaInicio: datos.fechaInicio, fechaFin: datos.fechaFin, notas: datos.notas||"",
-  });
-  registrarHistorial({proyecto:p?p.codigo:"—", accion:"Crear", detalle:`Vehículo asignado: ${veh?veh.nombre:datos.vehiculoId} (${datos.fechaInicio} a ${datos.fechaFin})`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
-  toast("Asignación de vehículo registrada.", "ok");
-  guardarEstado();
-  return true;
-}
-function editarAsignacionVehiculo(id, datos) {
-  if (!puedeGestionarVehiculos()) { toast(`Tu rol (${DB.role}) no puede editar asignaciones de vehículos.`, "danger"); return false; }
-  const a = DB.asignacionesVehiculos.find(x => x.id === id);
-  if (!a) return false;
-  if (datos.fechaFin < datos.fechaInicio) { toast("La fecha de fin no puede ser anterior a la de inicio.", "danger"); return false; }
-  Object.assign(a, {
-    vehiculoId: datos.vehiculoId, proyectoId: datos.proyectoId,
-    dias: datos.dias==="Personalizado" ? (datos.diasCustom||"Personalizado") : datos.dias,
-    fechaInicio: datos.fechaInicio, fechaFin: datos.fechaFin, notas: datos.notas||"",
-  });
-  toast("Asignación actualizada.", "ok");
-  guardarEstado();
-  return true;
-}
-function eliminarAsignacionVehiculo(id) {
-  if (!puedeGestionarVehiculos()) { toast(`Tu rol (${DB.role}) no puede eliminar asignaciones.`, "danger"); return; }
-  DB.asignacionesVehiculos = DB.asignacionesVehiculos.filter(x => x.id !== id);
-  toast("Asignación eliminada.", "ok");
-  guardarEstado();
-}
-function modalAsignacionVehiculoForm(id) {
-  if (!puedeGestionarVehiculos()) { toast(`Tu rol (${DB.role}) no puede asignar vehículos.`, "danger"); return; }
-  const a = id ? DB.asignacionesVehiculos.find(x => x.id === id) : null;
-  openModal(`
-    <div class="modal-head"><h3>${a?'Editar':'Nueva'} asignación de vehículo</h3><button class="close-x" onclick="closeModal()">✕</button></div>
-    <div class="modal-body">
-      <label class="field-label">Vehículo</label>
-      <select id="avVehiculo">${DB.vehiculos.map(v => `<option value="${v.id}" ${a&&a.vehiculoId===v.id?'selected':''}>${v.nombre}${v.patente?(' · '+v.patente):''}</option>`).join('')}</select>
-      <label class="field-label">Proyecto</label>
-      <select id="avProyecto">${DB.proyectos.map(p => `<option value="${p.id}" ${a&&a.proyectoId===p.id?'selected':''}>${p.codigo} — ${p.nombre}</option>`).join('')}</select>
-      <label class="field-label">Días</label>
-      <select id="avDias" onchange="document.getElementById('avDiasCustomWrap').style.display=this.value==='Personalizado'?'block':'none';">
-        ${DIAS_OPCIONES.map(d => `<option value="${d}" ${a&&a.dias===d?'selected':''}>${d}</option>`).join('')}
-      </select>
-      <div id="avDiasCustomWrap" style="display:${a&&!DIAS_OPCIONES.includes(a.dias)?'block':'none'};">
-        <input type="text" id="avDiasCustom" value="${a&&!DIAS_OPCIONES.includes(a.dias)?a.dias:''}" placeholder="Ej: Martes a sábado">
-      </div>
-      <div class="grid grid-2" style="gap:10px;">
-        <div><label class="field-label">Fecha inicio</label><input type="date" id="avFechaInicio" value="${a?a.fechaInicio:hoyISO()}"></div>
-        <div><label class="field-label">Fecha fin</label><input type="date" id="avFechaFin" value="${a?a.fechaFin:hoyISO()}"></div>
-      </div>
-      <label class="field-label">Notas</label>
-      <textarea id="avNotas" rows="2">${a?a.notas||'':''}</textarea>
-    </div>
-    <div class="modal-foot">
-      ${a ? `<button class="btn btn-danger" onclick="eliminarAsignacionVehiculo('${a.id}'); closeModal(); renderAll();">Eliminar</button>` : ''}
-      <button class="btn" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-primary" onclick="
-        const d = {
-          vehiculoId: document.getElementById('avVehiculo').value,
-          proyectoId: document.getElementById('avProyecto').value,
-          dias: document.getElementById('avDias').value,
-          diasCustom: document.getElementById('avDiasCustom') ? document.getElementById('avDiasCustom').value : '',
-          fechaInicio: document.getElementById('avFechaInicio').value,
-          fechaFin: document.getElementById('avFechaFin').value,
-          notas: document.getElementById('avNotas').value,
-        };
-        const ok = ${a ? `editarAsignacionVehiculo('${a.id}', d)` : `agregarAsignacionVehiculo(d)`};
-        if(ok){ closeModal(); renderAll(); }">${a?'Guardar':'Asignar'}</button>
     </div>
   `);
 }
@@ -4475,11 +4418,13 @@ function renderPersonal() {
   <div class="page-head">
     <div>
       <h1>Personal</h1>
-      <div class="page-desc">Dotación de la empresa y sus asignaciones por rango de fechas a cada proyecto — sirve de respaldo para cruzar horas trabajadas, horas extra, o cualquier revisión administrativa posterior.</div>
+      <div class="page-desc">Dotación de la empresa, calendario semanal, y asignaciones por rango de fechas a cada proyecto (con camioneta si corresponde) — sirve de respaldo para cruzar horas trabajadas, horas extra, o cualquier revisión administrativa posterior.</div>
     </div>
   </div>
 
-  <div class="section-label">Dotación</div>
+  ${renderCalendarioSemanal()}
+
+  <div class="section-label" style="margin-top:20px;">Dotación</div>
   <div class="table-wrap" style="margin-bottom:8px;">
     <table>
       <tr><th>Nombre</th><th>Cargo</th><th>Área</th><th>Teléfono</th><th>Tipo</th><th>Notas</th>${puedeRoster?'<th></th>':''}</tr>
@@ -4498,7 +4443,7 @@ function renderPersonal() {
   </div>
   ${puedeRoster ? `<button class="btn btn-sm" onclick="modalPersonalForm()">+ Agregar persona</button>` : ''}
 
-  <div class="section-label">Asignaciones por rango de fechas</div>
+  <div class="section-label" style="margin-top:20px;">Asignaciones por rango de fechas</div>
   <div class="flex-gap" style="margin-bottom:10px; flex-wrap:wrap;">
     <select onchange="filtroAsignacionProyecto=this.value; renderAll();" style="font-size:12.5px;padding:7px 10px;border-radius:7px;border:1px solid var(--line);background:var(--card)">
       <option value="todos" ${filtroAsignacionProyecto==='todos'?'selected':''}>Todos los proyectos</option>
@@ -4508,10 +4453,11 @@ function renderPersonal() {
   </div>
   <div class="table-wrap">
     <table>
-      <tr><th>Persona</th><th>Cargo</th><th>Proyecto</th><th>Días</th><th>Inicio</th><th>Fin</th><th>En terreno</th><th>Notas</th>${puedeAsig?'<th></th>':''}</tr>
+      <tr><th>Persona</th><th>Cargo</th><th>Proyecto</th><th>Días</th><th>Inicio</th><th>Fin</th><th>En terreno</th><th>Camioneta</th><th>Notas</th>${puedeAsig?'<th></th>':''}</tr>
       ${asignacionesFiltradas.length ? asignacionesFiltradas.map(a => {
         const per = DB.personal.find(x => x.id === a.personaId);
         const proj = proy(a.proyectoId);
+        const veh = a.vehiculoId ? DB.vehiculos.find(v => v.id === a.vehiculoId) : null;
         const vigente = a.fechaInicio <= hoyISO() && hoyISO() <= a.fechaFin;
         return `<tr>
           <td class="small"><b>${per?per.nombre:'(persona eliminada)'}</b>${vigente?' <span class="badge b-verde" style="margin-left:4px;"><span class="dot"></span>Vigente</span>':''}</td>
@@ -4521,6 +4467,7 @@ function renderPersonal() {
           <td class="mono small">${a.fechaInicio}</td>
           <td class="mono small">${a.fechaFin}</td>
           <td>${a.enTerreno ? '<span class="badge b-verde"><span class="dot"></span>Terreno</span>' : '<span class="badge b-gris"><span class="dot"></span>Taller/oficina</span>'}</td>
+          <td class="small">${veh ? veh.nombre : '<span class="muted">—</span>'}</td>
           <td class="small muted">${a.notas||'—'}</td>
           ${puedeAsig ? `<td class="flex-gap">
             <button class="btn btn-sm" onclick="modalAsignacionForm('${a.id}')">Editar</button>
@@ -4528,18 +4475,19 @@ function renderPersonal() {
             <button class="btn btn-sm btn-danger" onclick="if(confirm('¿Eliminar esta asignación?')){ eliminarAsignacion('${a.id}'); renderAll(); }">✕</button>
           </td>` : ''}
         </tr>`;
-      }).join('') : `<tr><td colspan="${puedeAsig?9:8}"><div class="empty-state">Sin asignaciones registradas${filtroAsignacionProyecto!=='todos'?' para este proyecto':''}.</div></td></tr>`}
+      }).join('') : `<tr><td colspan="${puedeAsig?10:9}"><div class="empty-state">Sin asignaciones registradas${filtroAsignacionProyecto!=='todos'?' para este proyecto':''}.</div></td></tr>`}
     </table>
   </div>
 
-  <div class="section-label">Flota de vehículos</div>
+  <div class="section-label" style="margin-top:20px;">Flota de vehículos</div>
   <div class="table-wrap" style="margin-bottom:8px;">
     <table>
-      <tr><th>Vehículo</th><th>Patente</th><th>Notas</th>${puedeAsig?'<th></th>':''}</tr>
+      <tr><th>Vehículo</th><th>Patente</th><th>Capacidad</th><th>Notas</th>${puedeAsig?'<th></th>':''}</tr>
       ${DB.vehiculos.map(v => `
         <tr>
           <td class="small"><b>${v.nombre}</b></td>
           <td class="mono small">${v.patente||'<span class="muted">sin registrar</span>'}</td>
+          <td class="mono small">${v.capacidad} pasajero(s)</td>
           <td class="small muted">${v.notas||'—'}</td>
           ${puedeAsig ? `<td><button class="btn btn-sm" onclick="modalVehiculoForm('${v.id}')">Editar</button></td>` : ''}
         </tr>
@@ -4547,35 +4495,7 @@ function renderPersonal() {
     </table>
   </div>
   ${puedeAsig ? `<button class="btn btn-sm" onclick="modalVehiculoForm()">+ Agregar vehículo</button>` : ''}
-
-  <div class="section-label" style="margin-top:20px;">Asignación de vehículos por rango de fechas</div>
-  <div class="flex-gap" style="margin-bottom:10px;">
-    ${puedeAsig ? `<button class="btn btn-primary btn-sm" onclick="modalAsignacionVehiculoForm()">+ Asignar vehículo</button>` : ''}
-  </div>
-  <div class="table-wrap">
-    <table>
-      <tr><th>Vehículo</th><th>Proyecto</th><th>Días</th><th>Inicio</th><th>Fin</th><th>Notas</th>${puedeAsig?'<th></th>':''}</tr>
-      ${DB.asignacionesVehiculos.length ? DB.asignacionesVehiculos.slice().sort((a,b)=>b.fechaInicio.localeCompare(a.fechaInicio)).map(a => {
-        const veh = DB.vehiculos.find(x => x.id === a.vehiculoId);
-        const proj = proy(a.proyectoId);
-        const vigente = a.fechaInicio <= hoyISO() && hoyISO() <= a.fechaFin;
-        return `<tr>
-          <td class="small"><b>${veh?veh.nombre:'(vehículo eliminado)'}</b>${vigente?' <span class="badge b-verde" style="margin-left:4px;"><span class="dot"></span>Vigente</span>':''}</td>
-          <td class="small">${proj?proj.codigo:'(proyecto eliminado)'}</td>
-          <td class="small">${a.dias}</td>
-          <td class="mono small">${a.fechaInicio}</td>
-          <td class="mono small">${a.fechaFin}</td>
-          <td class="small muted">${a.notas||'—'}</td>
-          ${puedeAsig ? `<td class="flex-gap">
-            <button class="btn btn-sm" onclick="modalAsignacionVehiculoForm('${a.id}')">Editar</button>
-            <button class="btn btn-sm btn-danger" onclick="if(confirm('¿Eliminar esta asignación?')){ eliminarAsignacionVehiculo('${a.id}'); renderAll(); }">✕</button>
-          </td>` : ''}
-        </tr>`;
-      }).join('') : `<tr><td colspan="${puedeAsig?7:6}"><div class="empty-state">Sin vehículos asignados todavía.</div></td></tr>`}
-    </table>
-  </div>
-
-  ${renderCalendarioSemanal()}
+  <div class="hint" style="margin-top:6px;">La camioneta se asigna directo dentro de la asignación de cada persona (botón "+ Nueva asignación" arriba) — acá solo se administra la flota y su capacidad.</div>
 
   ${renderVistaPorTrabajador()}
   `;
@@ -4620,10 +4540,13 @@ function renderCalendarioSemanal() {
   }
   function celdaVehiculo(veh, dia) {
     const diaISO = fechaISOLocal(dia);
-    const asig = DB.asignacionesVehiculos.find(a => a.vehiculoId===veh.id && a.fechaInicio<=diaISO && diaISO<=a.fechaFin);
-    if (!asig) return '<td class="mono small muted" style="text-align:center;">—</td>';
-    const proj = proy(asig.proyectoId);
-    return `<td class="small" style="text-align:center; background:var(--copper-light);">${proj?proj.codigo:'?'}</td>`;
+    const asigs = DB.asignaciones.filter(a => a.vehiculoId===veh.id && a.fechaInicio<=diaISO && diaISO<=a.fechaFin);
+    if (!asigs.length) return '<td class="mono small muted" style="text-align:center;">—</td>';
+    const proyectosUnicos = [...new Set(asigs.map(a => { const p = proy(a.proyectoId); return p?p.codigo:'?'; }))];
+    const ocupados = asigs.length;
+    const llena = ocupados >= (veh.capacidad||99);
+    const nombres = asigs.map(a => { const per = DB.personal.find(p=>p.id===a.personaId); return per?per.nombre:'?'; }).join(', ');
+    return `<td class="small" style="text-align:center; ${llena?'background:#f9e2db; color:#b3452c; font-weight:700;':'background:var(--copper-light);'}" title="${nombres}">${proyectosUnicos.join('/')} (${ocupados}/${veh.capacidad})</td>`;
   }
 
   return `
@@ -4739,6 +4662,32 @@ function modalPersonalForm(id) {
   `);
 }
 
+/* Genera las <option> del selector de camioneta, mostrando cuántos
+   pasajeros ya tiene cada vehículo en el rango de fechas dado — en
+   rojo si queda llena. excluirAsignacionId es la asignación que se
+   está editando (para no contarse a sí misma como "ya ocupando" un
+   cupo). */
+function opcionesVehiculoAsignacion(fechaInicio, fechaFin, vehiculoSeleccionado, excluirAsignacionId) {
+  const base = '<option value="">— sin camioneta —</option>';
+  if (!fechaInicio || !fechaFin) {
+    return base + DB.vehiculos.map(v => `<option value="${v.id}" ${vehiculoSeleccionado===v.id?'selected':''}>${v.nombre} (capacidad ${v.capacidad}) — indica las fechas para ver disponibilidad</option>`).join('');
+  }
+  return base + DB.vehiculos.map(v => {
+    const ocupados = pasajerosVehiculoEnRango(v.id, fechaInicio, fechaFin, excluirAsignacionId);
+    const llena = ocupados >= v.capacidad;
+    const etiqueta = `${v.nombre} — ${ocupados}/${v.capacidad} ${llena ? '🔴 LLENA' : '· disponible'}`;
+    return `<option value="${v.id}" ${vehiculoSeleccionado===v.id?'selected':''} style="${llena?'color:#b3452c;font-weight:600;':''}">${etiqueta}</option>`;
+  }).join('');
+}
+function actualizarOpcionesVehiculoAsignacion(excluirAsignacionId) {
+  const sel = document.getElementById('asigVehiculo');
+  if (!sel) return;
+  const actual = sel.value;
+  const fechaInicio = document.getElementById('asigFechaInicio').value;
+  const fechaFin = document.getElementById('asigFechaFin').value;
+  sel.innerHTML = opcionesVehiculoAsignacion(fechaInicio, fechaFin, actual, excluirAsignacionId || null);
+}
+
 function modalAsignacionForm(id) {
   if (!puedeGestionarAsignaciones()) { toast(`Tu rol (${DB.role}) no puede crear asignaciones.`, "danger"); return; }
   if (!DB.personal.length) { toast("Agrega personas a la dotación primero.", "danger"); return; }
@@ -4760,9 +4709,12 @@ function modalAsignacionForm(id) {
         <input type="text" id="asigDiasCustom" value="${esPersonalizado?a.dias:''}" placeholder="Ej: Martes y jueves" style="margin-top:6px;">
       </div>
       <div class="grid grid-2" style="gap:10px;">
-        <div><label class="field-label">Fecha inicio</label><input type="text" id="asigFechaInicio" value="${a?a.fechaInicio:''}" placeholder="AAAA-MM-DD"></div>
-        <div><label class="field-label">Fecha fin</label><input type="text" id="asigFechaFin" value="${a?a.fechaFin:''}" placeholder="AAAA-MM-DD"></div>
+        <div><label class="field-label">Fecha inicio</label><input type="text" id="asigFechaInicio" value="${a?a.fechaInicio:''}" placeholder="AAAA-MM-DD" oninput="actualizarOpcionesVehiculoAsignacion('${a?a.id:''}')"></div>
+        <div><label class="field-label">Fecha fin</label><input type="text" id="asigFechaFin" value="${a?a.fechaFin:''}" placeholder="AAAA-MM-DD" oninput="actualizarOpcionesVehiculoAsignacion('${a?a.id:''}')"></div>
       </div>
+      <label class="field-label">Camioneta (opcional)</label>
+      <select id="asigVehiculo">${opcionesVehiculoAsignacion(a?a.fechaInicio:'', a?a.fechaFin:'', a?a.vehiculoId:'', a?a.id:null)}</select>
+      <div class="hint">Se muestra cuántos pasajeros ya tiene cada camioneta en esas fechas — si queda llena, igual puedes elegirla, pero se guarda una alarma.</div>
       <label class="field-label">Notas (opcional)</label>
       <input type="text" id="asigNotas" value="${a?a.notas||'':''}" placeholder="Ej: refuerzo comisionamiento, cambio de turno...">
       <label class="small flex-gap" style="margin-top:10px;"><input type="checkbox" id="asigEnTerreno" ${(!a||a.enTerreno)?'checked':''}> Trabajo en terreno (desmarca si es en taller/oficina)</label>
@@ -4779,6 +4731,7 @@ function modalAsignacionForm(id) {
           fechaFin: document.getElementById('asigFechaFin').value,
           notas: document.getElementById('asigNotas').value,
           enTerreno: document.getElementById('asigEnTerreno').checked,
+          vehiculoId: document.getElementById('asigVehiculo').value,
         };
         const res = ${a? `editarAsignacion('${a.id}', d)` : `agregarAsignacion(d)`};
         if(res){

@@ -451,7 +451,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "1.5";
+const APP_VERSION = "1.6";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -2880,7 +2880,7 @@ function renderDashboard() {
       <div class="page-desc">${esFab ? 'Perfilería de aluminio — carritos logísticos, pasarelas, barandas, escaleras y otros equipos de taller.' : 'Instalaciones eléctricas — avance ponderado, semáforo por desviación y alertas de compras críticas.'} Solo se muestra información de esta área.</div>
     </div>
     <div class="flex-gap">
-      ${(!esFab && ROLES_VER_ACTIVIDAD.includes(DB.role)) ? `
+      ${(!esFab && (esAdministrador() || ROLES_VER_ACTIVIDAD.includes(DB.role))) ? `
         <button class="btn" onclick="exportarReporteKPIsPDF()" title="Descargar reporte de KPIs en PDF, para la reunión">📄 Reporte PDF</button>
         <button class="btn" onclick="exportarReporteKPIsExcel()" title="Descargar reporte de KPIs en Excel">📊 Reporte Excel</button>
       ` : ''}
@@ -7047,7 +7047,7 @@ function leerCamposProyecto() {
 }
 
 function modalNuevoProyecto(tipoPreseleccionado) {
-  if (DB.role !== "Jefe de Proyecto" && DB.role !== "Gerencia") {
+  if (!esAdministrador() && DB.role !== "Jefe de Proyecto" && DB.role !== "Gerencia") {
     toast(`Tu rol (${DB.role}) no puede crear proyectos.`, "danger");
     return;
   }
@@ -7092,7 +7092,7 @@ function modalNuevoProyecto(tipoPreseleccionado) {
 
 function modalEditarProyecto(pid) {
   const p = proy(pid);
-  if (DB.role !== "Jefe de Proyecto" && DB.role !== "Gerencia") {
+  if (!esAdministrador() && DB.role !== "Jefe de Proyecto" && DB.role !== "Gerencia") {
     toast(`Tu rol (${DB.role}) no puede editar los datos generales del proyecto.`, "danger");
     return;
   }
@@ -7113,7 +7113,7 @@ function modalEditarProyecto(pid) {
 }
 
 function crearProyecto(datos) {
-  if (DB.role !== "Jefe de Proyecto" && DB.role !== "Gerencia") {
+  if (!esAdministrador() && DB.role !== "Jefe de Proyecto" && DB.role !== "Gerencia") {
     toast(`Tu rol (${DB.role}) no puede crear proyectos.`, "danger");
     return;
   }
@@ -7155,7 +7155,7 @@ function crearProyecto(datos) {
 }
 
 function editarProyecto(pid, datos) {
-  if (DB.role !== "Jefe de Proyecto" && DB.role !== "Gerencia") {
+  if (!esAdministrador() && DB.role !== "Jefe de Proyecto" && DB.role !== "Gerencia") {
     toast(`Tu rol (${DB.role}) no puede editar los datos generales del proyecto.`, "danger");
     return;
   }
@@ -7172,7 +7172,7 @@ function editarProyecto(pid, datos) {
 }
 
 function eliminarProyecto(pid) {
-  if (DB.role !== "Jefe de Proyecto" && DB.role !== "Gerencia") {
+  if (!esAdministrador() && DB.role !== "Jefe de Proyecto" && DB.role !== "Gerencia") {
     toast(`Tu rol (${DB.role}) no puede eliminar proyectos.`, "danger");
     return;
   }

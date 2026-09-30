@@ -451,7 +451,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "2.1";
+const APP_VERSION = "2.2";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -3777,6 +3777,7 @@ function renderCompras() {
       <div class="flex-gap" style="margin-top:12px; flex-wrap:wrap;">
         <button class="btn btn-sm" onclick="modalCotizacion('${p.id}', '${c.id}')">Editar</button>
         ${accionesEtapaCotizacion(p, c)}
+        <button class="btn btn-sm btn-ghost" onclick="modalMoverCotizacion('${p.id}', '${c.id}')" title="Pasar esta cotización a otro proyecto, conservando OC, ítems y recepciones">↔ Mover a otro proyecto</button>
         <button class="btn btn-sm btn-danger" onclick="if(confirm('¿Eliminar esta cotización?')){ eliminarCotizacion('${p.id}','${c.id}'); renderAll(); }">Eliminar</button>
         ${c.linkSharepoint ? `<a href="${c.linkSharepoint}" target="_blank" rel="noopener" class="btn btn-sm btn-ghost">🔗 Cotización</a>` : ''}
         ${c.linkOC ? `<a href="${c.linkOC}" target="_blank" rel="noopener" class="btn btn-sm btn-ghost">🔗 OC</a>` : ''}
@@ -3806,6 +3807,94 @@ function accionesEtapaCotizacion(p, c) {
     default:
       return '';
   }
+}
+
+/* =====================================================================
+   MOVER COTIZACIÓN A OTRO PROYECTO — para cuando se ingresó por error en
+   el proyecto equivocado y ya tiene avance real (N° de OC, recepciones)
+   como para no querer borrarla y volver a cargarla de cero. Conserva
+   todo: ítems, N° de cotización/OC, recepciones y sus documentos.
+   Si la cotización ya tuvo recepciones registradas, esas cantidades ya
+   habían entrado a la Bodega del proyecto ORIGEN (automático al recibir)
+   — así que además de mover la cotización, se revierte ese stock del
+   proyecto origen y se acredita en el proyecto destino, para que Bodega
+   quede consistente con el proyecto correcto. */
+function modalMoverCotizacion(pid, cotId) {
+  const p = proy(pid);
+  const c = p.cotizaciones.find(x => x.id === cotId);
+  if (!c) return;
+  if (!puedeGestionarCompras()) { toast(`Tu rol (${DB.role}) no gestiona compras.`, "danger"); return; }
+  const destinos = DB.proyectos.filter(x => x.id !== pid);
+  if (!destinos.length) { toast("No hay otro proyecto al cual mover esta cotización.", "danger"); return; }
+  const tieneRecepciones = (c.recepciones||[]).length > 0;
+  openModal(`
+    <div class="modal-head"><h3>Mover cotización a otro proyecto</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <p class="small muted">Actualmente en: <b>${p.codigo} — ${p.nombre}</b></p>
+      <p class="small">${c.proveedor}${c.referencia?` — ${c.referencia}`:''} · ${c.id}${c.numeroOC?` · N° OC ${c.numeroOC}`:''}</p>
+      ${tieneRecepciones ? `<div class="ai-note" style="margin:10px 0; background:var(--danger-bg); border-color:#e7bfae; color:var(--danger)">⚠ Esta cotización ya tiene ${c.recepciones.length} recepción${c.recepciones.length!==1?'es':''} registrada${c.recepciones.length!==1?'s':''} — el stock que ya ingresó a la Bodega de <b>${p.codigo}</b> se descontará ahí y se acreditará en el proyecto destino automáticamente.</div>` : ''}
+      <label class="field-label" style="margin-top:10px;">Mover a</label>
+      <select id="moverCotDestino" style="width:100%;">
+        ${destinos.map(d => `<option value="${d.id}">${(d.tipo||'electrico')==='fabricacion'?'🔧':'⚡'} ${d.codigo} — ${d.nombre}</option>`).join('')}
+      </select>
+      <div class="hint" style="margin-top:6px;">Se conservan ítems, N° de cotización/OC, documentos y recepciones tal como están — solo cambia el proyecto al que pertenece.</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="
+        const ok = moverCotizacion('${pid}', '${cotId}', document.getElementById('moverCotDestino').value);
+        if(ok){ closeModal(); renderAll(); }">Mover cotización</button>
+    </div>
+  `, 560);
+}
+function moverCotizacion(pidOrigen, cotId, pidDestino) {
+  if (!puedeGestionarCompras()) { toast(`Tu rol (${DB.role}) no gestiona compras.`, "danger"); return false; }
+  if (!pidDestino || pidDestino === pidOrigen) { toast("Selecciona un proyecto distinto al actual.", "danger"); return false; }
+  const pOrigen = proy(pidOrigen);
+  const pDestino = proy(pidDestino);
+  if (!pOrigen || !pDestino) return false;
+  const idx = pOrigen.cotizaciones.findIndex(x => x.id === cotId);
+  if (idx === -1) { toast("No se encontró la cotización en el proyecto de origen.", "danger"); return false; }
+  const c = pOrigen.cotizaciones[idx];
+
+  if ((c.recepciones||[]).length) transferirBodegaPorMovimientoCotizacion(pOrigen, pDestino, c);
+
+  pOrigen.cotizaciones.splice(idx, 1);
+  pDestino.cotizaciones.push(c);
+
+  registrarHistorial({proyecto: pOrigen.codigo, accion:"Modificar", detalle:`Cotización ${c.id} (${c.proveedor}) movida a ${pDestino.codigo} — ${pDestino.nombre}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"});
+  registrarHistorial({proyecto: pDestino.codigo, accion:"Modificar", detalle:`Cotización ${c.id} (${c.proveedor}) recibida desde ${pOrigen.codigo} — ${pOrigen.nombre}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"});
+  guardarEstado(`Cotización movida a ${pDestino.codigo}`);
+  toast(`Cotización movida a ${pDestino.codigo} — ${pDestino.nombre}.`, "ok");
+  return true;
+}
+/* Revierte en el proyecto origen y acredita en el destino el stock que
+   ya había ingresado a Bodega por las recepciones de esta cotización —
+   misma lógica de emparejamiento (por código, o por nombre si no hay
+   código) que usa ingresarBodegaPorRecepcion() al recibir. */
+function transferirBodegaPorMovimientoCotizacion(pOrigen, pDestino, cot) {
+  (cot.recepciones||[]).forEach(rec => {
+    (rec.items||[]).forEach(it => {
+      if (!it.cantidad || it.cantidad <= 0) return;
+
+      let bOrigen = it.codigo ? pOrigen.bodega.find(x => x.codigo === it.codigo) : buscarBodegaPorNombre(pOrigen, it.descripcion);
+      if (bOrigen) {
+        const antes = bOrigen.stock;
+        bOrigen.stock = Math.max(0, antes - it.cantidad);
+        registrarHistorial({proyecto:pOrigen.codigo, accion:"Modificar", detalle:`Ajuste por traslado de cotización a ${pDestino.codigo}: ${bOrigen.material} -${it.cantidad} ${bOrigen.unidad} (${antes} → ${bOrigen.stock})`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"});
+      }
+
+      let bDestino = it.codigo ? pDestino.bodega.find(x => x.codigo === it.codigo) : buscarBodegaPorNombre(pDestino, it.descripcion);
+      if (!bDestino) {
+        bDestino = { codigo: it.codigo || ("MAT-"+String(1000+pDestino.bodega.length+Math.floor(Math.random()*900))), material: it.descripcion, stock:0, unidad: it.unidad||"unidad", minimo:0 };
+        pDestino.bodega.push(bDestino);
+      }
+      if (it.costoNeto) bDestino.precioUnitario = it.costoNeto;
+      const antesD = bDestino.stock;
+      bDestino.stock = antesD + it.cantidad;
+      registrarHistorial({proyecto:pDestino.codigo, accion:"Modificar", detalle:`Ajuste por traslado de cotización desde ${pOrigen.codigo}: ${bDestino.material} +${it.cantidad} ${bDestino.unidad} (${antesD} → ${bDestino.stock})`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"});
+    });
+  });
 }
 
 /* =====================================================================
@@ -3887,6 +3976,7 @@ function htmlResultadosRecepciones() {
       </div>
       <div class="flex-gap" style="margin-top:12px; flex-wrap:wrap;">
         ${accionesEtapaCotizacion(p, c)}
+        <button class="btn btn-sm btn-ghost" onclick="modalMoverCotizacion('${p.id}', '${c.id}')" title="Pasar esta cotización a otro proyecto, conservando OC, ítems y recepciones">↔ Mover a otro proyecto</button>
         <button class="btn btn-sm btn-ghost" onclick="irAProyectoCompras('${p.id}')">→ Ver en el proyecto</button>
       </div>
     </div>`;

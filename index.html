@@ -451,7 +451,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "2.0";
+const APP_VERSION = "2.1";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -3658,6 +3658,31 @@ async function registrarCompraDirectaConArchivo(pid, id) {
   }
 }
 
+/* Aviso por WhatsApp de una Compra Directa — mensaje ya redactado, listo
+   para reenviar con un toque (como el resto de la app, no es automático:
+   requiere este clic). Cambia según la etapa: si está "Solicitada" avisa
+   al PM del proyecto para que la autorice; si ya fue autorizada/rechazada,
+   avisa a quien la solicitó del resultado. */
+function avisarWhatsAppCompraDirecta(pid, id) {
+  const p = proy(pid);
+  const cd = p.comprasDirectas.find(x=>x.id===id);
+  if (!cd) return;
+  let destinatarioNombre, texto;
+  if (cd.estado === "Solicitada") {
+    destinatarioNombre = p.pm;
+    texto = `🛒 Compra Directa pendiente de autorización — ${p.codigo}\nSolicita: ${cd.solicitadoPor} (${cd.rolSolicitante})\nMotivo: ${cd.motivo||'—'}\nProductos: ${resumenItemsCompraDirecta(cd.items,200)}\nEstimado: ${money(cd.montoEstimado)}\n\nRevísalo en Alutipo PMO → Compras Directas.`;
+  } else if (cd.estado === "Autorizada" || cd.estado === "Rechazada") {
+    destinatarioNombre = cd.solicitadoPor;
+    texto = `🛒 Tu Compra Directa fue ${cd.estado==='Autorizada'?'AUTORIZADA ✅':'RECHAZADA ❌'} — ${p.codigo}\nProductos: ${resumenItemsCompraDirecta(cd.items,200)}${cd.comentarioAutorizacion?`\nComentario: ${cd.comentarioAutorizacion}`:''}\n\nRevísalo en Alutipo PMO → Compras Directas.`;
+  } else {
+    destinatarioNombre = cd.solicitadoPor;
+    texto = `🛒 Compra Directa registrada — ${p.codigo}\nProductos: ${resumenItemsCompraDirecta(cd.items,200)}\nMonto real: ${money(cd.montoReal)}`;
+  }
+  const persona = buscarPersonaPorNombre(destinatarioNombre);
+  if (!persona) { toast(`"${destinatarioNombre}" no está en la lista de Personal — agrégalo ahí (con el mismo nombre) y carga su teléfono.`, "danger"); return; }
+  if (!persona.telefono) { toast(`${persona.nombre} está en Personal pero no tiene teléfono cargado — agrégalo en la sección Personal.`, "danger"); return; }
+  abrirWhatsApp(persona.telefono, texto);
+}
 function renderComprasDirectas() {
   if (!proyectosDelArea().length) {
     return `<div class="page-head"><div><h1>Compras Directas</h1></div></div><div class="empty-state card">Aún no hay proyectos en el tablero.</div>`;
@@ -3686,9 +3711,10 @@ function renderComprasDirectas() {
         </div>
         <div class="flex-gap">${badgeCompraDirecta(cd.estado)}</div>
       </div>
-      <div class="flex-gap" style="margin-top:10px;">
+      <div class="flex-gap" style="margin-top:10px; flex-wrap:wrap;">
         ${cd.estado==="Solicitada" && puedeAutorizarCompraDirecta() ? `<button class="btn btn-sm btn-primary" onclick="modalAutorizarCompraDirecta('${p.id}','${cd.id}')">Revisar y autorizar</button>` : ''}
         ${cd.estado==="Autorizada" && puedeRegistrarCompraDirecta(cd) ? `<button class="btn btn-sm btn-primary" onclick="modalRegistrarCompraDirecta('${p.id}','${cd.id}')">Registrar compra</button>` : ''}
+        <button class="btn btn-sm btn-ghost" onclick="avisarWhatsAppCompraDirecta('${p.id}','${cd.id}')" title="${cd.estado==='Solicitada'?'Avisar al PM para que la autorice':'Avisar el resultado a quien la solicitó'}">💬 WhatsApp</button>
       </div>
     </div>
   `).join('') : `<div class="empty-state card">Sin solicitudes de compra directa en este proyecto.</div>`}

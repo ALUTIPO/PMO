@@ -451,7 +451,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "1.6";
+const APP_VERSION = "1.7";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -3713,6 +3713,7 @@ function renderCompras() {
         <option value="">Todos los proveedores</option>
         ${proveedoresDelProyecto.map(prov => `<option value="${prov}" ${filtroProveedorCompras===prov?'selected':''}>${prov}</option>`).join('')}
       </select>
+      <button class="btn" onclick="goTo('recepciones')" title="Buscar por N° de OC o proveedor en TODOS los proyectos, sin importar cuál esté seleccionado acá">🔎 Buscar en todos los proyectos</button>
       <button class="btn" onclick="modalProveedores()">Proveedores</button>
       <button class="btn btn-primary" onclick="modalCotizacion('${p.id}')">+ Nueva cotización</button>
     </div>
@@ -3776,6 +3777,106 @@ function accionesEtapaCotizacion(p, c) {
     default:
       return '';
   }
+}
+
+/* =====================================================================
+   PÁGINA: BUSCAR / RECEPCIÓN DE OC — independiente del proyecto en
+   visualización. Nace de un problema real: cuando llega un camión, quien
+   recibe suele tener SOLO el N° de OC o el nombre del proveedor en la
+   guía/factura — no sabe (o no le importa) qué proyecto está seleccionado
+   en el sistema en ese momento, y cambiar de proyecto uno por uno para
+   encontrar la cotización correcta es lento.
+   Esta página busca en TODAS las cotizaciones de TODOS los proyectos (de
+   ambas áreas) a la vez, y permite registrar la recepción directo desde
+   acá, sin tener que "entrar" al proyecto primero. */
+let filtroBusquedaRecepciones = "";
+let filtroEstadoRecepciones = "pendientes"; // pendientes | enCurso | recibido | todas
+let filtroAreaRecepciones = "todas"; // todas | electrico | fabricacion
+
+function cotizacionesConProyecto() {
+  return DB.proyectos.flatMap(p => (p.cotizaciones||[]).map(c => ({p, c})));
+}
+function coincideBusquedaRecepcion(p, c, texto) {
+  if (!texto || !texto.trim()) return true;
+  const t = texto.trim().toLowerCase();
+  const campos = [
+    c.proveedor, c.numeroOC, c.numeroCotizacion, c.referencia, c.id, p.codigo, p.nombre,
+    ...(c.items||[]).map(it => it.codigo), ...(c.items||[]).map(it => it.descripcion),
+  ];
+  return campos.some(v => (v||"").toString().toLowerCase().includes(t));
+}
+function filasRecepcionesFiltradas() {
+  return cotizacionesConProyecto().filter(({p, c}) => {
+    if (filtroAreaRecepciones !== "todas" && (p.tipo||"electrico") !== filtroAreaRecepciones) return false;
+    if (filtroEstadoRecepciones === "pendientes" && !["En Tránsito","Recibido Parcial"].includes(c.estado)) return false;
+    if (filtroEstadoRecepciones === "enCurso" && c.estado === "Recibido") return false;
+    if (filtroEstadoRecepciones === "recibido" && c.estado !== "Recibido") return false;
+    return coincideBusquedaRecepcion(p, c, filtroBusquedaRecepciones);
+  }).sort((a,b) => (b.c.fecha||'').localeCompare(a.c.fecha||''));
+}
+function renderRecepciones() {
+  return `
+  <div class="page-head">
+    <div>
+      <h1>Buscar / Recepción de OC</h1>
+      <div class="page-desc">Busca por N° de OC, proveedor, código de proyecto o material — en todos los proyectos a la vez, sin importar cuál tengas seleccionado en Compras. Útil para cuando llega un camión y solo tienes la guía o la factura en la mano.</div>
+    </div>
+  </div>
+  <div class="card" style="margin-bottom:14px;">
+    <div class="flex-gap" style="flex-wrap:wrap;">
+      <input type="text" id="buscadorRecepcionesInput" placeholder="N° de OC, proveedor, código de proyecto, material..." style="flex:1; min-width:240px;" value="${filtroBusquedaRecepciones}" oninput="filtroBusquedaRecepciones=this.value; refrescarResultadosRecepciones();">
+      <select onchange="filtroEstadoRecepciones=this.value; refrescarResultadosRecepciones();" style="width:auto; font-size:12.5px; padding:8px 11px; border-radius:8px; border:1px solid var(--line); background:var(--card);">
+        <option value="pendientes" ${filtroEstadoRecepciones==='pendientes'?'selected':''}>Pendientes de recibir</option>
+        <option value="enCurso" ${filtroEstadoRecepciones==='enCurso'?'selected':''}>Todo el ciclo (sin cerradas)</option>
+        <option value="recibido" ${filtroEstadoRecepciones==='recibido'?'selected':''}>Ya recibidas (historial)</option>
+        <option value="todas" ${filtroEstadoRecepciones==='todas'?'selected':''}>Todos los estados</option>
+      </select>
+      <select onchange="filtroAreaRecepciones=this.value; refrescarResultadosRecepciones();" style="width:auto; font-size:12.5px; padding:8px 11px; border-radius:8px; border:1px solid var(--line); background:var(--card);">
+        <option value="todas" ${filtroAreaRecepciones==='todas'?'selected':''}>Ambas áreas</option>
+        <option value="electrico" ${filtroAreaRecepciones==='electrico'?'selected':''}>⚡ Eléctrico</option>
+        <option value="fabricacion" ${filtroAreaRecepciones==='fabricacion'?'selected':''}>🔧 Fabricación</option>
+      </select>
+    </div>
+  </div>
+  <div id="recepcionesResultados">${htmlResultadosRecepciones()}</div>
+  `;
+}
+function htmlResultadosRecepciones() {
+  const filas = filasRecepcionesFiltradas();
+  if (!filas.length) return `<div class="empty-state card">No se encontraron cotizaciones con ese criterio.</div>`;
+  return `<div class="stack">${filas.map(({p, c}) => {
+    const totalNeto = totalNetoCotizacion(c);
+    return `<div class="card">
+      <div class="flex-between" style="flex-wrap:wrap; gap:8px;">
+        <div>
+          <div class="mono muted small">${p.codigo} — ${p.nombre} · ${(p.tipo||'electrico')==='fabricacion'?'🔧 Fabricación':'⚡ Eléctrico'}</div>
+          <div class="mono muted small">${c.id}${c.numeroCotizacion?` · N° cot. ${c.numeroCotizacion}`:''}${c.numeroOC?` · N° OC ${c.numeroOC}`:''}</div>
+          <h3 style="margin-top:2px;">${c.proveedor}${c.referencia?` — ${c.referencia}`:''}</h3>
+          <p class="hint" style="margin-top:2px;">${c.items.length} ítem${c.items.length!==1?'s':''} · Total neto ${money(totalNeto)}${c.longLead?' · <span style="color:var(--copper-dark)">long-lead</span>':''}</p>
+        </div>
+        <div class="flex-gap">${badgeCompra(c.estado)}</div>
+      </div>
+      <div class="flex-gap" style="margin-top:12px; flex-wrap:wrap;">
+        ${accionesEtapaCotizacion(p, c)}
+        <button class="btn btn-sm btn-ghost" onclick="irAProyectoCompras('${p.id}')">→ Ver en el proyecto</button>
+      </div>
+    </div>`;
+  }).join('')}</div>`;
+}
+function refrescarResultadosRecepciones() {
+  const cont = document.getElementById('recepcionesResultados');
+  if (cont) cont.innerHTML = htmlResultadosRecepciones();
+}
+function irAProyectoCompras(pid) {
+  const p = proy(pid);
+  if (!p) return;
+  areaActiva = p.tipo || "electrico";
+  DB.proyectoActivo = pid;
+  currentPage = "compras";
+  cerrarSidebarMobile();
+  renderAll();
+  const contentEl = document.getElementById("content");
+  if (contentEl) contentEl.scrollTop = 0;
 }
 
 // --- Presupuesto ---
@@ -7366,6 +7467,7 @@ function NAV_ACTUAL() {
     {group:"Vista General", items:[
       {id:"miPanel", label:"Mi Panel", icon:iconTarget(), roles: ROLES_MI_PANEL},
       {id:"panelEquipo", label:"Panel de Equipo", icon:iconTeamCheck(), roles: ROLES_PANEL_EQUIPO},
+      {id:"recepciones", label:"Buscar / Recepción OC", icon:iconSearch()},
       {id:"bodegaGeneral", label:"Bodega General", icon:iconBox()},
       {id:"personal", label:"Personal", icon:iconUsers()},
     ]},
@@ -7459,6 +7561,9 @@ function iconSpark() {
 }
 function iconClock() {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>`;
+}
+function iconSearch() {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>`;
 }
 function iconBolt() {
   return `<svg viewBox="0 0 24 24" fill="var(--copper)" stroke="none"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"/></svg>`;
@@ -7577,6 +7682,7 @@ function renderAll() {
   const renderers = {
     dashboard: renderDashboard, miPanel: renderMiPanel, panelEquipo: renderPanelEquipo, bodegaGeneral: renderBodegaGeneral, personal: renderPersonal, proyecto360: renderProyecto360, planificacion: renderPlanificacion, compras: renderCompras,
     presupuesto: renderPresupuesto, bodega: renderBodega, reporteMateriales: renderReporteMateriales, comprasDirectas: renderComprasDirectas, punch: renderPunch, requerimientos: renderRequerimientos, galeria: renderGaleria, cuadroCarga: renderCuadroCarga,
+    recepciones: renderRecepciones,
     fabricacion: renderFabricacion,
     reaperturas: renderReaperturas, copiloto: renderCopiloto, auditoria: renderAuditoria, actividad: renderActividad, respaldos: renderRespaldos,
   };

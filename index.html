@@ -451,7 +451,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "1.8";
+const APP_VERSION = "2.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -4132,16 +4132,29 @@ function refrescarCarritoPanol() {
   const cont = document.getElementById('panolCarritoContainer');
   if (cont) cont.innerHTML = htmlCarritoPanol();
 }
+/* El pañolero por defecto: en Alutipo, el material siempre se solicita
+   al Jefe de Taller (hoy Eduardo González). Se sugiere automáticamente
+   acá, pero el usuario puede cambiarlo si algún día lo atiende otra
+   persona. Se busca primero por cargo "Jefe de Taller" en Personal, y
+   se valida contra usuariosAutorizados (para poder avisarle dentro de
+   la app) — si no calza con ningún usuario con acceso, igual se deja
+   el nombre para que al menos funcione el botón de WhatsApp. */
+function pañoleroSugerido() {
+  const candidato = (DB.personal||[]).find(p => p.cargo === "Jefe de Taller")
+    || (DB.personal||[]).find(p => normalizarNombrePersona(p.nombre) === normalizarNombrePersona("Eduardo González"));
+  if (!candidato) return "";
+  const enUsuarios = Object.values(DB.usuariosAutorizados||{}).find(u => normalizarNombrePersona(u.nombre) === normalizarNombrePersona(candidato.nombre));
+  return enUsuarios ? enUsuarios.nombre : candidato.nombre;
+}
 function htmlCampoNotificarPanol() {
-  if (panolUrgencia !== "Urgente") return '';
   const opciones = Object.values(DB.usuariosAutorizados||{});
   return `
-    <label class="field-label" style="margin-top:10px;">¿A quién se notifica de inmediato?</label>
+    <label class="field-label" style="margin-top:10px;">Pañolero / persona a notificar</label>
     <select onchange="panolNotificarA=this.value;" style="width:100%;">
       <option value="">Selecciona…</option>
       ${opciones.map(u => `<option value="${u.nombre}" ${panolNotificarA===u.nombre?'selected':''}>${u.nombre} — ${u.rol}</option>`).join('')}
     </select>
-    <div class="hint">Le llegará una notificación push si la tiene activada, y puedes reenviarle el mensaje por WhatsApp desde la solicitud.</div>
+    <div class="hint">${panolUrgencia==='Urgente' ? 'Al ser urgente, le llega una notificación push de inmediato si la tiene activada — además puedes reenviarle el mensaje por WhatsApp.' : 'Puedes avisarle por WhatsApp con el botón 💬 de la solicitud, una vez creada.'}</div>
   `;
 }
 function refrescarCampoNotificarPanol() {
@@ -4261,30 +4274,50 @@ function rechazarSolicitudPanol(id) {
   guardarEstado("Pañol rechazado");
   renderAll();
 }
+/* Compara nombres de persona ignorando tildes, mayúsculas y espacios de
+   más — necesario porque "¿A quién se notifica?" sale de la lista de
+   USUARIOS CON ACCESO A LA APP (usuariosAutorizados) mientras que el
+   teléfono se busca en la lista de PERSONAL: son dos listas distintas
+   que un mismo nombre puede tener escrito de forma levemente distinta
+   entre ambas (con/sin tilde, "Jose" vs "José", un espacio de más). */
+function normalizarNombrePersona(s) {
+  return (s||"").toString().trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/\s+/g," ");
+}
+function buscarPersonaPorNombre(nombre) {
+  const objetivo = normalizarNombrePersona(nombre);
+  if (!objetivo) return null;
+  return (DB.personal||[]).find(p => normalizarNombrePersona(p.nombre) === objetivo) || null;
+}
 function reenviarWhatsAppPanol(id) {
   const s = (DB.solicitudesPanol||[]).find(x => x.id === id);
   if (!s) return;
-  const persona = (DB.personal||[]).find(p => p.nombre === s.notificarA);
-  const telefono = persona ? persona.telefono : "";
+  const persona = buscarPersonaPorNombre(s.notificarA);
+  if (!persona) { toast(`"${s.notificarA}" no está en la lista de Personal — agrégalo ahí (con el mismo nombre) y carga su teléfono.`, "danger"); return; }
+  if (!persona.telefono) { toast(`${persona.nombre} está en Personal pero no tiene teléfono cargado — agrégalo en la sección Personal.`, "danger"); return; }
   const texto = `📦 Solicitud de Pañol N° ${s.numero}\nProyecto: ${s.proyectoCodigo} — ${s.proyectoNombre}\nSolicita: ${s.solicitante} (${s.solicitanteRol})\nFecha: ${s.fecha}\n\nMateriales:\n${s.items.map(it=>`- ${it.cantidad} ${it.unidad} ${it.material}${it.codigo?` (${it.codigo})`:''}${!it.enStock?' [SIN STOCK]':''}`).join('\n')}${s.motivo?`\n\nMotivo: ${s.motivo}`:''}`;
-  abrirWhatsApp(telefono, texto);
+  abrirWhatsApp(persona.telefono, texto);
 }
 function generarPdfSolicitudPanol(id) {
   const s = (DB.solicitudesPanol||[]).find(x => x.id === id);
   if (!s) return;
   if (typeof window.jspdf === "undefined") { toast("No se pudo cargar el generador de PDF. Revisa tu conexión.", "danger"); return; }
   const { jsPDF } = window.jspdf;
-  const doc = new jsPDF();
-  let y = 18;
+  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const mitad = pageWidth / 2;
+  let y = 16;
   doc.setFontSize(15); doc.setFont(undefined,'bold');
   doc.text("ALUTIPO — Solicitud de Pañol", 14, y);
   doc.setFontSize(10); doc.setFont(undefined,'normal');
   y += 8;
-  doc.text(`N° de solicitud: ${s.numero}`, 14, y); y += 6;
-  doc.text(`Fecha: ${s.fecha}`, 14, y); y += 6;
-  doc.text(`Proyecto destino: ${s.proyectoCodigo} — ${s.proyectoNombre}`, 14, y); y += 6;
-  doc.text(`Solicita: ${s.solicitante} (${s.solicitanteRol})`, 14, y); y += 6;
-  doc.text(`Urgencia: ${s.urgencia}`, 14, y); y += 6;
+  doc.text(`N° de solicitud: ${s.numero}`, 14, y);
+  doc.text(`Fecha: ${s.fecha}`, mitad, y); y += 6;
+  doc.text(`Proyecto destino: ${s.proyectoCodigo} — ${s.proyectoNombre}`, 14, y);
+  doc.text(`Urgencia: ${s.urgencia}`, mitad, y); y += 6;
+  doc.text(`Solicita: ${s.solicitante} (${s.solicitanteRol})`, 14, y);
+  if (s.notificarA) doc.text(`Pañolero: ${s.notificarA}`, mitad, y);
+  y += 6;
   if (s.motivo) { doc.text(`Motivo: ${s.motivo}`, 14, y); y += 6; }
   y += 4;
 
@@ -4292,17 +4325,18 @@ function generarPdfSolicitudPanol(id) {
     startY: y,
     head: [["Código","Material","Cantidad","Unidad","Estado"]],
     body: s.items.map(it => [it.codigo||'—', it.material, it.cantidad, it.unidad, it.entregado?'Entregado':(it.enStock?'En stock':'Sin stock — requerimiento')]),
-    theme: 'grid', styles:{fontSize:9}, headStyles:{fillColor:[193,113,46]},
+    theme: 'grid', styles:{fontSize:10}, headStyles:{fillColor:[193,113,46]},
+    margin:{left:14, right:14},
   });
   y = doc.lastAutoTable.finalY + 20;
-  if (y > 250) { doc.addPage(); y = 20; }
+  if (y > pageHeight - 35) { doc.addPage(); y = 20; }
 
   doc.setFontSize(10);
   doc.text("_______________________________", 14, y);
-  doc.text("_______________________________", 110, y);
+  doc.text("_______________________________", mitad + 10, y);
   y += 6;
   doc.text("Firma quien entrega", 14, y);
-  doc.text("Firma y RUT quien recibe", 110, y);
+  doc.text("Firma y RUT quien recibe", mitad + 10, y);
   y += 14;
   doc.text(`Entregado por: ${s.entregadoPor||'________________________'}    Fecha: ${s.fechaEntrega||'____________'}`, 14, y);
 
@@ -4313,6 +4347,7 @@ function renderPanol() {
   if (!panolProyectoDestino || !proy(panolProyectoDestino)) {
     panolProyectoDestino = DB.proyectoActivo || (proyectosDelArea()[0] && proyectosDelArea()[0].id) || null;
   }
+  if (!panolNotificarA) panolNotificarA = pañoleroSugerido();
   const puede = puedeGestionarBodega();
   return `
   <div class="page-head">
@@ -6106,10 +6141,11 @@ function cambiarEstadoRequerimiento(salaId, msgId) {
 function avisarWhatsappRequerimiento(salaId, msgId) {
   const msg = (DB.mensajes[salaId]||{})[msgId];
   if (!msg || !msg.req) return;
-  const persona = DB.personal.find(p => p.nombre===msg.req.asignadoA);
+  const persona = buscarPersonaPorNombre(msg.req.asignadoA);
   const proyectoNombre = salaId==='general' ? 'General' : (DB.proyectos.find(p=>p.id===salaId)?.nombre || salaId);
   const texto = `⚠️ Requerimiento ${URGENCIA_REQ_INFO[msg.req.urgencia].label.toUpperCase()} — ${proyectoNombre}\n"${msg.texto}"\nAsignado a ti por ${msg.autor}. Revísalo en Alutipo PMO → Requerimientos.`;
-  abrirWhatsApp(persona?persona.telefono:'', texto);
+  if (!persona) { toast(`"${msg.req.asignadoA}" no está en la lista de Personal — agrégalo ahí (con el mismo nombre) y carga su teléfono.`, "danger"); return; }
+  abrirWhatsApp(persona.telefono, texto);
 }
 
 /* ===== Modal de 3 pasos: marcar un mensaje como requerimiento ===== */

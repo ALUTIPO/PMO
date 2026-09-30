@@ -451,7 +451,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "1.7";
+const APP_VERSION = "1.8";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -1031,6 +1031,7 @@ const DB = {
   vehiculos: [],
   asignacionesVehiculos: [],
   usuario: "Usuario",
+  solicitudesPanol: [],
   updatedAt: null,
   syncStatus: "cargando",
   mensajes: {}, // caché local del nodo /mensajes — no viaja por stateRef, ver configurarMensajes()
@@ -1055,6 +1056,7 @@ function aplicarEstadoRemoto(data) {
   DB.vehiculos.forEach(v => { if (v.capacidad===undefined) v.capacidad = 4; });
   DB.asignacionesVehiculos = data.asignacionesVehiculos || [];
   DB.bodegaGeneral = data.bodegaGeneral || [];
+  DB.solicitudesPanol = data.solicitudesPanol || [];
   DB.updatedAt = data.updatedAt || null;
   // proyectos al final: su migración puede necesitar cruzar nombres contra
   // DB.personal (ya cargado arriba) para enlazar asignaciones antiguas.
@@ -1078,6 +1080,7 @@ async function guardarEstado(nota) {
     vehiculos: DB.vehiculos,
     asignacionesVehiculos: DB.asignacionesVehiculos,
     bodegaGeneral: DB.bodegaGeneral,
+    solicitudesPanol: DB.solicitudesPanol,
     updatedAt: new Date().toISOString(),
   };
 
@@ -3978,6 +3981,7 @@ function renderBodegaGeneral() {
       <div class="page-desc">Material disponible de la empresa, sin asignar todavía a ningún proyecto. Desde acá se asigna a un proyecto específico cuando corresponda.</div>
     </div>
     <div class="flex-gap">
+      <button class="btn" onclick="goTo('panol')" title="Solicitar material de esta bodega para un proyecto">📦 Ir al Pañol</button>
       ${puede ? `<button class="btn" onclick="modalImportarBodegaExcel()" title="Cargar productos masivamente desde un Excel">⬆ Importar Excel</button>` : ''}
       <button class="btn" onclick="exportarBodegaExcelBsale()" title="Descarga un Excel listo para cargar en el importador de Stock de Bsale">⬇ Exportar a Excel (Bsale)</button>
       ${puede ? `<button class="btn btn-primary" onclick="modalProductoBodegaGeneral()">+ Agregar producto</button>` : ''}
@@ -4033,6 +4037,339 @@ function exportarBodegaExcelBsale() {
   registrarHistorial({proyecto:"General", accion:"Exportar", detalle:`Bodega general exportada a Excel para Bsale (${DB.bodegaGeneral.length} productos)`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
   guardarEstado();
   toast(`Descargado: ${nombreArchivo}`, "ok");
+}
+
+/* =====================================================================
+   PÁGINA: PAÑOL — el usuario busca un material en Bodega General y lo
+   solicita para un proyecto, sin tener que pasar por el encargado antes
+   de saber si hay stock. Si el material no existe en Bodega General, se
+   agrega igual a la solicitud, marcado como "sin stock", y queda visible
+   como requerimiento pendiente de compra en vez de perderse.
+   El stock real solo se descuenta cuando el encargado de bodega marca la
+   solicitud como entregada (evita descuadres si al final no se entrega).
+   Notificación: una solicitud "Urgente" dispara una notificación push
+   real reutilizando la MISMA infraestructura ya desplegada para
+   Requerimientos (se publica un mensaje con req.urgencia="critica" en
+   la sala "general", que la Cloud Function avisarRequerimientoCritico
+   ya escucha) — así no hace falta desplegar una función nueva. Además
+   se deja un botón de WhatsApp con el mensaje ya redactado, para
+   reenviar manualmente (notificación real de WhatsApp requeriría la
+   API de WhatsApp Business + backend propio, no implementado aún). */
+let carritoPanol = [];
+let panolBusqueda = "";
+let panolProyectoDestino = null;
+let panolMotivo = "";
+let panolUrgencia = "Normal";
+let panolNotificarA = "";
+let filtroEstadoPanol = "pendientes";
+
+function coincideProductoPanol(b, texto) {
+  const t = texto.trim().toLowerCase();
+  return (b.codigo||"").toLowerCase().includes(t) || (b.material||"").toLowerCase().includes(t);
+}
+function resultadosBusquedaPanol() {
+  if (!panolBusqueda.trim()) return [];
+  return DB.bodegaGeneral.filter(b => coincideProductoPanol(b, panolBusqueda)).slice(0, 20);
+}
+function agregarItemCarritoPanol(codigo) {
+  const b = DB.bodegaGeneral.find(x => x.codigo === codigo);
+  if (!b) return;
+  const existente = carritoPanol.find(it => it.codigo === codigo);
+  if (existente) { existente.cantidad = (Number(existente.cantidad)||0) + 1; }
+  else { carritoPanol.push({ id: "it"+Date.now()+Math.random().toString(36).slice(2,6), codigo: b.codigo, material: b.material, unidad: b.unidad, cantidad: 1, enStock: true, stockDisponible: b.stock }); }
+  refrescarCarritoPanol();
+}
+function agregarItemManualPanol() {
+  const texto = (panolBusqueda||"").trim();
+  if (!texto) return;
+  carritoPanol.push({ id: "it"+Date.now()+Math.random().toString(36).slice(2,6), codigo: "", material: texto, unidad: "un", cantidad: 1, enStock: false, stockDisponible: 0 });
+  panolBusqueda = "";
+  refrescarResultadosBusquedaPanol();
+  refrescarCarritoPanol();
+}
+function quitarItemCarritoPanol(id) {
+  carritoPanol = carritoPanol.filter(it => it.id !== id);
+  refrescarCarritoPanol();
+}
+function cambiarCantidadCarritoPanol(id, val) {
+  const it = carritoPanol.find(x => x.id === id);
+  if (it) it.cantidad = Math.max(1, Number(val)||1);
+}
+function htmlResultadosBusquedaPanol() {
+  const texto = panolBusqueda.trim();
+  if (!texto) return `<div class="hint">Escribe un código o nombre de material para buscar en Bodega General.</div>`;
+  const resultados = resultadosBusquedaPanol();
+  return `
+  ${resultados.length ? resultados.map(b => `
+    <div class="flex-between" style="padding:6px 0; border-bottom:1px solid var(--line-soft);">
+      <div class="small"><b class="mono">${b.codigo}</b> — ${b.material} <span class="hint">(${b.stock} ${b.unidad} disponible${b.stock!==1?'s':''})</span></div>
+      <button class="btn btn-sm" onclick="agregarItemCarritoPanol('${b.codigo}')">+ Agregar</button>
+    </div>
+  `).join('') : `<div class="hint">No se encontró "${escaparHtml(texto)}" en Bodega General.</div>`}
+  <button class="btn btn-sm btn-ghost" style="margin-top:8px;" onclick="agregarItemManualPanol()">➕ Agregar "${escaparHtml(texto)}" como material nuevo (sin stock — quedará como requerimiento pendiente)</button>
+  `;
+}
+function refrescarResultadosBusquedaPanol() {
+  const cont = document.getElementById('panolResultadosBusqueda');
+  if (cont) cont.innerHTML = htmlResultadosBusquedaPanol();
+}
+function htmlCarritoPanol() {
+  if (!carritoPanol.length) return `<div class="empty-state" style="padding:14px;">Aún no has agregado materiales a esta solicitud.</div>`;
+  return `<div class="table-wrap"><table>
+    <tr><th>Material</th><th>Cantidad</th><th>Unidad</th><th>Stock</th><th></th></tr>
+    ${carritoPanol.map(it => `
+      <tr>
+        <td class="small">${it.codigo?`<span class="mono muted small">${it.codigo}</span> `:''}${escaparHtml(it.material)}${!it.enStock?' <span class="hint" style="color:var(--copper-dark)">⚠ sin stock</span>':''}</td>
+        <td><input type="text" value="${it.cantidad}" style="width:60px; padding:5px 7px;" onchange="cambiarCantidadCarritoPanol('${it.id}', this.value)"></td>
+        <td class="small">${it.unidad}</td>
+        <td class="small">${it.enStock?`${it.stockDisponible} disp.`:'—'}</td>
+        <td><button class="btn btn-sm btn-danger" onclick="quitarItemCarritoPanol('${it.id}')">✕</button></td>
+      </tr>
+    `).join('')}
+  </table></div>`;
+}
+function refrescarCarritoPanol() {
+  const cont = document.getElementById('panolCarritoContainer');
+  if (cont) cont.innerHTML = htmlCarritoPanol();
+}
+function htmlCampoNotificarPanol() {
+  if (panolUrgencia !== "Urgente") return '';
+  const opciones = Object.values(DB.usuariosAutorizados||{});
+  return `
+    <label class="field-label" style="margin-top:10px;">¿A quién se notifica de inmediato?</label>
+    <select onchange="panolNotificarA=this.value;" style="width:100%;">
+      <option value="">Selecciona…</option>
+      ${opciones.map(u => `<option value="${u.nombre}" ${panolNotificarA===u.nombre?'selected':''}>${u.nombre} — ${u.rol}</option>`).join('')}
+    </select>
+    <div class="hint">Le llegará una notificación push si la tiene activada, y puedes reenviarle el mensaje por WhatsApp desde la solicitud.</div>
+  `;
+}
+function refrescarCampoNotificarPanol() {
+  const cont = document.getElementById('panolCampoNotificar');
+  if (cont) cont.innerHTML = htmlCampoNotificarPanol();
+}
+function proximoNumeroPanol() {
+  return (DB.solicitudesPanol||[]).reduce((max,s) => Math.max(max, s.numero||0), 0) + 1;
+}
+function guardarSolicitudPanol() {
+  if (!carritoPanol.length) { toast("Agrega al menos un material a la solicitud.", "danger"); return; }
+  const p = proy(panolProyectoDestino);
+  if (!p) { toast("Selecciona un proyecto de destino.", "danger"); return; }
+  if (panolUrgencia === "Urgente" && !panolNotificarA) { toast("Selecciona a quién notificar — es una solicitud urgente.", "danger"); return; }
+
+  const solicitud = {
+    id: "PAN-" + Date.now(),
+    numero: proximoNumeroPanol(),
+    fecha: hoyISO(),
+    proyectoId: p.id, proyectoCodigo: p.codigo, proyectoNombre: p.nombre, area: p.tipo||"electrico",
+    solicitante: DB.usuario, solicitanteRol: DB.role,
+    motivo: (panolMotivo||"").trim(),
+    urgencia: panolUrgencia,
+    items: carritoPanol.map(it => ({ id: it.id, codigo: it.codigo, material: it.material, unidad: it.unidad, cantidad: Number(it.cantidad)||1, enStock: it.enStock, entregado: false })),
+    estado: "Pendiente",
+    entregadoPor: "", fechaEntrega: "",
+    notificarA: panolNotificarA,
+    notas: "",
+  };
+  DB.solicitudesPanol = DB.solicitudesPanol || [];
+  DB.solicitudesPanol.unshift(solicitud);
+
+  if (panolUrgencia === "Urgente" && panolNotificarA) {
+    mensajesRef.child('general').push({
+      autor: DB.usuario, rol: DB.role,
+      texto: `📦 Solicitud de Pañol N° ${solicitud.numero} — ${p.codigo}: ${solicitud.items.map(it=>`${it.cantidad} ${it.unidad} ${it.material}`).join(', ')}`,
+      ts: Date.now(),
+      req: { tipo: "Pañol", urgencia: "critica", estado: "abierta", asignadoA: panolNotificarA, panolId: solicitud.id },
+    });
+  }
+
+  registrarHistorial({proyecto: p.codigo, accion:"Crear", detalle:`Solicitud de Pañol N° ${solicitud.numero} (${solicitud.items.length} ítem${solicitud.items.length!==1?'s':''})`, usuario: DB.usuario+" · "+DB.role, criticidad: panolUrgencia==='Urgente'?'Alta':'Media'});
+
+  carritoPanol = [];
+  panolBusqueda = ""; panolMotivo = ""; panolUrgencia = "Normal"; panolNotificarA = "";
+  guardarEstado("Solicitud de pañol creada");
+  toast(`Solicitud N° ${solicitud.numero} enviada.`, "ok");
+  renderAll();
+}
+function listaSolicitudesPanolFiltradas() {
+  return (DB.solicitudesPanol||[]).filter(s => {
+    if (filtroEstadoPanol==='pendientes') return s.estado==='Pendiente';
+    if (filtroEstadoPanol==='entregadas') return s.estado==='Entregado';
+    return true;
+  }).sort((a,b) => (b.numero||0)-(a.numero||0));
+}
+function badgeEstadoPanol(e) {
+  const map = {"Pendiente":"amarillo", "Entregado":"verde", "Rechazado":"rojo"};
+  return `<span class="badge b-${map[e]||'gris'}"><span class="dot"></span>${e}</span>`;
+}
+function htmlSolicitudPanolCard(s, puede) {
+  const sinStockCount = s.items.filter(it => !it.enStock).length;
+  return `<div class="card">
+    <div class="flex-between" style="flex-wrap:wrap; gap:8px;">
+      <div>
+        <div class="mono muted small">N° ${s.numero} · ${s.fecha} · ${s.proyectoCodigo} — ${s.proyectoNombre}</div>
+        <h3 style="margin-top:2px;">${escaparHtml(s.solicitante)} <span class="hint">(${s.solicitanteRol})</span></h3>
+        ${s.motivo ? `<p class="hint" style="margin-top:2px;">${escaparHtml(s.motivo)}</p>` : ''}
+        <div class="table-wrap" style="margin-top:8px;">
+          <table>
+            <tr><th>Material</th><th>Cant.</th><th>Estado</th></tr>
+            ${s.items.map(it => `<tr>
+              <td class="small">${it.codigo?`<span class="mono muted small">${it.codigo}</span> `:''}${escaparHtml(it.material)}</td>
+              <td class="small mono">${it.cantidad} ${it.unidad}</td>
+              <td class="small">${it.entregado?'✅ Entregado':(it.enStock?'En stock':'⚠ Sin stock — requerimiento pendiente')}</td>
+            </tr>`).join('')}
+          </table>
+        </div>
+        ${sinStockCount ? `<div class="hint" style="color:var(--copper-dark); margin-top:4px;">⚠ ${sinStockCount} material${sinStockCount!==1?'es':''} sin stock — requiere compra.</div>` : ''}
+      </div>
+      <div class="flex-gap">${s.urgencia==='Urgente'?'<span class="badge b-rojo"><span class="dot"></span>Urgente</span>':''}${badgeEstadoPanol(s.estado)}</div>
+    </div>
+    <div class="flex-gap" style="margin-top:12px; flex-wrap:wrap;">
+      ${puede && s.estado==='Pendiente' ? `<button class="btn btn-sm btn-primary" onclick="marcarSolicitudPanolEntregada('${s.id}')">📦 Marcar entregada</button>` : ''}
+      ${puede && s.estado==='Pendiente' ? `<button class="btn btn-sm btn-danger" onclick="if(confirm('¿Rechazar esta solicitud?')){ rechazarSolicitudPanol('${s.id}'); }">Rechazar</button>` : ''}
+      <button class="btn btn-sm" onclick="generarPdfSolicitudPanol('${s.id}')">🖨 PDF</button>
+      ${s.notificarA ? `<button class="btn btn-sm btn-ghost" onclick="reenviarWhatsAppPanol('${s.id}')">💬 WhatsApp</button>` : ''}
+    </div>
+  </div>`;
+}
+function marcarSolicitudPanolEntregada(id) {
+  const s = (DB.solicitudesPanol||[]).find(x => x.id === id);
+  if (!s) return;
+  if (!puedeGestionarBodega()) { toast(`Tu rol (${DB.role}) no gestiona bodega.`, "danger"); return; }
+  s.items.forEach(it => {
+    if (it.enStock && !it.entregado) {
+      const prod = DB.bodegaGeneral.find(b => b.codigo === it.codigo);
+      if (prod) prod.stock = Math.max(0, (Number(prod.stock)||0) - (Number(it.cantidad)||0));
+      it.entregado = true;
+    }
+  });
+  const sinStockCount = s.items.filter(it => !it.enStock).length;
+  s.estado = sinStockCount ? "Pendiente" : "Entregado";
+  s.entregadoPor = DB.usuario + " · " + DB.role;
+  s.fechaEntrega = hoyISO();
+  registrarHistorial({proyecto: s.proyectoCodigo, accion:"Actualizar", detalle:`Solicitud de Pañol N° ${s.numero} marcada como entregada`, usuario: DB.usuario+" · "+DB.role, criticidad:"Baja"});
+  guardarEstado("Pañol entregado");
+  renderAll();
+  toast(`Solicitud N° ${s.numero} entregada.`, "ok");
+}
+function rechazarSolicitudPanol(id) {
+  const s = (DB.solicitudesPanol||[]).find(x => x.id === id);
+  if (!s) return;
+  if (!puedeGestionarBodega()) { toast(`Tu rol (${DB.role}) no gestiona bodega.`, "danger"); return; }
+  s.estado = "Rechazado";
+  registrarHistorial({proyecto: s.proyectoCodigo, accion:"Actualizar", detalle:`Solicitud de Pañol N° ${s.numero} rechazada`, usuario: DB.usuario+" · "+DB.role, criticidad:"Media"});
+  guardarEstado("Pañol rechazado");
+  renderAll();
+}
+function reenviarWhatsAppPanol(id) {
+  const s = (DB.solicitudesPanol||[]).find(x => x.id === id);
+  if (!s) return;
+  const persona = (DB.personal||[]).find(p => p.nombre === s.notificarA);
+  const telefono = persona ? persona.telefono : "";
+  const texto = `📦 Solicitud de Pañol N° ${s.numero}\nProyecto: ${s.proyectoCodigo} — ${s.proyectoNombre}\nSolicita: ${s.solicitante} (${s.solicitanteRol})\nFecha: ${s.fecha}\n\nMateriales:\n${s.items.map(it=>`- ${it.cantidad} ${it.unidad} ${it.material}${it.codigo?` (${it.codigo})`:''}${!it.enStock?' [SIN STOCK]':''}`).join('\n')}${s.motivo?`\n\nMotivo: ${s.motivo}`:''}`;
+  abrirWhatsApp(telefono, texto);
+}
+function generarPdfSolicitudPanol(id) {
+  const s = (DB.solicitudesPanol||[]).find(x => x.id === id);
+  if (!s) return;
+  if (typeof window.jspdf === "undefined") { toast("No se pudo cargar el generador de PDF. Revisa tu conexión.", "danger"); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  let y = 18;
+  doc.setFontSize(15); doc.setFont(undefined,'bold');
+  doc.text("ALUTIPO — Solicitud de Pañol", 14, y);
+  doc.setFontSize(10); doc.setFont(undefined,'normal');
+  y += 8;
+  doc.text(`N° de solicitud: ${s.numero}`, 14, y); y += 6;
+  doc.text(`Fecha: ${s.fecha}`, 14, y); y += 6;
+  doc.text(`Proyecto destino: ${s.proyectoCodigo} — ${s.proyectoNombre}`, 14, y); y += 6;
+  doc.text(`Solicita: ${s.solicitante} (${s.solicitanteRol})`, 14, y); y += 6;
+  doc.text(`Urgencia: ${s.urgencia}`, 14, y); y += 6;
+  if (s.motivo) { doc.text(`Motivo: ${s.motivo}`, 14, y); y += 6; }
+  y += 4;
+
+  doc.autoTable({
+    startY: y,
+    head: [["Código","Material","Cantidad","Unidad","Estado"]],
+    body: s.items.map(it => [it.codigo||'—', it.material, it.cantidad, it.unidad, it.entregado?'Entregado':(it.enStock?'En stock':'Sin stock — requerimiento')]),
+    theme: 'grid', styles:{fontSize:9}, headStyles:{fillColor:[193,113,46]},
+  });
+  y = doc.lastAutoTable.finalY + 20;
+  if (y > 250) { doc.addPage(); y = 20; }
+
+  doc.setFontSize(10);
+  doc.text("_______________________________", 14, y);
+  doc.text("_______________________________", 110, y);
+  y += 6;
+  doc.text("Firma quien entrega", 14, y);
+  doc.text("Firma y RUT quien recibe", 110, y);
+  y += 14;
+  doc.text(`Entregado por: ${s.entregadoPor||'________________________'}    Fecha: ${s.fechaEntrega||'____________'}`, 14, y);
+
+  doc.save(`Panol_Solicitud_${s.numero}_${s.proyectoCodigo}.pdf`);
+  toast("PDF descargado.", "ok");
+}
+function renderPanol() {
+  if (!panolProyectoDestino || !proy(panolProyectoDestino)) {
+    panolProyectoDestino = DB.proyectoActivo || (proyectosDelArea()[0] && proyectosDelArea()[0].id) || null;
+  }
+  const puede = puedeGestionarBodega();
+  return `
+  <div class="page-head">
+    <div>
+      <h1>Pañol</h1>
+      <div class="page-desc">Busca un material en Bodega General y solicítalo para tu proyecto. Si no está en stock, igual puedes agregarlo — quedará marcado como requerimiento pendiente de compra.</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div class="section-label">Nueva solicitud</div>
+    <label class="field-label">Buscar material</label>
+    <input type="text" id="panolBusquedaInput" placeholder="Código o nombre del material..." value="${panolBusqueda}" oninput="panolBusqueda=this.value; refrescarResultadosBusquedaPanol();">
+    <div id="panolResultadosBusqueda" style="margin-top:8px;">${htmlResultadosBusquedaPanol()}</div>
+
+    <div class="divider"></div>
+    <label class="field-label">Materiales de esta solicitud</label>
+    <div id="panolCarritoContainer">${htmlCarritoPanol()}</div>
+
+    <div class="divider"></div>
+    <div class="grid grid-2">
+      <div>
+        <label class="field-label">Proyecto de destino</label>
+        <select onchange="panolProyectoDestino=this.value;" style="width:100%;">
+          ${proyectosDelArea().map(p => `<option value="${p.id}" ${p.id===panolProyectoDestino?'selected':''}>${p.codigo} — ${p.nombre}</option>`).join('')}
+        </select>
+      </div>
+      <div>
+        <label class="field-label">Urgencia</label>
+        <select onchange="panolUrgencia=this.value; refrescarCampoNotificarPanol();" style="width:100%;">
+          <option value="Normal" ${panolUrgencia==='Normal'?'selected':''}>Normal</option>
+          <option value="Urgente" ${panolUrgencia==='Urgente'?'selected':''}>Urgente (notifica de inmediato)</option>
+        </select>
+      </div>
+    </div>
+    <label class="field-label" style="margin-top:10px;">Motivo / uso (opcional)</label>
+    <input type="text" id="panolMotivoInput" placeholder="Ej: reposición para montaje de tablero TA-01" value="${panolMotivo}" oninput="panolMotivo=this.value;">
+
+    <div id="panolCampoNotificar">${htmlCampoNotificarPanol()}</div>
+
+    <div class="flex-gap" style="margin-top:14px;">
+      <button class="btn btn-primary" onclick="guardarSolicitudPanol()">Enviar solicitud</button>
+    </div>
+  </div>
+
+  <div class="section-label">Solicitudes</div>
+  <div class="flex-gap" style="margin-bottom:10px;">
+    <select onchange="filtroEstadoPanol=this.value; renderAll();" style="width:auto; font-size:12.5px; padding:8px 11px; border-radius:8px; border:1px solid var(--line); background:var(--card);">
+      <option value="pendientes" ${filtroEstadoPanol==='pendientes'?'selected':''}>Pendientes</option>
+      <option value="entregadas" ${filtroEstadoPanol==='entregadas'?'selected':''}>Entregadas</option>
+      <option value="todas" ${filtroEstadoPanol==='todas'?'selected':''}>Todas</option>
+    </select>
+  </div>
+  <div class="stack">
+    ${listaSolicitudesPanolFiltradas().length ? listaSolicitudesPanolFiltradas().map(s => htmlSolicitudPanolCard(s, puede)).join('') : `<div class="empty-state card">No hay solicitudes con ese filtro.</div>`}
+  </div>
+  `;
 }
 
 /* =====================================================================
@@ -7468,6 +7805,7 @@ function NAV_ACTUAL() {
       {id:"miPanel", label:"Mi Panel", icon:iconTarget(), roles: ROLES_MI_PANEL},
       {id:"panelEquipo", label:"Panel de Equipo", icon:iconTeamCheck(), roles: ROLES_PANEL_EQUIPO},
       {id:"recepciones", label:"Buscar / Recepción OC", icon:iconSearch()},
+      {id:"panol", label:"Pañol", icon:iconPanol()},
       {id:"bodegaGeneral", label:"Bodega General", icon:iconBox()},
       {id:"personal", label:"Personal", icon:iconUsers()},
     ]},
@@ -7564,6 +7902,9 @@ function iconClock() {
 }
 function iconSearch() {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>`;
+}
+function iconPanol() {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 9 12 4l9 5M3 9v9a1 1 0 0 0 1 1h4v-6h8v6h4a1 1 0 0 0 1-1V9"/></svg>`;
 }
 function iconBolt() {
   return `<svg viewBox="0 0 24 24" fill="var(--copper)" stroke="none"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"/></svg>`;
@@ -7682,7 +8023,7 @@ function renderAll() {
   const renderers = {
     dashboard: renderDashboard, miPanel: renderMiPanel, panelEquipo: renderPanelEquipo, bodegaGeneral: renderBodegaGeneral, personal: renderPersonal, proyecto360: renderProyecto360, planificacion: renderPlanificacion, compras: renderCompras,
     presupuesto: renderPresupuesto, bodega: renderBodega, reporteMateriales: renderReporteMateriales, comprasDirectas: renderComprasDirectas, punch: renderPunch, requerimientos: renderRequerimientos, galeria: renderGaleria, cuadroCarga: renderCuadroCarga,
-    recepciones: renderRecepciones,
+    recepciones: renderRecepciones, panol: renderPanol,
     fabricacion: renderFabricacion,
     reaperturas: renderReaperturas, copiloto: renderCopiloto, auditoria: renderAuditoria, actividad: renderActividad, respaldos: renderRespaldos,
   };

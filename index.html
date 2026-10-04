@@ -451,7 +451,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "2.3";
+const APP_VERSION = "2.5";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -586,6 +586,12 @@ const ROLES = [
    "Administrador" a cada lista de roles una por una — así no queda
    ninguna función nueva de permisos que se nos olvide incluirlo. */
 function esAdministrador() { return DB.role === "Administrador"; }
+/* Punch List: la ESTRUCTURA (crear/editar/eliminar tareas y agregar/quitar
+   sub-ítems) la modifica solo el Administrador. Lo que sigue abierto a los
+   demás roles, a nivel de sub-ítem: cambiar su descripción, designar a
+   quién se asigna, reportar avance y comentar. */
+function puedeModificarPunch() { return esAdministrador(); }
+function avisoSoloAdminPunch() { toast("Solo el Administrador puede modificar tareas del Punch List. Sí puedes editar la descripción y designación de los sub-ítems.", "danger"); }
 
 /* "Mi Panel" (vista propia, de campo) es solo para quienes reciben
    tareas de Punch List día a día. "Panel de Equipo" (la misma vista,
@@ -2481,6 +2487,7 @@ function cambiarEstadoPunch(pid, id, nuevoEstado) {
 }
 
 function agregarPunch(pid, datos) {
+  if (!puedeModificarPunch()) { avisoSoloAdminPunch(); return false; }
   const p = proy(pid);
   const n = p.punch.length+1;
   const id = "PL-"+String(n+ (p.id==="P1"?0:900)).padStart(3,'0')+"-"+Math.floor(Math.random()*90+10);
@@ -2497,6 +2504,7 @@ function agregarPunch(pid, datos) {
 }
 
 function editarPunch(pid, id, datos) {
+  if (!puedeModificarPunch()) { avisoSoloAdminPunch(); return false; }
   const p = proy(pid);
   const it = p.punch.find(x => x.id === id);
   if (!it) return false;
@@ -2512,6 +2520,7 @@ function editarPunch(pid, id, datos) {
 }
 
 function eliminarPunch(pid, id) {
+  if (!puedeModificarPunch()) { avisoSoloAdminPunch(); return; }
   const p = proy(pid);
   const it = p.punch.find(x => x.id === id);
   p.punch = p.punch.filter(x => x.id !== id);
@@ -2549,6 +2558,7 @@ function actualizarAvanceSubitem(pid, punchId, subId, valor) {
 /* Genera sub-ítems numerados en un rango, con prefijo opcional
    (ej: prefijo "C-", desde 101, hasta 130 → C-101 ... C-130). */
 function agregarSubitemsRango(pid, punchId, prefijo, desde, hasta) {
+  if (!puedeModificarPunch()) { avisoSoloAdminPunch(); return false; }
   const p = proy(pid);
   const it = p.punch.find(x => x.id === punchId);
   if (!it) return false;
@@ -2571,6 +2581,7 @@ function agregarSubitemsRango(pid, punchId, prefijo, desde, hasta) {
    separados por coma) — para identificadores reales no correlativos,
    ej: números de carga tal como están en el plano. */
 function agregarSubitemsPegado(pid, punchId, texto) {
+  if (!puedeModificarPunch()) { avisoSoloAdminPunch(); return false; }
   const p = proy(pid);
   const it = p.punch.find(x => x.id === punchId);
   if (!it) return false;
@@ -2587,12 +2598,47 @@ function agregarSubitemsPegado(pid, punchId, texto) {
 }
 
 function eliminarSubitemPunch(pid, punchId, subId) {
+  if (!puedeModificarPunch()) { avisoSoloAdminPunch(); return; }
   const p = proy(pid);
   const it = p.punch.find(x => x.id === punchId);
   if (!it) return;
   it.subitems = (it.subitems||[]).filter(s => s.id !== subId);
   it.estado = estadoDesdeAvance(avancePunchItem(it));
   guardarEstado();
+}
+
+function modalEditarSubitem(pid, punchId, subId) {
+  const p = proy(pid);
+  const it = p.punch.find(x => x.id === punchId);
+  const sub = (it?.subitems||[]).find(s => s.id === subId);
+  if (!sub) return;
+  openModal(`
+    <div class="modal-head"><h3>Editar sub-ítem</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <label class="field-label">Descripción</label>
+      <input type="text" id="subitemNombreInput" value="${escaparHtml(sub.nombre)}">
+      <div class="hint">Tarea: ${escaparHtml(it.desc)}</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="
+        if(editarDescripcionSubitem('${pid}','${punchId}',${subId}, document.getElementById('subitemNombreInput').value)){ closeModal(); renderAll(); }">Guardar</button>
+    </div>
+  `, 460);
+}
+function editarDescripcionSubitem(pid, punchId, subId, nombre) {
+  const p = proy(pid);
+  const it = p.punch.find(x => x.id === punchId);
+  const sub = (it?.subitems||[]).find(s => s.id === subId);
+  if (!sub) return false;
+  const nuevo = (nombre||"").trim();
+  if (!nuevo) { toast("La descripción no puede quedar vacía.", "danger"); return false; }
+  if (nuevo === sub.nombre) return true;
+  const antes = sub.nombre;
+  sub.nombre = nuevo;
+  registrarHistorial({proyecto:p.codigo, accion:"Modificar", detalle:`Punch ${punchId}: sub-ítem "${antes}" renombrado a "${nuevo}"`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
+  guardarEstado();
+  return true;
 }
 
 function modalAsignarSubitem(pid, punchId, subId) {
@@ -2637,6 +2683,7 @@ function asignarSubitem(pid, punchId, subId, personaIds) {
 }
 
 function asignarResponsableTarea(pid, punchId, personaIds) {
+  if (!puedeModificarPunch()) return;
   const p = proy(pid);
   const it = p.punch.find(x => x.id === punchId);
   if (!it) return;
@@ -3174,7 +3221,7 @@ function ganttSVG(tareas, cpm) {
   const inicioRango = sumarDias(minFecha, -3);
   const finRango = sumarDias(maxFecha, 3);
   const totalDias = Math.max(1, diasEntre(inicioRango, finRango));
-  const filaAlto = 26, labelAncho = 260, margenTop = 34, diaAncho = Math.max(4, Math.min(10, Math.floor(900/totalDias)));
+  const filaAlto = 26, labelAncho = 260, margenTop = 34, diaAncho = Math.max(4, Math.min(24, Math.floor(760/totalDias)));
   const chartAncho = totalDias*diaAncho;
   const svgAncho = labelAncho + chartAncho + 20;
   const svgAlto = margenTop + tareas.length*filaAlto + 20;
@@ -3206,7 +3253,10 @@ function ganttSVG(tareas, cpm) {
         <rect x="${x1}" y="${y+3}" width="${w*(t.avance/100)}" height="14" rx="3" fill="${colorBarra}"/>`;
     }
   });
-  return `<svg viewBox="0 0 ${svgAncho} ${svgAlto}" width="100%" style="min-width:${svgAncho}px; font-family:'IBM Plex Sans',sans-serif;">
+  /* Tamaño FIJO en píxeles (sin width="100%"): con 100% el navegador estiraba
+     el dibujo completo cuando el rango de fechas era corto, agrandando letras
+     y barras de forma desproporcionada. Así el texto siempre mide lo mismo. */
+  return `<svg viewBox="0 0 ${svgAncho} ${svgAlto}" width="${svgAncho}" height="${svgAlto}" style="display:block; font-family:'IBM Plex Sans',sans-serif;">
     <line x1="${labelAncho}" y1="${margenTop-10}" x2="${labelAncho}" y2="${svgAlto-8}" stroke="var(--line)" stroke-width="1"/>
     ${semanas}
     ${lineaHoy}
@@ -5436,7 +5486,7 @@ function renderPunch() {
       <h1>Punch List ${p.modoCierre?'<span class="badge b-amarillo" style="margin-left:6px;"><span class="dot"></span>Proyecto en cierre</span>':''}</h1>
       <div class="page-desc">${p.modoCierre ? 'Este proyecto se creó en modo cierre — el foco es dejar en 100% cada tarea pendiente, no el seguimiento de postas.' : (p.tipo==='fabricacion' ? 'Detalles finales antes de la entrega. La Posta 10 (Embalaje, despacho y entrega) no puede completarse mientras existan tareas pendientes.' : 'Verificación de sitio abierta durante la Posta 18. La Posta 19 (cierre) no puede completarse mientras existan tareas pendientes.')} Las tareas con fecha de inicio y término se reflejan solas en la carta Gantt.</div>
     </div>
-    <div class="flex-gap">${selectorProyectos()}<button class="btn" onclick="filtroGaleriaProyecto='${p.id}'; goTo('galeria')">📷 Galería de este proyecto</button><button class="btn btn-primary" onclick="modalPunchForm('${p.id}')">+ Nueva tarea</button></div>
+    <div class="flex-gap">${selectorProyectos()}<button class="btn" onclick="filtroGaleriaProyecto='${p.id}'; goTo('galeria')">📷 Galería de este proyecto</button>${puedeModificarPunch() ? `<button class="btn btn-primary" onclick="modalPunchForm('${p.id}')">+ Nueva tarea</button>` : ''}</div>
   </div>
 
   <div class="card" style="margin-bottom:16px;">
@@ -5887,10 +5937,10 @@ function renderTareaPunch(p, it) {
             <option ${it.estado==='En Progreso' ? 'selected' : ''}>En Progreso</option>
             <option ${it.estado==='Completado' ? 'selected' : ''}>Completado</option>
           </select>
-          <button class="btn btn-sm" onclick="event.stopPropagation(); toggleExpandirPunch('${it.id}');">+ Agregar sub-ítems</button>`}
-      <button class="btn btn-sm" onclick="event.stopPropagation(); modalPunchForm('${p.id}','${it.id}')">Editar</button>
+          ${puedeModificarPunch() ? `<button class="btn btn-sm" onclick="event.stopPropagation(); toggleExpandirPunch('${it.id}');">+ Agregar sub-ítems</button>` : ''}`}
+      ${puedeModificarPunch() ? `<button class="btn btn-sm" onclick="event.stopPropagation(); modalPunchForm('${p.id}','${it.id}')">Editar</button>` : ''}
       <button class="btn btn-sm" onclick="event.stopPropagation(); modalBitacoraPunch('${p.id}','${it.id}', null)">💬 ${contarBitacora(p.id, it.id, null)||''} Comentarios</button>
-      <button class="btn btn-sm btn-danger" onclick="event.stopPropagation(); if(confirm('¿Eliminar esta tarea del Punch List?')){ eliminarPunch('${p.id}','${it.id}'); renderAll(); }">Eliminar</button>
+      ${puedeModificarPunch() ? `<button class="btn btn-sm btn-danger" onclick="event.stopPropagation(); if(confirm('¿Eliminar esta tarea del Punch List?')){ eliminarPunch('${p.id}','${it.id}'); renderAll(); }">Eliminar</button>` : ''}
     </div>
     ${abierto ? `<div style="margin-top:14px; padding-top:14px; border-top:1px dashed var(--line);">${renderDetallePunchInline(p, it)}</div>` : ''}
   </div>`;
@@ -5919,7 +5969,7 @@ function renderDetallePunchInline(p, it) {
           <tr><th>Sub-ítem</th><th>Estado</th><th style="min-width:170px;">Progreso</th><th>Asignado a</th><th></th><th></th></tr>
           ${subs.map(s => `
             <tr data-nombre="${s.nombre.toLowerCase()}">
-              <td class="small mono">${s.nombre}</td>
+              <td class="small mono">${escaparHtml(s.nombre)} <button class="btn btn-sm btn-ghost" style="padding:1px 6px;" onclick="modalEditarSubitem('${p.id}','${it.id}',${s.id})" title="Editar descripción">✎</button></td>
               <td>${badgePunch(estadoDesdeAvance(s.avance||0))}</td>
               <td>
                 <div class="flex-gap">
@@ -5936,13 +5986,13 @@ function renderDetallePunchInline(p, it) {
                 ${s.asignadoNota ? `<div class="hint" style="margin-top:2px;">antes: "${s.asignadoNota}"</div>` : ''}
               </td>
               <td><button class="btn btn-sm" onclick="modalBitacoraPunch('${p.id}','${it.id}', ${s.id})" title="Comentarios y fotos">💬 ${contarBitacora(p.id, it.id, s.id)||''}</button></td>
-              <td><button class="btn btn-sm btn-danger" onclick="eliminarSubitemPunch('${p.id}','${it.id}',${s.id}); renderAll();">✕</button></td>
+              <td>${puedeModificarPunch() ? `<button class="btn btn-sm btn-danger" onclick="eliminarSubitemPunch('${p.id}','${it.id}',${s.id}); renderAll();">✕</button>` : ''}</td>
             </tr>
           `).join('')}
         </table></div>` : (todosSubs.length ? '<div class="hint">Ningún sub-ítem coincide con el filtro activo.</div>' : '<div class="hint">Sin sub-ítems todavía — agrega abajo.</div>')}
       </div>
 
-      <div class="divider"></div>
+      ${puedeModificarPunch() ? `      <div class="divider"></div>
       <div class="section-label">Agregar sub-ítems por rango numerado</div>
       <div class="grid grid-2" style="gap:10px;">
         <div><label class="field-label">Prefijo (opcional)</label><input type="text" id="subPrefijo_${it.id}" placeholder="Ej: C-"></div>
@@ -5959,7 +6009,7 @@ function renderDetallePunchInline(p, it) {
       <textarea id="subPegado_${it.id}" rows="3" placeholder="C-101&#10;C-102&#10;C-103"></textarea>
       <button class="btn btn-sm" style="margin-top:8px;" onclick="
         agregarSubitemsPegado('${p.id}','${it.id}', document.getElementById('subPegado_${it.id}').value);
-        renderAll();">Agregar lista</button>
+        renderAll();">Agregar lista</button>` : ''}
     </div>
   `;
 }

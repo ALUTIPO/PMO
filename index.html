@@ -451,7 +451,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "2.9";
+const APP_VERSION = "3.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -8082,6 +8082,19 @@ function abrirWhatsApp(telefono, mensaje) {
   window.open(url, '_blank');
 }
 
+/* Abre el correo de "Solicitar OC". El asunto se arma acá (no dentro del
+   onclick del botón): las comillas dobles de un texto insertado en un
+   atributo onclick="..." cortan el código y el botón no hace nada. */
+function enviarSolicitudOC(pid, cotId, modo) {
+  const p = proy(pid);
+  const c = p && p.cotizaciones.find(x => x.id === cotId);
+  if (!c) return;
+  const asunto = `Solicitud OC — Cotización ${c.numeroCotizacion||c.id} — ${c.proveedor}`;
+  abrirEnOutlook("adminchile@alutipo.com", asunto, document.getElementById('ocCorreo').value, modo);
+  cambiarEstadoCotizacion(pid, cotId, 'OC Solicitada');
+  renderAll();
+}
+
 function modalSolicitarOC(pid, cotId) {
   const p = proy(pid);
   const c = p.cotizaciones.find(x => x.id === cotId);
@@ -8107,12 +8120,8 @@ function modalSolicitarOC(pid, cotId) {
           else { toast('No se pudo copiar automáticamente. Selecciona el texto y usa Ctrl+C.', 'danger'); }
         });
         cambiarEstadoCotizacion('${pid}', '${cotId}', 'OC Solicitada'); renderAll();">📋 Copiar correo</button>
-      <button class="btn" onclick="
-        abrirEnOutlook('${destinatario}', ${JSON.stringify(asunto)}, document.getElementById('ocCorreo').value, 'app');
-        cambiarEstadoCotizacion('${pid}', '${cotId}', 'OC Solicitada'); renderAll();">✉ Programa de correo</button>
-      <button class="btn btn-primary" onclick="
-        abrirEnOutlook('${destinatario}', ${JSON.stringify(asunto)}, document.getElementById('ocCorreo').value, 'web');
-        cambiarEstadoCotizacion('${pid}', '${cotId}', 'OC Solicitada'); renderAll();">📧 Abrir en Outlook web</button>
+      <button class="btn" onclick="enviarSolicitudOC('${pid}','${cotId}','app')">✉ Programa de correo</button>
+      <button class="btn btn-primary" onclick="enviarSolicitudOC('${pid}','${cotId}','web')">📧 Abrir en Outlook web</button>
     </div>
   `);
 }

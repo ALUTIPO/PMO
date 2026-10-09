@@ -451,7 +451,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "2.8";
+const APP_VERSION = "2.9";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -8046,9 +8046,28 @@ function copiarFallback(texto) {
    tienen un límite de longitud dependiente del navegador/SO — para correos
    muy largos con muchos ítems puede que el cuerpo llegue recortado; en ese
    caso, usar el botón "Copiar correo" como respaldo. */
-function abrirEnOutlook(destinatario, asunto, cuerpo) {
-  const url = `mailto:${destinatario||''}?subject=${encodeURIComponent(asunto||'')}&body=${encodeURIComponent(cuerpo||'')}`;
-  window.open(url, '_blank');
+function abrirEnOutlook(destinatario, asunto, cuerpo, modo) {
+  destinatario = destinatario || ''; asunto = asunto || ''; cuerpo = cuerpo || '';
+  if (modo === 'app') {
+    // Programa de correo instalado (Outlook de escritorio, Mail...). Se navega
+    // en la misma pestaña: window.open con mailto: suele abrir una pestaña en blanco.
+    const url = `mailto:${destinatario}?subject=${encodeURIComponent(asunto)}&body=${encodeURIComponent(cuerpo.replace(/\r?\n/g, '\r\n'))}`;
+    window.location.href = url;
+    return;
+  }
+  // Outlook web (Microsoft 365): funciona sin tener ningún programa de correo configurado.
+  const base = `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(destinatario)}&subject=${encodeURIComponent(asunto)}&body=`;
+  let cuerpoUrl = encodeURIComponent(cuerpo);
+  let recortado = false;
+  if (base.length + cuerpoUrl.length > 1900) {
+    recortado = true;
+    cuerpoUrl = encodeURIComponent(cuerpo.slice(0, 600) + "\n\n[...] (pega aquí el texto completo: Ctrl+V)");
+  }
+  // Siempre se deja el texto completo en el portapapeles como respaldo.
+  copiarAlPortapapeles(cuerpo).then(ok => {
+    if (recortado) toast(ok ? "El correo es largo: Outlook recibió solo el inicio. El texto completo quedó copiado — pégalo con Ctrl+V." : "El correo es largo y quedó recortado. Usa «Copiar correo».", ok ? "ok" : "danger");
+  });
+  window.open(base + cuerpoUrl, '_blank');
 }
 
 /* Abre WhatsApp (celular o WhatsApp Web, según el dispositivo) con el
@@ -8088,9 +8107,12 @@ function modalSolicitarOC(pid, cotId) {
           else { toast('No se pudo copiar automáticamente. Selecciona el texto y usa Ctrl+C.', 'danger'); }
         });
         cambiarEstadoCotizacion('${pid}', '${cotId}', 'OC Solicitada'); renderAll();">📋 Copiar correo</button>
+      <button class="btn" onclick="
+        abrirEnOutlook('${destinatario}', ${JSON.stringify(asunto)}, document.getElementById('ocCorreo').value, 'app');
+        cambiarEstadoCotizacion('${pid}', '${cotId}', 'OC Solicitada'); renderAll();">✉ Programa de correo</button>
       <button class="btn btn-primary" onclick="
-        abrirEnOutlook('${destinatario}', ${JSON.stringify(asunto)}, document.getElementById('ocCorreo').value);
-        cambiarEstadoCotizacion('${pid}', '${cotId}', 'OC Solicitada'); renderAll();">📧 Abrir en Outlook</button>
+        abrirEnOutlook('${destinatario}', ${JSON.stringify(asunto)}, document.getElementById('ocCorreo').value, 'web');
+        cambiarEstadoCotizacion('${pid}', '${cotId}', 'OC Solicitada'); renderAll();">📧 Abrir en Outlook web</button>
     </div>
   `);
 }
@@ -8151,7 +8173,8 @@ function modalNotificarProveedor(pid, cotId) {
     <div class="modal-foot">
       <button class="btn" onclick="closeModal()">Cerrar</button>
       <button class="btn" onclick="confirmarEnvioProveedor('${pid}','${cotId}','copiar')">📋 Copiar correo</button>
-      <button class="btn btn-primary" onclick="confirmarEnvioProveedor('${pid}','${cotId}','outlook')">📧 Abrir en Outlook</button>
+      <button class="btn" onclick="confirmarEnvioProveedor('${pid}','${cotId}','mailto')">✉ Programa de correo</button>
+      <button class="btn btn-primary" onclick="confirmarEnvioProveedor('${pid}','${cotId}','outlook')">📧 Abrir en Outlook web</button>
     </div>
   `);
 }
@@ -8177,7 +8200,8 @@ function confirmarEnvioProveedor(pid, cotId, via) {
   if (!c.fechaOC) c.fechaOC = hoyISO();
   const etiqueta = m === "retiro" ? "RETIRO" : "DESPACHO";
   const asunto = `OC ${c.numeroOC||c.id} lista — coordinar ${m==='retiro'?'retiro':'despacho'} — ${p.codigo}`;
-  if (via === 'outlook') abrirEnOutlook(dest, asunto, texto);
+  if (via === 'outlook') abrirEnOutlook(dest, asunto, texto, 'web');
+  else if (via === 'mailto') abrirEnOutlook(dest, asunto, texto, 'app');
   else copiarAlPortapapeles(texto).then(ok => toast(ok?'Correo copiado.':'No se pudo copiar automáticamente.', ok?'ok':'danger'));
   registrarHistorial({proyecto:p.codigo, accion:"Modificar", detalle:`Cotización ${cotId}: enviada al proveedor con modalidad ${etiqueta}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"});
   cambiarEstadoCotizacion(pid, cotId, 'En Tránsito');

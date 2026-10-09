@@ -451,7 +451,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "2.5";
+const APP_VERSION = "2.7";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -748,6 +748,9 @@ function migrarProyecto(p) {
       ],
       numeroOC: c.numeroOC || "",
       linkOC: c.linkOC || "",
+      fechaOC: c.fechaOC || "",
+      modalidadEntrega: c.modalidadEntrega || "",
+      fechaEnvioProveedor: c.fechaEnvioProveedor || "",
       recepciones: Array.isArray(c.recepciones) ? c.recepciones : [],
     }));
   }
@@ -773,6 +776,9 @@ function migrarProyecto(p) {
     c.recepciones.forEach(r => { if(!Array.isArray(r.items)) r.items = []; });
     if(c.numeroOC===undefined) c.numeroOC = "";
     if(c.linkOC===undefined) c.linkOC = "";
+    if(c.fechaOC===undefined) c.fechaOC = "";
+    if(c.modalidadEntrega===undefined) c.modalidadEntrega = "";
+    if(c.fechaEnvioProveedor===undefined) c.fechaEnvioProveedor = "";
   });
   return p;
 }
@@ -1683,6 +1689,7 @@ function registrarNumeroOC(pid, cotId, numeroOC, linkOC) {
   }
   c.numeroOC = numeroOC.trim();
   c.linkOC = (linkOC||"").trim();
+  if (!c.fechaOC) c.fechaOC = hoyISO();
   c.estado = "OC Emitida";
   registrarHistorial({proyecto:p.codigo, accion:"Modificar", detalle:`Cotización ${cotId}: N° de OC registrado (${c.numeroOC}) → OC Emitida`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"});
   toast(`N° de OC ${c.numeroOC} registrado. Cotización marcada como "OC Emitida".`, "ok");
@@ -2175,7 +2182,7 @@ function guardarCotizacion(pid, cotId, datos) {
       linkSharepoint: datos.linkSharepoint||"", estado: "Cotizando",
       longLead: !!datos.longLead, fechaEstim: datos.fechaEstim||"", items,
       descuentoGlobalPct: Number(datos.descuentoGlobalPct)||0,
-      numeroOC: "", linkOC: "", recepciones: [],
+      numeroOC: "", linkOC: "", fechaOC: "", modalidadEntrega: "", fechaEnvioProveedor: "", recepciones: [],
     });
     registrarHistorial({proyecto:p.codigo, accion:"Crear", detalle:`Nueva cotización: ${datos.proveedor} (${id})`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
     toast(`${id} creada en estado "Cotizando".`, "ok");
@@ -2371,15 +2378,23 @@ Quedo atento a cualquier información adicional que se requiera.`;
 
 /* Correo al proveedor notificando que la OC está lista y solicitando el
    despacho — se usa al pasar la cotización de "OC Emitida" a "En Tránsito". */
-function generarCorreoDespachoProveedor(pid, cotId) {
+function generarCorreoDespachoProveedor(pid, cotId, modalidad) {
   const p = proy(pid);
   const c = p.cotizaciones.find(x => x.id === cotId);
   if (!c) return "";
+  modalidad = modalidad || c.modalidadEntrega || "despacho";
   const lineasItems = c.items.map(it => `  · ${it.descripcion} — ${it.cantidad} ${it.unidad}`).join("\n");
+  const intro = modalidad === "retiro"
+    ? "Les confirmamos que ya contamos con la orden de compra emitida para el siguiente requerimiento. El material será RETIRADO por nosotros en sus instalaciones, por lo que agradeceremos indicar la dirección y horario de retiro y confirmar que el material esté disponible."
+    : "Les confirmamos que ya contamos con la orden de compra emitida para el siguiente requerimiento, por lo que agradeceremos coordinar el DESPACHO a la brevedad.";
+  const cierre = modalidad === "retiro"
+    ? "Quedamos atentos a la confirmación de disponibilidad para coordinar el retiro."
+    : "Quedamos atentos a la guía de despacho y fecha estimada de llegada.";
   return `Estimados, buenas tardes,
 
-Les confirmamos que ya contamos con la orden de compra emitida para el siguiente requerimiento, por lo que agradeceremos coordinar el despacho a la brevedad.
+${intro}
 
+Modalidad: ${modalidad === "retiro" ? "RETIRO por Alutipo" : "DESPACHO por el proveedor"}
 N° de OC: ${c.numeroOC || "(sin número de OC registrado)"}
 N° Cotización: ${c.numeroCotizacion || "(sin número)"}
 Proyecto: ${p.codigo}
@@ -2388,7 +2403,7 @@ Referencia: ${c.referencia || "(sin referencia)"}
 Ítems:
 ${lineasItems}
 
-Quedamos atentos a la guía de despacho y fecha estimada de llegada.`;
+${cierre}`;
 }
 
 /* =====================================================================
@@ -3214,55 +3229,173 @@ function calcularCPM(tareas) {
   });
   return map;
 }
-function ganttSVG(tareas, cpm) {
+/* ===== Carta Gantt: desplazable y con zoom ===== */
+let ganttDiaAncho = null;        // px por día elegido por el usuario; null = ajuste automático
+let ganttDiaAnchoActual = 10;    // px por día realmente usado en el último dibujo
+let ganttInicioRangoActual = null;
+let ganttScrollGuardado = null;  // scrollLeft recordado entre redibujos
+let ganttDrag = null;
+const GANTT_LABEL_ANCHO = 260;
+
+function ganttHTML(tareas, cpm) {
   const fechas = tareas.flatMap(t => [t.inicio, t.fin]).filter(Boolean);
   const minFecha = fechas.reduce((m,f) => !m || f<m ? f : m, null);
   const maxFecha = fechas.reduce((m,f) => !m || f>m ? f : m, null);
-  const inicioRango = sumarDias(minFecha, -3);
-  const finRango = sumarDias(maxFecha, 3);
+  const inicioRango = sumarDias(minFecha, -7);
+  const finRango = sumarDias(maxFecha, 14);
   const totalDias = Math.max(1, diasEntre(inicioRango, finRango));
-  const filaAlto = 26, labelAncho = 260, margenTop = 34, diaAncho = Math.max(4, Math.min(24, Math.floor(760/totalDias)));
-  const chartAncho = totalDias*diaAncho;
-  const svgAncho = labelAncho + chartAncho + 20;
-  const svgAlto = margenTop + tareas.length*filaAlto + 20;
-  const xDeFecha = (f) => labelAncho + diasEntre(inicioRango, f)*diaAncho;
-  let semanas = "";
-  for(let d=0; d<=totalDias; d+=7) {
-    const x = labelAncho + d*diaAncho;
-    const fecha = sumarDias(inicioRango, d);
-    semanas += `<line x1="${x}" y1="${margenTop-8}" x2="${x}" y2="${svgAlto-10}" stroke="var(--line-soft)" stroke-width="1"/>
-      <text x="${x+3}" y="${margenTop-14}" font-size="9" fill="var(--muted)" font-family="IBM Plex Mono, monospace">${fecha.slice(5)}</text>`;
-  }
+  const filaAlto = 28, margenTop = 46;
+  const dia = ganttDiaAncho || Math.max(4, Math.min(24, Math.floor(760/totalDias)));
+  ganttDiaAnchoActual = dia; ganttInicioRangoActual = inicioRango;
+  const chartAncho = totalDias*dia;
+  const svgAlto = margenTop + tareas.length*filaAlto + 24;
+  const xDeFecha = (f) => diasEntre(inicioRango, f)*dia;
   const hoy = hoyISO();
+  const mostrarDias = dia >= 16, mostrarFinde = dia >= 8;
+  const nombresMes = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+  const letraDia = ["D","L","M","M","J","V","S"];
+
+  // --- Encabezado: meses arriba, días (o semanas) abajo ---
+  let cab = "", rejilla = "", finde = "";
+  let mesActual = "";
+  for (let d=0; d<=totalDias; d++) {
+    const f = sumarDias(inicioRango, d);
+    const x = d*dia;
+    const dt = new Date(f+"T12:00:00");
+    const mes = f.slice(0,7);
+    if (mes !== mesActual) {
+      mesActual = mes;
+      cab += `<line x1="${x}" y1="2" x2="${x}" y2="${svgAlto-8}" stroke="var(--line)" stroke-width="1"/>
+        <text x="${x+4}" y="14" font-size="11" font-weight="600" fill="var(--ink-2)">${nombresMes[dt.getMonth()]} ${dt.getFullYear()}</text>`;
+    }
+    const dow = dt.getDay();
+    if (mostrarFinde && (dow===0 || dow===6)) finde += `<rect x="${x}" y="${margenTop-6}" width="${dia}" height="${svgAlto-margenTop-2}" fill="var(--line-soft)" opacity="0.45"/>`;
+    if (mostrarDias) {
+      cab += `<text x="${x+dia/2}" y="${margenTop-22}" font-size="9" text-anchor="middle" fill="var(--muted)">${letraDia[dow]}</text>
+        <text x="${x+dia/2}" y="${margenTop-10}" font-size="10" text-anchor="middle" fill="${f===hoy?'var(--copper-dark)':'var(--ink-3)'}" font-weight="${f===hoy?'700':'400'}" font-family="IBM Plex Mono, monospace">${dt.getDate()}</text>`;
+      rejilla += `<line x1="${x}" y1="${margenTop-6}" x2="${x}" y2="${svgAlto-8}" stroke="var(--line-soft)" stroke-width="1"/>`;
+    } else if (dow === 1) {
+      cab += `<text x="${x+2}" y="${margenTop-10}" font-size="9.5" fill="var(--muted)" font-family="IBM Plex Mono, monospace">${String(dt.getDate()).padStart(2,'0')}</text>`;
+      rejilla += `<line x1="${x}" y1="${margenTop-6}" x2="${x}" y2="${svgAlto-8}" stroke="var(--line-soft)" stroke-width="1"/>`;
+    }
+  }
   const xHoy = xDeFecha(hoy);
-  const lineaHoy = (xHoy>=labelAncho && xHoy<=svgAncho-20) ? `<line x1="${xHoy}" y1="${margenTop-8}" x2="${xHoy}" y2="${svgAlto-10}" stroke="var(--copper)" stroke-width="1.5" stroke-dasharray="4,3"/>
-    <text x="${xHoy+3}" y="${svgAlto-2}" font-size="9" fill="var(--copper-dark)" font-family="IBM Plex Mono, monospace">hoy</text>` : "";
-  let filas = "";
+  const lineaHoy = (xHoy>=0 && xHoy<=chartAncho) ? `<line x1="${xHoy+dia/2}" y1="${margenTop-6}" x2="${xHoy+dia/2}" y2="${svgAlto-8}" stroke="var(--copper)" stroke-width="1.5" stroke-dasharray="4,3"/>
+    <text x="${xHoy+dia/2+4}" y="${svgAlto-4}" font-size="9" fill="var(--copper-dark)" font-family="IBM Plex Mono, monospace">hoy</text>` : "";
+
+  // --- Filas ---
+  let filasChart = "", filasLabel = "";
   tareas.forEach((t,i) => {
     const y = margenTop + i*filaAlto;
     const c = cpm[t.id] || {};
     const colorBarra = c.critica ? "var(--danger)" : "var(--blueprint)";
-    filas += `<text x="8" y="${y+filaAlto/2+4}" font-size="11.5" fill="var(--ink)">${(t.nombre.length>36 ? t.nombre.slice(0,35)+'…' : t.nombre)}</text>`;
-    if(t.hito) {
-      const x = xDeFecha(t.inicio);
-      filas += `<rect x="${x-6}" y="${y+4}" width="12" height="12" transform="rotate(45 ${x} ${y+10})" fill="${t.avance>=100?'var(--ok)':'var(--copper)'}"/>`;
+    const franja = i%2===0 ? `<rect x="0" y="${y}" width="%W%" height="${filaAlto}" fill="var(--line-soft)" opacity="0.25"/>` : "";
+    filasChart += franja.replace("%W%", chartAncho);
+    filasLabel += franja.replace("%W%", GANTT_LABEL_ANCHO);
+    const nombre = t.nombre.length>38 ? t.nombre.slice(0,37)+'…' : t.nombre;
+    filasLabel += `<text x="8" y="${y+filaAlto/2+4}" font-size="11.5" fill="var(--ink)"><title>${escaparHtml(t.nombre)}</title>${escaparHtml(nombre)}</text>`;
+    if (t.hito) {
+      const x = xDeFecha(t.inicio)+dia/2;
+      filasChart += `<rect x="${x-6}" y="${y+8}" width="12" height="12" transform="rotate(45 ${x} ${y+14})" fill="${t.avance>=100?'var(--ok)':'var(--copper)'}"/>`;
     } else {
-      const x1 = xDeFecha(t.inicio), x2 = xDeFecha(t.fin);
-      const w = Math.max(3, x2-x1);
-      filas += `<rect x="${x1}" y="${y+3}" width="${w}" height="14" rx="3" fill="${colorBarra}" opacity="0.28"/>
-        <rect x="${x1}" y="${y+3}" width="${w*(t.avance/100)}" height="14" rx="3" fill="${colorBarra}"/>`;
+      const x1 = xDeFecha(t.inicio), x2 = xDeFecha(t.fin)+dia;
+      const w = Math.max(4, x2-x1);
+      filasChart += `<g><title>${escaparHtml(t.nombre)} — ${t.inicio} → ${t.fin} (${t.avance||0}%)</title>
+        <rect x="${x1}" y="${y+6}" width="${w}" height="16" rx="3" fill="${colorBarra}" opacity="0.28"/>
+        <rect x="${x1}" y="${y+6}" width="${w*((t.avance||0)/100)}" height="16" rx="3" fill="${colorBarra}"/>
+        ${w>46 ? `<text x="${x1+6}" y="${y+18}" font-size="10" fill="${(t.avance||0)>=45?'#fff':'var(--ink-2)'}" font-family="IBM Plex Mono, monospace">${t.avance||0}%</text>` : ''}</g>`;
     }
   });
-  /* Tamaño FIJO en píxeles (sin width="100%"): con 100% el navegador estiraba
-     el dibujo completo cuando el rango de fechas era corto, agrandando letras
-     y barras de forma desproporcionada. Así el texto siempre mide lo mismo. */
-  return `<svg viewBox="0 0 ${svgAncho} ${svgAlto}" width="${svgAncho}" height="${svgAlto}" style="display:block; font-family:'IBM Plex Sans',sans-serif;">
-    <line x1="${labelAncho}" y1="${margenTop-10}" x2="${labelAncho}" y2="${svgAlto-8}" stroke="var(--line)" stroke-width="1"/>
-    ${semanas}
-    ${lineaHoy}
-    ${filas}
-  </svg>`;
+
+  const svgLabels = `<svg width="${GANTT_LABEL_ANCHO}" height="${svgAlto}" style="display:block; flex:none; position:sticky; left:0; z-index:2; background:var(--card); border-right:1px solid var(--line); font-family:'IBM Plex Sans',sans-serif;">
+    <text x="8" y="${margenTop-10}" font-size="10" fill="var(--muted)" font-family="IBM Plex Mono, monospace">TAREA</text>
+    ${filasLabel}</svg>`;
+  const svgChart = `<svg width="${chartAncho}" height="${svgAlto}" style="display:block; flex:none; font-family:'IBM Plex Sans',sans-serif;">
+    ${finde}${rejilla}${cab}${filasChart}${lineaHoy}</svg>`;
+
+  const rotulo = ganttDiaAncho ? `${dia} px/día` : `auto (${dia} px/día)`;
+  const bt = 'style="padding:5px 10px;"';
+  const controles = `<div class="flex-gap" style="flex-wrap:wrap; margin-bottom:10px; align-items:center;">
+    <button class="btn btn-sm" ${bt} onclick="ganttScrollPor(-1)" title="Desplazar hacia atrás">‹ Atrás</button>
+    <button class="btn btn-sm" ${bt} onclick="ganttIrAHoy()">Hoy</button>
+    <button class="btn btn-sm" ${bt} onclick="ganttScrollPor(1)" title="Desplazar hacia adelante">Adelante ›</button>
+    <input type="date" style="width:auto; font-size:12px; padding:5px 8px;" onchange="ganttIrAFecha(this.value)" title="Ir a una fecha">
+    <span class="muted small" style="margin-left:8px;">Ancho de días:</span>
+    <button class="btn btn-sm" ${bt} onclick="ganttZoom(0.7)" title="Días más angostos">−</button>
+    <button class="btn btn-sm" ${bt} onclick="ganttZoom(1.4)" title="Días más anchos">+</button>
+    <select onchange="ganttPreset(this.value)" style="width:auto; font-size:12px; padding:5px 8px;">
+      <option value="">Preajustes…</option>
+      <option value="auto">Ajuste automático</option>
+      <option value="4">Mes (compacto)</option>
+      <option value="10">Semanas</option>
+      <option value="22">Días</option>
+      <option value="40">Días (amplio)</option>
+    </select>
+    <span class="hint">${rotulo} · arrastra el gráfico con el mouse o usa la barra inferior</span>
+  </div>`;
+  // Tras dibujar, restaurar el desplazamiento (o centrar en "hoy" la primera vez)
+  setTimeout(() => {
+    const el = document.getElementById('ganttScroll');
+    if (!el) return;
+    if (ganttScrollGuardado == null) {
+      const xh = xDeFecha(hoy);
+      el.scrollLeft = (xh>=0 && xh<=chartAncho) ? Math.max(0, xh - (el.clientWidth-GANTT_LABEL_ANCHO)/3) : 0;
+    } else el.scrollLeft = ganttScrollGuardado;
+  }, 0);
+  return `${controles}<div id="ganttScroll" style="overflow-x:auto; cursor:grab; border:1px solid var(--line-soft); border-radius:8px;"><div style="display:flex; width:max-content;">${svgLabels}${svgChart}</div></div>`;
 }
+function ganttSVG(tareas, cpm) { return ganttHTML(tareas, cpm); }
+
+function ganttRedibujar(centroDia) {
+  const cont = document.getElementById('ganttContenedor');
+  const p = proy();
+  if (!cont || !p) return;
+  const el = document.getElementById('ganttScroll');
+  const ancho = el ? el.clientWidth - GANTT_LABEL_ANCHO : 600;
+  if (centroDia == null && el) centroDia = (el.scrollLeft + ancho/2) / ganttDiaAnchoActual;
+  const tareas = p.planificacion;
+  cont.innerHTML = ganttHTML(tareas, calcularCPM(tareas));
+  ganttScrollGuardado = Math.max(0, centroDia*ganttDiaAnchoActual - ancho/2);
+}
+function ganttZoom(factor) {
+  const nuevo = Math.max(2, Math.min(80, Math.round(ganttDiaAnchoActual*factor)));
+  ganttDiaAncho = nuevo === ganttDiaAnchoActual ? (factor>1 ? nuevo+1 : Math.max(2,nuevo-1)) : nuevo;
+  ganttRedibujar();
+}
+function ganttPreset(v) {
+  if (!v) return;
+  ganttDiaAncho = v==='auto' ? null : Number(v);
+  ganttRedibujar();
+}
+function ganttScrollPor(dir) {
+  const el = document.getElementById('ganttScroll');
+  if (el) el.scrollBy({ left: dir*(el.clientWidth-GANTT_LABEL_ANCHO)*0.7, behavior: 'smooth' });
+}
+function ganttCentrarEnFecha(f) {
+  const el = document.getElementById('ganttScroll');
+  if (!el || !f || !ganttInicioRangoActual) return;
+  const x = diasEntre(ganttInicioRangoActual, f)*ganttDiaAnchoActual;
+  el.scrollTo({ left: Math.max(0, x - (el.clientWidth-GANTT_LABEL_ANCHO)/2), behavior: 'smooth' });
+}
+function ganttIrAHoy() { ganttCentrarEnFecha(hoyISO()); }
+function ganttIrAFecha(f) { ganttCentrarEnFecha(f); }
+
+// Arrastrar el gráfico con el mouse + recordar el desplazamiento (delegado: la página se redibuja seguido)
+document.addEventListener('mousedown', (e) => {
+  const el = e.target.closest && e.target.closest('#ganttScroll');
+  if (!el) return;
+  ganttDrag = { el, x: e.clientX, left: el.scrollLeft };
+  el.style.cursor = 'grabbing';
+});
+document.addEventListener('mousemove', (e) => {
+  if (ganttDrag) ganttDrag.el.scrollLeft = ganttDrag.left - (e.clientX - ganttDrag.x);
+});
+document.addEventListener('mouseup', () => {
+  if (ganttDrag) { ganttDrag.el.style.cursor = 'grab'; ganttDrag = null; }
+});
+document.addEventListener('scroll', (e) => {
+  if (e.target && e.target.id === 'ganttScroll') ganttScrollGuardado = e.target.scrollLeft;
+}, true);
 
 function puedeEditarPlanificacion() { return esAdministrador() || DB.role==="Jefe de Proyecto" || DB.role==="Gerencia"; }
 
@@ -3315,7 +3448,7 @@ function renderPlanificacion() {
     <div class="card kpi"><div class="kpi-label">Fin del programa</div><div class="kpi-value" style="font-size:16px;">${tareas.reduce((m,t) => !m || t.fin>m ? t.fin : m, null)}</div></div>
   </div>
 
-  <div class="card card-flush" style="overflow-x:auto; padding:18px;">
+  <div class="card card-flush" id="ganttContenedor" style="padding:14px;">
     ${ganttSVG(tareas, cpm)}
   </div>
 
@@ -3982,6 +4115,147 @@ function filasRecepcionesFiltradas() {
     return coincideBusquedaRecepcion(p, c, filtroBusquedaRecepciones);
   }).sort((a,b) => (b.c.fecha||'').localeCompare(a.c.fecha||''));
 }
+/* =====================================================================
+   RESUMEN DE ÓRDENES DE COMPRA — solo cotizaciones con OC (no Compras
+   Directas ni Pañol). Agrupado por día, con modalidad Despacho/Retiro,
+   imprimible (PDF apaisado) y exportable a Excel. La fecha de agrupación
+   es la de emisión de la OC (fechaOC); en OC antiguas sin ese dato se usa
+   la fecha de la cotización.
+   ===================================================================== */
+let resumenOCDesde = "";
+let resumenOCHasta = "";
+let resumenOCEstado = "activas"; // activas | todas | OC Emitida | En Tránsito | Recibido Parcial | Recibido
+let resumenOCModalidad = "todas"; // todas | despacho | retiro | sinDefinir
+
+function fechaOCEfectiva(c) { return c.fechaOC || c.fecha || ""; }
+function filasResumenOC() {
+  const desde = resumenOCDesde || hoyISO();
+  const hasta = resumenOCHasta || desde;
+  return cotizacionesConProyecto().filter(({p, c}) => {
+    if (!c.numeroOC && !["OC Emitida","En Tránsito","Recibido Parcial","Recibido"].includes(c.estado)) return false;
+    const f = fechaOCEfectiva(c);
+    if (f < desde || f > hasta) return false;
+    if (resumenOCEstado === "activas" && c.estado === "Recibido") return false;
+    if (!["activas","todas"].includes(resumenOCEstado) && c.estado !== resumenOCEstado) return false;
+    if (resumenOCModalidad === "despacho" && c.modalidadEntrega !== "despacho") return false;
+    if (resumenOCModalidad === "retiro" && c.modalidadEntrega !== "retiro") return false;
+    if (resumenOCModalidad === "sinDefinir" && c.modalidadEntrega) return false;
+    return true;
+  }).sort((a,b) => fechaOCEfectiva(b.c).localeCompare(fechaOCEfectiva(a.c)) || a.p.codigo.localeCompare(b.p.codigo));
+}
+function etiquetaModalidad(m) { return m === "retiro" ? "Retiro" : (m === "despacho" ? "Despacho" : "Sin definir"); }
+function resumenOCFilaDatos({p, c}) {
+  return {
+    fecha: fechaOCEfectiva(c), proyecto: p.codigo, nombreProyecto: p.nombre, oc: c.numeroOC || "(sin N° OC)",
+    cotizacion: c.numeroCotizacion || "", proveedor: c.proveedor, referencia: c.referencia || "",
+    items: (c.items||[]).map(it => `${it.descripcion} (${it.cantidad} ${it.unidad})`).join("; "),
+    totalNeto: totalNetoCotizacion(c), estado: c.estado, modalidad: etiquetaModalidad(c.modalidadEntrega),
+    fechaEnvio: c.fechaEnvioProveedor || "", fechaEstim: c.fechaEstim || "",
+  };
+}
+function htmlResumenOC() {
+  const filas = filasResumenOC();
+  if (!filas.length) return `<div class="empty-state card">No hay órdenes de compra en ese rango con esos filtros.</div>`;
+  const porDia = {};
+  filas.forEach(f => { (porDia[fechaOCEfectiva(f.c)] = porDia[fechaOCEfectiva(f.c)] || []).push(f); });
+  const nDesp = filas.filter(f => f.c.modalidadEntrega === "despacho").length;
+  const nRet = filas.filter(f => f.c.modalidadEntrega === "retiro").length;
+  const nSin = filas.length - nDesp - nRet;
+  const resumen = `<div class="card" style="margin-bottom:14px;"><strong>${filas.length}</strong> OC · 🚚 ${nDesp} con despacho · 🧰 ${nRet} retiro · ❔ ${nSin} sin definir</div>`;
+  return resumen + Object.keys(porDia).sort().reverse().map(dia => `
+    <h3 style="margin:16px 0 8px;">${dia}${dia===hoyISO()?' · hoy':''} <span class="muted small">(${porDia[dia].length} OC)</span></h3>
+    <div class="card card-flush"><div class="table-wrap"><table>
+      <tr><th>Proyecto</th><th>N° OC</th><th>Proveedor</th><th>Referencia / Ítems</th><th>Total neto</th><th>Entrega</th><th>Estado</th></tr>
+      ${porDia[dia].map(({p, c}) => `<tr>
+        <td><div class="mono small">${p.codigo}</div><div class="muted small">${p.nombre}</div></td>
+        <td class="mono">${c.numeroOC || '—'}</td>
+        <td>${c.proveedor}</td>
+        <td><div>${c.referencia||''}</div><div class="muted small">${(c.items||[]).map(it=>`${it.descripcion} (${it.cantidad} ${it.unidad})`).join(' · ')}</div></td>
+        <td>${money(totalNetoCotizacion(c))}</td>
+        <td>${c.modalidadEntrega==='retiro'?'🧰 Retiro':(c.modalidadEntrega==='despacho'?'🚚 Despacho':'<span class="muted">Sin definir</span>')}</td>
+        <td>${badgeCompra(c.estado)}</td>
+      </tr>`).join('')}
+    </table></div></div>`).join('');
+}
+function refrescarResumenOC() { const el = document.getElementById('resumenOCResultados'); if (el) el.innerHTML = htmlResumenOC(); }
+function renderResumenOC() {
+  if (!resumenOCDesde) resumenOCDesde = hoyISO();
+  if (!resumenOCHasta) resumenOCHasta = resumenOCDesde;
+  const selStyle = 'width:auto; font-size:12.5px; padding:8px 11px; border-radius:8px; border:1px solid var(--line); background:var(--card);';
+  return `
+  <div class="page-head">
+    <div>
+      <h1>Resumen de Órdenes de Compra</h1>
+      <div class="page-desc">Solo cotizaciones con OC (sin Compras Directas ni Pañol), agrupadas por día de emisión, indicando si llegan con despacho o por retiro. Imprime o exporta a Excel.</div>
+    </div>
+    <div class="flex-gap">
+      <button class="btn" onclick="generarPdfResumenOC()">🖨 PDF para imprimir</button>
+      <button class="btn btn-primary" onclick="exportarResumenOCExcel()">⬇ Exportar a Excel</button>
+    </div>
+  </div>
+  <div class="card" style="margin-bottom:14px;">
+    <div class="flex-gap" style="flex-wrap:wrap; align-items:center;">
+      <label class="small muted">Desde</label>
+      <input type="date" value="${resumenOCDesde}" style="width:auto;" onchange="resumenOCDesde=this.value||hoyISO(); if(resumenOCHasta<resumenOCDesde) resumenOCHasta=resumenOCDesde; renderAll();">
+      <label class="small muted">Hasta</label>
+      <input type="date" value="${resumenOCHasta}" style="width:auto;" onchange="resumenOCHasta=this.value||resumenOCDesde; refrescarResumenOC();">
+      <button class="btn btn-sm" onclick="resumenOCDesde=resumenOCHasta=hoyISO(); renderAll();">Hoy</button>
+      <button class="btn btn-sm" onclick="const d=new Date(); d.setDate(d.getDate()-7); resumenOCDesde=d.toISOString().slice(0,10); resumenOCHasta=hoyISO(); renderAll();">Últimos 7 días</button>
+      <select style="${selStyle}" onchange="resumenOCEstado=this.value; refrescarResumenOC();">
+        <option value="activas" ${resumenOCEstado==='activas'?'selected':''}>Sin cerradas</option>
+        <option value="todas" ${resumenOCEstado==='todas'?'selected':''}>Todos los estados</option>
+        <option value="OC Emitida" ${resumenOCEstado==='OC Emitida'?'selected':''}>OC Emitida</option>
+        <option value="En Tránsito" ${resumenOCEstado==='En Tránsito'?'selected':''}>En Tránsito</option>
+        <option value="Recibido Parcial" ${resumenOCEstado==='Recibido Parcial'?'selected':''}>Recibido Parcial</option>
+        <option value="Recibido" ${resumenOCEstado==='Recibido'?'selected':''}>Recibido</option>
+      </select>
+      <select style="${selStyle}" onchange="resumenOCModalidad=this.value; refrescarResumenOC();">
+        <option value="todas" ${resumenOCModalidad==='todas'?'selected':''}>Despacho y retiro</option>
+        <option value="despacho" ${resumenOCModalidad==='despacho'?'selected':''}>Solo con despacho</option>
+        <option value="retiro" ${resumenOCModalidad==='retiro'?'selected':''}>Solo retiro</option>
+        <option value="sinDefinir" ${resumenOCModalidad==='sinDefinir'?'selected':''}>Sin definir</option>
+      </select>
+    </div>
+  </div>
+  <div id="resumenOCResultados">${htmlResumenOC()}</div>`;
+}
+function exportarResumenOCExcel() {
+  if (typeof XLSX === "undefined") { toast("No se pudo cargar el generador de Excel. Revisa tu conexión.", "danger"); return; }
+  const filas = filasResumenOC().map(resumenOCFilaDatos);
+  if (!filas.length) { toast("No hay OC para exportar con estos filtros.", "danger"); return; }
+  const wb = XLSX.utils.book_new();
+  const hoja = XLSX.utils.json_to_sheet(filas.map(f => ({
+    "Fecha OC": f.fecha, "Proyecto": f.proyecto, "Nombre proyecto": f.nombreProyecto, "N° OC": f.oc,
+    "N° Cotización": f.cotizacion, "Proveedor": f.proveedor, "Referencia": f.referencia, "Ítems": f.items,
+    "Total neto": f.totalNeto, "Entrega": f.modalidad, "Enviada al proveedor": f.fechaEnvio,
+    "Llegada estimada": f.fechaEstim, "Estado": f.estado,
+  })));
+  hoja['!cols'] = [10,12,28,14,14,24,28,60,14,12,16,14,16].map(w => ({wch:w}));
+  XLSX.utils.book_append_sheet(wb, hoja, "Resumen OC");
+  XLSX.writeFile(wb, `Resumen_OC_${resumenOCDesde}_a_${resumenOCHasta}.xlsx`);
+  toast("Excel exportado.", "ok");
+}
+function generarPdfResumenOC() {
+  if (typeof window.jspdf === "undefined") { toast("No se pudo cargar el generador de PDF. Revisa tu conexión.", "danger"); return; }
+  const filas = filasResumenOC().map(resumenOCFilaDatos);
+  if (!filas.length) { toast("No hay OC para imprimir con estos filtros.", "danger"); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  doc.setFontSize(15); doc.setFont(undefined,'bold');
+  doc.text("ALUTIPO — Resumen de Órdenes de Compra", 14, 16);
+  doc.setFontSize(10); doc.setFont(undefined,'normal');
+  const rango = resumenOCDesde === resumenOCHasta ? resumenOCDesde : `${resumenOCDesde} a ${resumenOCHasta}`;
+  doc.text(`Período: ${rango} · Generado por ${DB.usuario} (${DB.role}) el ${hoyISO()} · ${filas.length} OC`, 14, 23);
+  doc.autoTable({
+    startY: 28,
+    head: [["Fecha","Proyecto","N° OC","Proveedor","Referencia / Ítems","Total neto","Entrega","Estado"]],
+    body: filas.map(f => [f.fecha, f.proyecto, f.oc, f.proveedor, (f.referencia ? f.referencia+" — " : "")+f.items, money(f.totalNeto), f.modalidad, f.estado]),
+    theme: 'grid', styles:{fontSize:8, cellPadding:1.6, overflow:'linebreak'}, headStyles:{fillColor:[193,113,46]},
+    columnStyles:{4:{cellWidth:95}}, margin:{left:10, right:10},
+  });
+  doc.save(`Resumen_OC_${resumenOCDesde}_a_${resumenOCHasta}.pdf`);
+}
+
 function renderRecepciones() {
   return `
   <div class="page-head">
@@ -4020,7 +4294,7 @@ function htmlResultadosRecepciones() {
           <div class="mono muted small">${p.codigo} — ${p.nombre} · ${(p.tipo||'electrico')==='fabricacion'?'🔧 Fabricación':'⚡ Eléctrico'}</div>
           <div class="mono muted small">${c.id}${c.numeroCotizacion?` · N° cot. ${c.numeroCotizacion}`:''}${c.numeroOC?` · N° OC ${c.numeroOC}`:''}</div>
           <h3 style="margin-top:2px;">${c.proveedor}${c.referencia?` — ${c.referencia}`:''}</h3>
-          <p class="hint" style="margin-top:2px;">${c.items.length} ítem${c.items.length!==1?'s':''} · Total neto ${money(totalNeto)}${c.longLead?' · <span style="color:var(--copper-dark)">long-lead</span>':''}</p>
+          <p class="hint" style="margin-top:2px;">${c.items.length} ítem${c.items.length!==1?'s':''} · Total neto ${money(totalNeto)}${c.longLead?' · <span style="color:var(--copper-dark)">long-lead</span>':''}${c.modalidadEntrega?` · ${c.modalidadEntrega==='retiro'?'🧰 Retiro':'🚚 Despacho'}`:''}</p>
         </div>
         <div class="flex-gap">${badgeCompra(c.estado)}</div>
       </div>
@@ -7429,36 +7703,68 @@ function modalRegistrarNumeroOC(pid, cotId) {
   `);
 }
 
-/* Notificar al proveedor que la OC está lista, al pasar a "En Tránsito" */
+/* Notificar al proveedor que la OC está lista, al pasar a "En Tránsito".
+   Hay que elegir si el material llega con DESPACHO del proveedor o si lo
+   RETIRAMOS nosotros — queda guardado en la cotización y sale en el resumen. */
 function modalNotificarProveedor(pid, cotId) {
   const p = proy(pid);
   const c = p.cotizaciones.find(x => x.id === cotId);
   if (!c) return;
   if (!puedeGestionarCompras()) { toast(`Tu rol (${DB.role}) no gestiona compras.`, "danger"); return; }
   const prov = buscarProveedor(c.proveedor);
-  const correo = generarCorreoDespachoProveedor(pid, cotId);
-  const asunto = `OC ${c.numeroOC||c.id} lista — coordinar despacho — ${p.codigo}`;
+  const mod = c.modalidadEntrega || "";
   openModal(`
-    <div class="modal-head"><h3>Notificar despacho a ${c.proveedor}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>Enviar OC a ${c.proveedor}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
       ${!prov || !prov.contacto ? `<div class="ai-note" style="background:var(--warn-bg); border-color:#eccf9c; color:var(--copper-dark)">⚠ No hay correo de contacto guardado para "${c.proveedor}" — escríbelo abajo manualmente, o <a href="#" onclick="closeModal(); modalProveedores(); return false;">agrégalo al catálogo</a> para la próxima vez.</div>` : ''}
-      <label class="field-label">Correo del proveedor</label>
+      <label class="field-label">¿Cómo se entrega este material? *</label>
+      <div class="flex-gap" style="margin-bottom:6px;">
+        <label style="display:flex; align-items:center; gap:6px; padding:9px 14px; border:1px solid var(--line); border-radius:8px; cursor:pointer;">
+          <input type="radio" name="modalidadEntrega" value="despacho" ${mod==='despacho'?'checked':''} onchange="actualizarCorreoModalidad('${pid}','${cotId}')"> 🚚 Con despacho (lo trae el proveedor)
+        </label>
+        <label style="display:flex; align-items:center; gap:6px; padding:9px 14px; border:1px solid var(--line); border-radius:8px; cursor:pointer;">
+          <input type="radio" name="modalidadEntrega" value="retiro" ${mod==='retiro'?'checked':''} onchange="actualizarCorreoModalidad('${pid}','${cotId}')"> 🧰 Retiro (lo retiramos nosotros)
+        </label>
+      </div>
+      <label class="field-label" style="margin-top:12px;">Correo del proveedor</label>
       <input type="text" id="provDestinatario" value="${prov&&prov.contacto?prov.contacto:''}" placeholder="contacto@proveedor.cl">
       <label class="field-label" style="margin-top:12px;">Correo (sin destinatario ni firma — Outlook agrega tu firma real)</label>
-      <textarea id="despachoCorreo" rows="12" style="font-family:'IBM Plex Mono',monospace; font-size:12px;">${correo}</textarea>
+      <textarea id="despachoCorreo" rows="12" style="font-family:'IBM Plex Mono',monospace; font-size:12px;">${mod ? generarCorreoDespachoProveedor(pid, cotId, mod) : 'Elige primero «Con despacho» o «Retiro» para generar el correo.'}</textarea>
     </div>
     <div class="modal-foot">
       <button class="btn" onclick="closeModal()">Cerrar</button>
-      <button class="btn" onclick="
-        copiarAlPortapapeles(document.getElementById('despachoCorreo').value).then(ok=>{
-          toast(ok?'Correo copiado.':'No se pudo copiar automáticamente.', ok?'ok':'danger');
-        });
-        cambiarEstadoCotizacion('${pid}', '${cotId}', 'En Tránsito'); renderAll();">📋 Copiar correo</button>
-      <button class="btn btn-primary" onclick="
-        abrirEnOutlook(document.getElementById('provDestinatario').value, ${JSON.stringify(asunto)}, document.getElementById('despachoCorreo').value);
-        cambiarEstadoCotizacion('${pid}', '${cotId}', 'En Tránsito'); renderAll();">📧 Abrir en Outlook</button>
+      <button class="btn" onclick="confirmarEnvioProveedor('${pid}','${cotId}','copiar')">📋 Copiar correo</button>
+      <button class="btn btn-primary" onclick="confirmarEnvioProveedor('${pid}','${cotId}','outlook')">📧 Abrir en Outlook</button>
     </div>
   `);
+}
+function modalidadElegida() {
+  const el = document.querySelector('input[name="modalidadEntrega"]:checked');
+  return el ? el.value : "";
+}
+function actualizarCorreoModalidad(pid, cotId) {
+  const m = modalidadElegida();
+  const ta = document.getElementById('despachoCorreo');
+  if (ta && m) ta.value = generarCorreoDespachoProveedor(pid, cotId, m);
+}
+function confirmarEnvioProveedor(pid, cotId, via) {
+  const p = proy(pid);
+  const c = p.cotizaciones.find(x => x.id === cotId);
+  if (!c) return;
+  const m = modalidadElegida();
+  if (!m) { toast("Elige si es «Con despacho» o «Retiro» antes de enviar.", "danger"); return; }
+  const texto = document.getElementById('despachoCorreo').value;
+  const dest = document.getElementById('provDestinatario').value;
+  c.modalidadEntrega = m;
+  c.fechaEnvioProveedor = hoyISO();
+  if (!c.fechaOC) c.fechaOC = hoyISO();
+  const etiqueta = m === "retiro" ? "RETIRO" : "DESPACHO";
+  const asunto = `OC ${c.numeroOC||c.id} lista — coordinar ${m==='retiro'?'retiro':'despacho'} — ${p.codigo}`;
+  if (via === 'outlook') abrirEnOutlook(dest, asunto, texto);
+  else copiarAlPortapapeles(texto).then(ok => toast(ok?'Correo copiado.':'No se pudo copiar automáticamente.', ok?'ok':'danger'));
+  registrarHistorial({proyecto:p.codigo, accion:"Modificar", detalle:`Cotización ${cotId}: enviada al proveedor con modalidad ${etiqueta}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"});
+  cambiarEstadoCotizacion(pid, cotId, 'En Tránsito');
+  closeModal(); renderAll();
 }
 
 /* Registrar recepción — parcial o completa, con N° de factura */
@@ -8007,6 +8313,7 @@ function NAV_ACTUAL() {
       {id:"miPanel", label:"Mi Panel", icon:iconTarget(), roles: ROLES_MI_PANEL},
       {id:"panelEquipo", label:"Panel de Equipo", icon:iconTeamCheck(), roles: ROLES_PANEL_EQUIPO},
       {id:"recepciones", label:"Buscar / Recepción OC", icon:iconSearch()},
+      {id:"resumenOC", label:"Resumen de OC", icon:iconSearch()},
       {id:"panol", label:"Pañol", icon:iconPanol()},
       {id:"bodegaGeneral", label:"Bodega General", icon:iconBox()},
       {id:"personal", label:"Personal", icon:iconUsers()},
@@ -8225,7 +8532,7 @@ function renderAll() {
   const renderers = {
     dashboard: renderDashboard, miPanel: renderMiPanel, panelEquipo: renderPanelEquipo, bodegaGeneral: renderBodegaGeneral, personal: renderPersonal, proyecto360: renderProyecto360, planificacion: renderPlanificacion, compras: renderCompras,
     presupuesto: renderPresupuesto, bodega: renderBodega, reporteMateriales: renderReporteMateriales, comprasDirectas: renderComprasDirectas, punch: renderPunch, requerimientos: renderRequerimientos, galeria: renderGaleria, cuadroCarga: renderCuadroCarga,
-    recepciones: renderRecepciones, panol: renderPanol,
+    recepciones: renderRecepciones, resumenOC: renderResumenOC, panol: renderPanol,
     fabricacion: renderFabricacion,
     reaperturas: renderReaperturas, copiloto: renderCopiloto, auditoria: renderAuditoria, actividad: renderActividad, respaldos: renderRespaldos,
   };

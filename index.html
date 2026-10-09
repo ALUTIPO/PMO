@@ -451,7 +451,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "2.7";
+const APP_VERSION = "2.8";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -1037,6 +1037,7 @@ const DB = {
   proyectos: [],
   proveedores: [],
   bodegaGeneral: [],
+  acuerdos: [],
   usuariosAutorizados: {},
   personal: [],
   asignaciones: [],
@@ -1069,6 +1070,13 @@ function aplicarEstadoRemoto(data) {
   DB.asignacionesVehiculos = data.asignacionesVehiculos || [];
   DB.bodegaGeneral = data.bodegaGeneral || [];
   DB.solicitudesPanol = data.solicitudesPanol || [];
+  // Firebase no guarda arrays vacíos: se normalizan al cargar.
+  DB.acuerdos = (data.acuerdos || []).map(ac => {
+    ac.items = ac.items || []; ac.entregas = ac.entregas || []; ac.ampliaciones = ac.ampliaciones || []; ac.avisarA = ac.avisarA || [];
+    ac.entregas.forEach(e => { e.lineas = e.lineas || []; });
+    ac.items.forEach(it => { if (it.precio === undefined) it.precio = 0; });
+    return ac;
+  });
   DB.updatedAt = data.updatedAt || null;
   // proyectos al final: su migración puede necesitar cruzar nombres contra
   // DB.personal (ya cargado arriba) para enlazar asignaciones antiguas.
@@ -1093,6 +1101,7 @@ async function guardarEstado(nota) {
     asignacionesVehiculos: DB.asignacionesVehiculos,
     bodegaGeneral: DB.bodegaGeneral,
     solicitudesPanol: DB.solicitudesPanol,
+    acuerdos: DB.acuerdos || [],
     updatedAt: new Date().toISOString(),
   };
 
@@ -4115,6 +4124,414 @@ function filasRecepcionesFiltradas() {
     return coincideBusquedaRecepcion(p, c, filtroBusquedaRecepciones);
   }).sort((a,b) => (b.c.fecha||'').localeCompare(a.c.fecha||''));
 }
+/* =====================================================================
+   ACUERDOS COMERCIALES (convenios con proveedor) — ej: Sonepar–Weidmüller.
+   Un acuerdo fija un MONTO en pesos (no solo cantidades) para consumir en
+   una vigencia (ej: 26-sep-2026 a 26-sep-2027) sobre un compendio de
+   productos con precio acordado. El compendio se entrega en varias
+   entregas planificadas; cada recepción ingresa a la Bodega General.
+   Dos topes se controlan a la vez: cantidad por producto y monto total.
+   Estados de una entrega: Planificada → Solicitada → Recibida.
+   "Comprometido" = solicitado + recibido (lo que ya se pidió a Sonepar).
+   ===================================================================== */
+const ACUERDO_SEED = {"items":[{"codigo":"1521850000","descripcion":"BORNE PUSH IN A2C 2.5","categoria":"BORNES PUSH IN-TAPAS-PUENTES-TOPE","unidad":"Pieza","cant":2500,"precio":295,"embalaje":100,"stockProv":1200},{"codigo":"1521880000","descripcion":"BORNE PUSH IN A2C 2.5 BL","categoria":"BORNES PUSH IN-TAPAS-PUENTES-TOPE","unidad":"Pieza","cant":1000,"precio":362,"embalaje":100,"stockProv":100},{"codigo":"1514400000","descripcion":"AEP 2C 2.5","categoria":"BORNES PUSH IN-TAPAS-PUENTES-TOPE","unidad":"Pieza","cant":500,"precio":192,"embalaje":50,"stockProv":700},{"codigo":"1514420000","descripcion":"AEP 2C 2.5 BL","categoria":"BORNES PUSH IN-TAPAS-PUENTES-TOPE","unidad":"Pieza","cant":250,"precio":362,"embalaje":50,"stockProv":50},{"codigo":"1527540000","descripcion":"PUENTE ZQV 2.5N/2","categoria":"BORNES PUSH IN-TAPAS-PUENTES-TOPE","unidad":"Pieza","cant":540,"precio":311,"embalaje":60,"stockProv":400},{"codigo":"1527690000","descripcion":"PUENTE ZQV 2.5N/10","categoria":"BORNES PUSH IN-TAPAS-PUENTES-TOPE","unidad":"Pieza","cant":100,"precio":1396,"embalaje":20,"stockProv":160},{"codigo":"2051180000","descripcion":"BORNE PUSH IN A2C 4","categoria":"BORNES PUSH IN-TAPAS-PUENTES-TOPE","unidad":"Pieza","cant":1300,"precio":739,"embalaje":100,"stockProv":3500},{"codigo":"2051210000","descripcion":"BORNE PUSH IN A2C 4 BL","categoria":"BORNES PUSH IN-TAPAS-PUENTES-TOPE","unidad":"Pieza","cant":700,"precio":864,"embalaje":100,"stockProv":0},{"codigo":"2051680000","descripcion":"AEP 2C 4","categoria":"BORNES PUSH IN-TAPAS-PUENTES-TOPE","unidad":"Pieza","cant":500,"precio":226,"embalaje":50,"stockProv":100},{"codigo":"1527930000","descripcion":"PUENTE ZQV 4N/2","categoria":"BORNES PUSH IN-TAPAS-PUENTES-TOPE","unidad":"Pieza","cant":540,"precio":156,"embalaje":60,"stockProv":300},{"codigo":"1528090000","descripcion":"PUENTE ZQV 4N/10","categoria":"BORNES PUSH IN-TAPAS-PUENTES-TOPE","unidad":"Pieza","cant":260,"precio":1279,"embalaje":20,"stockProv":150},{"codigo":"1992110000","descripcion":"BORNE PUSH IN A2C 6","categoria":"BORNES PUSH IN-TAPAS-PUENTES-TOPE","unidad":"Pieza","cant":250,"precio":1129,"embalaje":50,"stockProv":150},{"codigo":"1991970000","descripcion":"AEP 2C 6","categoria":"BORNES PUSH IN-TAPAS-PUENTES-TOPE","unidad":"Pieza","cant":200,"precio":278,"embalaje":50,"stockProv":200},{"codigo":"1985740000","descripcion":"PUENTE ZQV 6N/2","categoria":"BORNES PUSH IN-TAPAS-PUENTES-TOPE","unidad":"Pieza","cant":120,"precio":395,"embalaje":60,"stockProv":200},{"codigo":"2733970000","descripcion":"PUENTE ZQV 6N/10","categoria":"BORNES PUSH IN-TAPAS-PUENTES-TOPE","unidad":"Pieza","cant":100,"precio":3336,"embalaje":20,"stockProv":60},{"codigo":"2490360000","descripcion":"BORNE PUSH IN A2C 10","categoria":"BORNES PUSH IN-TAPAS-PUENTES-TOPE","unidad":"Pieza","cant":200,"precio":1543,"embalaje":25,"stockProv":0},{"codigo":"2490380000","descripcion":"AEP 2C 10/16","categoria":"BORNES PUSH IN-TAPAS-PUENTES-TOPE","unidad":"Pieza","cant":100,"precio":527,"embalaje":20,"stockProv":0},{"codigo":"1991920000","descripcion":"AEB 35 SC/1","categoria":"BORNES PUSH IN-TAPAS-PUENTES-TOPE","unidad":"Pieza","cant":1000,"precio":470,"embalaje":50,"stockProv":50},{"codigo":"1521740000","descripcion":"A3C 2.5","categoria":"BORNERAS 3 PUNTOS","unidad":"Pieza","cant":1500,"precio":509,"embalaje":100,"stockProv":2400},{"codigo":"2051240000","descripcion":"A3C 4","categoria":"BORNERAS 3 PUNTOS","unidad":"Pieza","cant":500,"precio":964,"embalaje":50,"stockProv":1600},{"codigo":"1991820000","descripcion":"A3C 6","categoria":"BORNERAS 3 PUNTOS","unidad":"Pieza","cant":500,"precio":1662,"embalaje":50,"stockProv":4000},{"codigo":"2490520000","descripcion":"A3C 10","categoria":"BORNERAS 3 PUNTOS","unidad":"Pieza","cant":500,"precio":2314,"embalaje":25,"stockProv":200},{"codigo":"1521690000","descripcion":"A4C 2.5","categoria":"BORNERAS 4 PUNTOS","unidad":"Pieza","cant":1500,"precio":492,"embalaje":100,"stockProv":0},{"codigo":"2051500000","descripcion":"A4C 4","categoria":"BORNERAS 4 PUNTOS","unidad":"Pieza","cant":500,"precio":1190,"embalaje":50,"stockProv":0},{"codigo":"2881450000","descripcion":"A4C 6","categoria":"BORNERAS 4 PUNTOS","unidad":"Pieza","cant":500,"precio":2346,"embalaje":50,"stockProv":0},{"codigo":"2428510000","descripcion":"A3T 2.5","categoria":"BORNERA 3 PISOS","unidad":"Pieza","cant":500,"precio":1746,"embalaje":50,"stockProv":100},{"codigo":"7917030000","descripcion":"MAK 2.5 DB","categoria":"BORNERA 4 PISOS","unidad":"Pieza","cant":500,"precio":null,"embalaje":1,"stockProv":null},{"codigo":"1991780000","descripcion":"ALO 6","categoria":"BORNERA DE DISTRIBUCIÓN( pueden config el borne peq a 2,5 - 4 - 6)","unidad":"Pieza","cant":500,"precio":1748,"embalaje":20,"stockProv":400},{"codigo":"2618000000","descripcion":"TRP 24VDC 1CO","categoria":"RELE 1CO 24 VDC (OPCION PUSH IN Y TORNILLO)","unidad":"Pieza","cant":200,"precio":4937,"embalaje":10,"stockProv":180},{"codigo":"1122770000","descripcion":"TRS 24VDC 1CO","categoria":"RELE 1CO 24 VDC (OPCION PUSH IN Y TORNILLO)","unidad":"Pieza","cant":200,"precio":4718,"embalaje":10,"stockProv":990},{"codigo":"2618400000","descripcion":"TRP 24VDC 2CO","categoria":"RELE 1CO 24 VDC (OPCION PUSH IN Y TORNILLO)","unidad":"Pieza","cant":500,"precio":6500,"embalaje":10,"stockProv":170},{"codigo":"1478180000","descripcion":"FUENTE PRO MAX3 240W 24V 10A","categoria":"FUENTE TRIFASICA PRO MAX 10A","unidad":"Pieza","cant":10,"precio":97000,"embalaje":1,"stockProv":10},{"codigo":"1478190000","descripcion":"FUENTE PRO MAX3 480W 24V 20A","categoria":"FUENTE TRIFASICA PRO MAX 10A","unidad":"Pieza","cant":10,"precio":130000,"embalaje":1,"stockProv":9},{"codigo":"1478200000","descripcion":"FUENTE PRO MAX3 960W 24V 40A","categoria":"FUENTE TRIFASICA PRO MAX 10A","unidad":"Pieza","cant":10,"precio":235000,"embalaje":1,"stockProv":"2-3 semanas"},{"codigo":"1886580000","descripcion":"BORNE TORNILLO PORTAFUSIBLE WSI 4","categoria":"PORTAFUSIBLES","unidad":"Pieza","cant":450,"precio":2500,"embalaje":50,"stockProv":850},{"codigo":"1966020000","descripcion":"PORTAFUS. WSI 25/1 10x38","categoria":"PORTAFUSIBLES","unidad":"Pieza","cant":36,"precio":4844,"embalaje":12,"stockProv":300},{"codigo":"0430900000","descripcion":"FUS. CERAMICO 5X20 2 A","categoria":"PORTAFUSIBLES","unidad":"Pieza","cant":500,"precio":756,"embalaje":10,"stockProv":1200},{"codigo":"0431200000","descripcion":"FUS. CERAMICO 5X20 4 A","categoria":"PORTAFUSIBLES","unidad":"Pieza","cant":500,"precio":778,"embalaje":10,"stockProv":1200},{"codigo":"9004280000","descripcion":"TERMINAL TUBULAR ESTANDAR H0.5/14D GR BD BLANCO","categoria":"FERRULES","unidad":"Pieza","cant":5000,"precio":12,"embalaje":500,"stockProv":35500},{"codigo":"9004300000","descripcion":"TERMINAL TUBULAR ESTANDAR H0.75/14D GR BD GRIS","categoria":"FERRULES","unidad":"Pieza","cant":5000,"precio":12,"embalaje":500,"stockProv":4000},{"codigo":"9026100000","descripcion":"TERMINAL TUBULAR ESTANDAR H2.5/15 SV AZUL","categoria":"FERRULES","unidad":"Pieza","cant":5000,"precio":13,"embalaje":500,"stockProv":5300},{"codigo":"9019420000","descripcion":"TERMINAL TUBULAR ESTANDAR H1.0/14D SV ROJO","categoria":"FERRULES","unidad":"Pieza","cant":5000,"precio":12,"embalaje":500,"stockProv":31300},{"codigo":"9019430000","descripcion":"TERMINAL TUBULAR ESTANDAR H1.5/14D SV NEGRO","categoria":"FERRULES","unidad":"Pieza","cant":5000,"precio":12,"embalaje":500,"stockProv":22300},{"codigo":"9021250000","descripcion":"TERMINAL TUBULAR ESTANDAR H4.0/18T O SV NARANJO","categoria":"FERRULES","unidad":"Pieza","cant":5000,"precio":23,"embalaje":250,"stockProv":48000},{"codigo":"9026010000","descripcion":"TERMINAL TUBULAR ESTANDAR H4,0/18 GR SV GRIS","categoria":"FERRULES","unidad":"Pieza","cant":5000,"precio":23,"embalaje":250,"stockProv":3150},{"codigo":"0533500000","descripcion":"TERMINAL TUBULAR ESTAND","categoria":"FERRULES","unidad":"Pieza","cant":5000,"precio":28,"embalaje":100,"stockProv":20900},{"codigo":"2728620000","descripcion":"AWPD 35 4X6/6X2.5","categoria":"BORNE DE DISTRIBUCION","unidad":"Pieza","cant":600,"precio":13495,"embalaje":20,"stockProv":300},{"codigo":"2007110000","descripcion":"DEK 5/5 MM WS","categoria":"MARCAJE DE BORNES","unidad":"Pieza","cant":8000,"precio":28,"embalaje":800,"stockProv":4800},{"codigo":"2007120000","descripcion":"DEK 5/6 MM WS","categoria":"MARCAJE DE BORNES","unidad":"Pieza","cant":2400,"precio":28,"embalaje":600,"stockProv":33000},{"codigo":"2007130000","descripcion":"DEK 5/8 MM WS","categoria":"MARCAJE DE BORNES","unidad":"Pieza","cant":3000,"precio":29,"embalaje":500,"stockProv":4500},{"codigo":"1550550000","descripcion":"UR20-FBC-EIP-V2","categoria":"MARCAJE DE BORNES","unidad":"Pieza","cant":2,"precio":454476,"embalaje":1,"stockProv":35},{"codigo":"2566380000","descripcion":"UR20-FBC-PN-IRT-V2","categoria":"MARCAJE DE BORNES","unidad":"Pieza","cant":2,"precio":null,"embalaje":1,"stockProv":null},{"codigo":"1315180000","descripcion":"UR20-8DI-P-2W","categoria":"MARCAJE DE BORNES","unidad":"Pieza","cant":6,"precio":58867,"embalaje":1,"stockProv":40},{"codigo":"1315240000","descripcion":"UR20-8DO-P","categoria":"MARCAJE DE BORNES","unidad":"Pieza","cant":9,"precio":67699,"embalaje":1,"stockProv":48},{"codigo":"1346610000","descripcion":"UR20-EBK-ACC","categoria":"Ampliación del compendio (precio pendiente)","unidad":"Pieza","cant":1,"precio":null,"embalaje":1,"stockProv":null,"ampliacion":true},{"codigo":"1521530000","descripcion":"AEP 4C 2.5","categoria":"Ampliación del compendio (precio pendiente)","unidad":"Pieza","cant":25,"precio":null,"embalaje":1,"stockProv":null,"ampliacion":true}],"lineas":{"E1A":[["1521690000",100],["7917030000",100],["2618000000",100],["2618400000",100],["1478180000",9],["1478190000",1],["1478200000",1],["1886580000",50],["1966020000",20],["0430900000",100],["0431200000",100],["2728620000",50],["1550550000",1],["1315180000",2],["1315240000",3],["1346610000",1],["1521530000",25]],"E1B":[["1521850000",800],["1521880000",250],["1514400000",250],["1514420000",75],["1527540000",150],["1527690000",50],["2051180000",500],["2051210000",100],["2051680000",150],["1527930000",240],["1528090000",80],["1992110000",100],["1991970000",50],["1985740000",100],["2733970000",20],["2490360000",25],["2490380000",20],["1991920000",100],["1521740000",500],["2051240000",100],["1991820000",50],["2490520000",50],["1521690000",100],["2051500000",200],["2881450000",200],["2428510000",150],["1991780000",80],["1122770000",60],["1478190000",1],["1478200000",1],["1886580000",50],["0430900000",50],["0431200000",50],["9004280000",3000],["9004300000",3000],["9026100000",3000],["9019420000",3000],["9019430000",3000],["9021250000",3000],["9026010000",3000],["0533500000",3000],["2728620000",50],["2007110000",1600],["2007120000",1800],["2007130000",1500],["1550550000",1],["1315180000",1]],"E2":[["1521850000",600],["1521880000",300],["1514400000",100],["1514420000",100],["1527540000",180],["1527690000",20],["2051180000",300],["2051210000",200],["2051680000",150],["1527930000",120],["1528090000",60],["1992110000",50],["1991970000",50],["1985740000",20],["2733970000",40],["2490360000",75],["2490380000",40],["1991920000",300],["1521740000",400],["2051240000",150],["1991820000",150],["2490520000",150],["1521690000",500],["2051500000",100],["2881450000",100],["2428510000",150],["7917030000",134],["1991780000",140],["2618000000",40],["1122770000",50],["2618400000",140],["1478180000",1],["1478190000",3],["1478200000",3],["1886580000",150],["1966020000",12],["0430900000",120],["0431200000",120],["9004280000",1000],["9004300000",1000],["9026100000",1000],["9019420000",1000],["9019430000",1000],["9021250000",750],["9026010000",750],["0533500000",700],["2728620000",180],["2007110000",2400],["2007120000",600],["2007130000",500],["2566380000",1],["1315180000",1],["1315240000",2]],"E3":[["1521850000",600],["1521880000",300],["1514400000",100],["1514420000",50],["1527540000",120],["1527690000",20],["2051180000",300],["2051210000",200],["2051680000",100],["1527930000",120],["1528090000",60],["1992110000",50],["1991970000",50],["2733970000",20],["2490360000",50],["2490380000",20],["1991920000",300],["1521740000",300],["2051240000",150],["1991820000",150],["2490520000",150],["1521690000",400],["2051500000",100],["2881450000",100],["2428510000",100],["7917030000",133],["1991780000",140],["2618000000",30],["1122770000",50],["2618400000",130],["1478190000",3],["1478200000",3],["1886580000",100],["1966020000",4],["0430900000",120],["0431200000",120],["9004280000",500],["9004300000",500],["9026100000",500],["9019420000",500],["9019430000",500],["9021250000",750],["9026010000",750],["0533500000",700],["2728620000",160],["2007110000",2400],["2007130000",500],["2566380000",1],["1315180000",1],["1315240000",2]],"E4":[["1521850000",500],["1521880000",150],["1514400000",50],["1514420000",25],["1527540000",90],["1527690000",10],["2051180000",200],["2051210000",200],["2051680000",100],["1527930000",60],["1528090000",60],["1992110000",50],["1991970000",50],["2733970000",20],["2490360000",50],["2490380000",20],["1991920000",300],["1521740000",300],["2051240000",100],["1991820000",150],["2490520000",150],["1521690000",400],["2051500000",100],["2881450000",100],["2428510000",100],["7917030000",133],["1991780000",140],["2618000000",30],["1122770000",40],["2618400000",130],["1478190000",2],["1478200000",2],["1886580000",100],["0430900000",110],["0431200000",110],["9004280000",500],["9004300000",500],["9026100000",500],["9019420000",500],["9019430000",500],["9021250000",500],["9026010000",500],["0533500000",600],["2728620000",160],["2007110000",1600],["2007130000",500],["1315180000",1],["1315240000",2]]}};
+let acuerdoActivoId = null;
+let acuerdoVista = "resumen"; // resumen | entregas | compendio
+let acuerdoBusqueda = "";
+let acuerdoFiltro = "todos"; // todos | agotados | sinPrecio | bajoMinimo | pendientes
+
+function puedeGestionarAcuerdo() { return puedeGestionarCompras(); }
+function acuerdoActivo() {
+  const lista = DB.acuerdos || [];
+  return lista.find(a => a.id === acuerdoActivoId) || lista[0] || null;
+}
+function precioValido(it) { return Number(it.precio) > 0; }
+
+function totalesItemAcuerdo(a, it) {
+  let pendiente = 0, recibida = 0;
+  (a.entregas || []).forEach(e => (e.lineas || []).forEach(l => {
+    if (l.codigo !== it.codigo) return;
+    if (e.estado === "Recibida") recibida += Number(l.cantRecibida) || 0;
+    else if (e.estado === "Solicitada") pendiente += Number(l.cantPlan) || 0;
+  }));
+  const acordada = Number(it.cantAcordada) || 0;
+  return { pendiente, recibida, comprometida: pendiente + recibida, saldo: Math.max(0, acordada - pendiente - recibida), acordada };
+}
+function montosAcuerdo(a) {
+  let comprometido = 0, recibido = 0, acordadoProductos = 0, sinPrecio = 0;
+  (a.items || []).forEach(it => {
+    const t = totalesItemAcuerdo(a, it);
+    const p = Number(it.precio) || 0;
+    comprometido += t.comprometida * p;
+    recibido += t.recibida * p;
+    acordadoProductos += t.acordada * p;
+    if (!precioValido(it)) sinPrecio++;
+  });
+  const tope = Number(a.montoAcordado) || 0;
+  return { comprometido, recibido, acordadoProductos, sinPrecio, tope, saldo: Math.max(0, tope - comprometido), pct: tope ? comprometido / tope * 100 : 0 };
+}
+function valorLineaEntrega(a, e, usarRecibido) {
+  return (e.lineas || []).reduce((s, l) => {
+    const it = (a.items || []).find(x => x.codigo === l.codigo);
+    const q = usarRecibido ? (Number(l.cantRecibida) || 0) : (Number(l.cantPlan) || 0);
+    return s + q * (it ? Number(it.precio) || 0 : 0);
+  }, 0);
+}
+function porcentajeTiempoAcuerdo(a) {
+  const d = new Date(a.vigenciaDesde).getTime(), h = new Date(a.vigenciaHasta).getTime(), n = Date.now();
+  if (!d || !h || h <= d) return 0;
+  return Math.max(0, Math.min(100, (n - d) / (h - d) * 100));
+}
+function estadoItemAcuerdo(a, it) {
+  const t = totalesItemAcuerdo(a, it);
+  const b = buscarBodegaGeneralPorCodigo(it.codigo);
+  return {
+    t, b,
+    agotado: t.acordada > 0 && t.comprometida >= t.acordada,
+    sinPrecio: !precioValido(it),
+    bajoMinimo: !!(b && Number(b.minimo) > 0 && t.recibida > 0 && Number(b.stock) < t.recibida && Number(b.stock) <= Number(b.minimo)),
+  };
+}
+function alertasAcuerdo(a) {
+  const out = [];
+  const m = montosAcuerdo(a);
+  if (m.pct >= 100) out.push({ nivel: "danger", texto: `Ya se solicitó todo lo acordado: ${money(m.comprometido)} de ${money(m.tope)}. No se pueden pedir más entregas hasta ampliar el monto o negociar un nuevo acuerdo.` });
+  else if (m.pct >= 95) out.push({ nivel: "danger", texto: `Se comprometió el ${m.pct.toFixed(1)}% del monto acordado (quedan ${money(m.saldo)}). Prepara la renovación o ampliación.` });
+  else if (m.pct >= 80) out.push({ nivel: "warn", texto: `Se comprometió el ${m.pct.toFixed(1)}% del monto acordado (quedan ${money(m.saldo)}).` });
+  let ag = 0, sp = 0, bm = 0;
+  (a.items || []).forEach(it => { const s = estadoItemAcuerdo(a, it); if (s.agotado) ag++; if (s.sinPrecio) sp++; if (s.bajoMinimo) bm++; });
+  if (ag) out.push({ nivel: "warn", texto: `${ag} producto${ag !== 1 ? 's' : ''} ya alcanzó${ag !== 1 ? 'ron' : ''} el máximo acordado — se debe solicitar más para actualizar las cantidades.`, filtro: "agotados" });
+  if (bm) out.push({ nivel: "warn", texto: `${bm} producto${bm !== 1 ? 's' : ''} llegó${bm !== 1 ? 'ron' : ''} a su stock mínimo — hay que reponer.`, filtro: "bajoMinimo" });
+  if (sp) out.push({ nivel: "info", texto: `${sp} producto${sp !== 1 ? 's' : ''} sin precio acordado (no cuenta${sp !== 1 ? 'n' : ''} en el monto). Completa el precio cuando Sonepar lo cotice.`, filtro: "sinPrecio" });
+  if (a.vigenciaHasta && hoyISO() > a.vigenciaHasta) out.push({ nivel: "danger", texto: `El acuerdo venció el ${a.vigenciaHasta}.` });
+  return out;
+}
+
+/* ---------- creación desde el compendio del Excel ---------- */
+function crearAcuerdoSoneparWeidmuller() {
+  if (!puedeGestionarAcuerdo()) { toast(`Tu rol (${DB.role}) no gestiona acuerdos.`, "danger"); return; }
+  if ((DB.acuerdos || []).some(x => x.proveedor === "Sonepar" && x.marca === "Weidmüller")) { toast("Ya existe el acuerdo Sonepar–Weidmüller.", "danger"); return; }
+  const items = ACUERDO_SEED.items.map(s => ({
+    codigo: s.codigo, descripcion: s.descripcion, categoria: s.categoria, unidad: s.unidad || "Pieza",
+    cantAcordada: s.cant, precio: s.precio || 0, embalaje: s.embalaje || 1,
+    stockProveedor: s.stockProv == null ? "" : String(s.stockProv), ampliacion: !!s.ampliacion,
+  }));
+  const defs = [
+    ["E1A", "Entrega 1A — acelerada (adelanto de la Entrega 1)", "Solicitada"],
+    ["E1B", "Entrega 1B — resto de la Entrega 1", "Planificada"],
+    ["E2", "Entrega 2", "Planificada"], ["E3", "Entrega 3", "Planificada"], ["E4", "Entrega 4", "Planificada"],
+  ];
+  const entregas = defs.map(([k, nombre, estado]) => ({
+    id: k, nombre, estado, fechaSolicitud: estado === "Solicitada" ? hoyISO() : "", fechaRecepcion: "", factura: "",
+    lineas: (ACUERDO_SEED.lineas[k] || []).map(([codigo, q]) => ({ codigo, cantPlan: q, cantRecibida: 0 })),
+  }));
+  const a = {
+    id: "AC-" + Date.now(), nombre: "Convenio Sonepar – Weidmüller", proveedor: "Sonepar", marca: "Weidmüller", moneda: "CLP",
+    vigenciaDesde: "2026-09-26", vigenciaHasta: "2027-09-26", montoAcordado: 35614499, minimoPct: 25,
+    avisarA: ["Eduardo González", "Jair Morales", "Iván Maldonado"],
+    items, entregas, ampliaciones: [], creadoPor: DB.usuario + " · " + DB.role, creadoEn: hoyISO(),
+  };
+  DB.acuerdos = DB.acuerdos || [];
+  DB.acuerdos.push(a);
+  acuerdoActivoId = a.id;
+  registrarHistorial({ proyecto: "General", accion: "Crear", detalle: `Acuerdo comercial creado: ${a.nombre} (${items.length} productos, ${money(a.montoAcordado)})`, usuario: DB.usuario + " · " + DB.role, criticidad: "Media" });
+  guardarEstado("Acuerdo comercial creado");
+  toast(`Acuerdo creado con ${items.length} productos y ${entregas.length} entregas.`, "ok");
+  renderAll();
+}
+
+/* ---------- acciones sobre entregas ---------- */
+function marcarEntregaSolicitada(aid, eid) {
+  const a = (DB.acuerdos || []).find(x => x.id === aid); if (!a) return;
+  const e = a.entregas.find(x => x.id === eid); if (!e) return;
+  if (!puedeGestionarAcuerdo()) { toast(`Tu rol (${DB.role}) no gestiona acuerdos.`, "danger"); return; }
+  for (const l of e.lineas) {
+    const it = a.items.find(x => x.codigo === l.codigo); if (!it) continue;
+    const t = totalesItemAcuerdo(a, it);
+    if (t.comprometida + l.cantPlan > t.acordada) {
+      toast(`Ya se solicitó el máximo acordado de "${it.descripcion}". Solicita más cantidad (ampliación) antes de pedir esta entrega.`, "danger"); return;
+    }
+  }
+  const m = montosAcuerdo(a);
+  const valor = valorLineaEntrega(a, e, false);
+  if (m.comprometido + valor > m.tope + 0.5) {
+    toast(`Esta entrega (${money(valor)}) supera el monto acordado: ya se solicitó casi todo (${money(m.comprometido)} de ${money(m.tope)}). Hay que ampliar el monto.`, "danger"); return;
+  }
+  e.estado = "Solicitada"; e.fechaSolicitud = hoyISO();
+  registrarHistorial({ proyecto: "General", accion: "Modificar", detalle: `Acuerdo ${a.nombre}: ${e.nombre} marcada como solicitada (${money(valor)})`, usuario: DB.usuario + " · " + DB.role, criticidad: "Media" });
+  guardarEstado("Entrega solicitada");
+  toast(`${e.nombre} marcada como solicitada.`, "ok");
+  renderAll();
+}
+function exportarPedidoEntregaExcel(aid, eid) {
+  const a = (DB.acuerdos || []).find(x => x.id === aid); if (!a) return;
+  const e = a.entregas.find(x => x.id === eid); if (!e) return;
+  if (typeof XLSX === "undefined") { toast("No se pudo cargar el generador de Excel.", "danger"); return; }
+  const filas = e.lineas.map(l => {
+    const it = a.items.find(x => x.codigo === l.codigo) || {};
+    return { "Código": l.codigo, "Descripción": it.descripcion || "", "Cantidad": l.cantPlan, "Precio unitario": Number(it.precio) || 0, "Total": l.cantPlan * (Number(it.precio) || 0) };
+  });
+  filas.push({ "Código": "", "Descripción": "TOTAL", "Cantidad": "", "Precio unitario": "", "Total": filas.reduce((s, f) => s + f["Total"], 0) });
+  const wb = XLSX.utils.book_new();
+  const hoja = XLSX.utils.json_to_sheet(filas);
+  hoja['!cols'] = [14, 52, 10, 14, 14].map(w => ({ wch: w }));
+  XLSX.utils.book_append_sheet(wb, hoja, e.id);
+  XLSX.writeFile(wb, `Pedido_${a.proveedor}_${e.id}_${hoyISO()}.xlsx`);
+}
+function modalRecepcionEntregaAcuerdo(aid, eid) {
+  const a = (DB.acuerdos || []).find(x => x.id === aid); if (!a) return;
+  const e = a.entregas.find(x => x.id === eid); if (!e) return;
+  if (!puedeGestionarAcuerdo()) { toast(`Tu rol (${DB.role}) no gestiona acuerdos.`, "danger"); return; }
+  openModal(`
+    <div class="modal-head"><h3>Registrar recepción — ${e.nombre}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <p class="small muted">${a.proveedor} · lo que recibas entra a la <strong>Bodega General</strong> con el precio acordado. Cambia la cantidad si llegó menos (o nada) de algún producto.</p>
+      <div class="flex-gap" style="margin:8px 0;">
+        <div style="flex:1"><label class="field-label">N° de factura / guía *</label><input type="text" id="acFactura" placeholder="Ej: 12345"></div>
+        <div style="flex:1"><label class="field-label">Fecha de recepción</label><input type="date" id="acFechaRec" value="${hoyISO()}"></div>
+      </div>
+      <div class="table-wrap" style="max-height:340px; overflow:auto;"><table>
+        <tr><th>Código</th><th>Producto</th><th>Planificado</th><th>Llegó</th></tr>
+        ${e.lineas.map((l, i) => { const it = a.items.find(x => x.codigo === l.codigo) || {}; return `<tr>
+          <td class="mono small">${l.codigo}</td><td>${it.descripcion || ''}</td><td>${l.cantPlan}</td>
+          <td><input type="number" min="0" step="1" id="acRec_${i}" value="${l.cantPlan}" style="width:90px;"></td></tr>`; }).join('')}
+      </table></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="confirmarRecepcionAcuerdo('${aid}','${eid}')">Ingresar a Bodega General</button>
+    </div>`);
+}
+function ingresarBodegaGeneralDesdeAcuerdo(a, it, qty, yaRecibido) {
+  let b = buscarBodegaGeneralPorCodigo(it.codigo);
+  if (!b) { b = { codigo: it.codigo, material: it.descripcion, stock: 0, unidad: it.unidad || "unidad", minimo: 0, precioUnitario: 0 }; DB.bodegaGeneral.push(b); }
+  const precio = Number(it.precio) || 0;
+  const stockAntes = Number(b.stock) || 0;
+  if (precio > 0) b.precioUnitario = stockAntes > 0 && b.precioUnitario ? Math.round((stockAntes * b.precioUnitario + qty * precio) / (stockAntes + qty)) : precio;
+  b.stock = stockAntes + qty;
+  b.acuerdoId = a.id; b.marca = a.marca || "";
+  // Stock mínimo: % de lo que realmente llegó en la PRIMERA entrega del producto.
+  if (yaRecibido === 0 && !Number(b.minimo)) b.minimo = Math.max(1, Math.ceil(qty * (Number(a.minimoPct) || 25) / 100));
+  return b;
+}
+function confirmarRecepcionAcuerdo(aid, eid) {
+  const a = (DB.acuerdos || []).find(x => x.id === aid); if (!a) return;
+  const e = a.entregas.find(x => x.id === eid); if (!e || e.estado === "Recibida") return;
+  const factura = (document.getElementById('acFactura').value || "").trim();
+  if (!factura) { toast("Indica el N° de factura o guía de la entrega.", "danger"); return; }
+  const cantidades = e.lineas.map((l, i) => Number(document.getElementById('acRec_' + i).value));
+  if (cantidades.some(q => isNaN(q) || q < 0)) { toast("Revisa las cantidades recibidas.", "danger"); return; }
+  let ingresados = 0, faltantes = 0;
+  e.lineas.forEach((l, i) => {
+    const it = a.items.find(x => x.codigo === l.codigo); if (!it) return;
+    const q = cantidades[i];
+    const ya = totalesItemAcuerdo(a, it).recibida;
+    l.cantRecibida = q;
+    if (q > 0) { ingresarBodegaGeneralDesdeAcuerdo(a, it, q, ya); ingresados++; }
+    if (q < l.cantPlan) faltantes++;
+  });
+  e.estado = "Recibida"; e.factura = factura; e.fechaRecepcion = document.getElementById('acFechaRec').value || hoyISO();
+  registrarHistorial({ proyecto: "General", accion: "Modificar", detalle: `Acuerdo ${a.nombre}: ${e.nombre} recibida (factura ${factura}) — ${ingresados} productos ingresados a Bodega General${faltantes ? `, ${faltantes} con diferencia` : ''}`, usuario: DB.usuario + " · " + DB.role, criticidad: "Media" });
+  guardarEstado("Recepción de acuerdo");
+  closeModal(); renderAll();
+  toast(`${e.nombre}: ${ingresados} productos ingresados a la Bodega General.${faltantes ? ` ${faltantes} llegaron con diferencia (quedan como saldo).` : ''}`, "ok");
+}
+
+/* ---------- edición: precio, cantidad, monto ---------- */
+function modalPrecioItemAcuerdo(aid, codigo) {
+  const a = (DB.acuerdos || []).find(x => x.id === aid); const it = a && a.items.find(x => x.codigo === codigo); if (!it) return;
+  if (!puedeGestionarAcuerdo()) { toast(`Tu rol (${DB.role}) no gestiona acuerdos.`, "danger"); return; }
+  openModal(`
+    <div class="modal-head"><h3>Precio acordado</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body"><p class="small muted">${it.descripcion} · ${it.codigo}</p>
+      <label class="field-label">Precio unitario neto (CLP)</label><input type="number" min="0" id="acPrecio" value="${Number(it.precio) || ''}">
+      <div class="hint">Solo afecta a lo que se solicite o reciba desde ahora.</div></div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="guardarPrecioItemAcuerdo('${aid}','${codigo}')">Guardar</button></div>`);
+}
+function guardarPrecioItemAcuerdo(aid, codigo) {
+  const a = (DB.acuerdos || []).find(x => x.id === aid); const it = a && a.items.find(x => x.codigo === codigo); if (!it) return;
+  const v = Number(document.getElementById('acPrecio').value);
+  if (isNaN(v) || v < 0) { toast("Precio inválido.", "danger"); return; }
+  const antes = it.precio; it.precio = v;
+  registrarHistorial({ proyecto: "General", accion: "Modificar", detalle: `Acuerdo ${a.nombre}: precio de ${it.descripcion} ${antes || 0} → ${v}`, usuario: DB.usuario + " · " + DB.role, criticidad: "Media" });
+  guardarEstado("Precio de acuerdo"); closeModal(); renderAll();
+}
+function modalAmpliarCantidadAcuerdo(aid, codigo) {
+  const a = (DB.acuerdos || []).find(x => x.id === aid); const it = a && a.items.find(x => x.codigo === codigo); if (!it) return;
+  if (!puedeGestionarAcuerdo()) { toast(`Tu rol (${DB.role}) no gestiona acuerdos.`, "danger"); return; }
+  const abiertas = a.entregas.filter(e => e.estado !== "Recibida");
+  openModal(`
+    <div class="modal-head"><h3>Solicitar más cantidad</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body"><p class="small muted">${it.descripcion} · acordado actual: ${it.cantAcordada}. Recuerda que el monto del acuerdo también es un tope.</p>
+      <label class="field-label">Cantidad adicional</label><input type="number" min="1" id="acAmpQty">
+      <label class="field-label" style="margin-top:10px;">¿En qué entrega va?</label>
+      <select id="acAmpEntrega">${abiertas.map(e => `<option value="${e.id}">${e.nombre} (${e.estado})</option>`).join('') || '<option value="">(no hay entregas abiertas)</option>'}</select>
+      <label class="field-label" style="margin-top:10px;">Motivo</label><input type="text" id="acAmpMotivo" placeholder="Ej: mayor consumo en CL521">
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="guardarAmpliacionCantidadAcuerdo('${aid}','${codigo}')">Registrar ampliación</button></div>`);
+}
+function guardarAmpliacionCantidadAcuerdo(aid, codigo) {
+  const a = (DB.acuerdos || []).find(x => x.id === aid); const it = a && a.items.find(x => x.codigo === codigo); if (!it) return;
+  const q = Math.round(Number(document.getElementById('acAmpQty').value));
+  const eid = document.getElementById('acAmpEntrega').value;
+  const motivo = (document.getElementById('acAmpMotivo').value || "").trim();
+  if (!q || q <= 0) { toast("Indica la cantidad adicional.", "danger"); return; }
+  const e = a.entregas.find(x => x.id === eid);
+  if (!e) { toast("Elige la entrega donde irá el material.", "danger"); return; }
+  it.cantAcordada = (Number(it.cantAcordada) || 0) + q;
+  let l = e.lineas.find(x => x.codigo === codigo);
+  if (l) l.cantPlan += q; else e.lineas.push({ codigo, cantPlan: q, cantRecibida: 0 });
+  a.ampliaciones = a.ampliaciones || [];
+  a.ampliaciones.push({ fecha: hoyISO(), por: DB.usuario + " · " + DB.role, tipo: "cantidad", codigo, descripcion: it.descripcion, cantidad: q, entrega: e.id, motivo });
+  registrarHistorial({ proyecto: "General", accion: "Modificar", detalle: `Acuerdo ${a.nombre}: ampliación de ${it.descripcion} +${q} (${e.id})${motivo ? ' — ' + motivo : ''}`, usuario: DB.usuario + " · " + DB.role, criticidad: "Media" });
+  guardarEstado("Ampliación de cantidad"); closeModal(); renderAll();
+  toast(`Cantidad ampliada en ${q}. Revisa que el monto total alcance.`, "ok");
+}
+function modalEditarAcuerdo(aid) {
+  const a = (DB.acuerdos || []).find(x => x.id === aid); if (!a) return;
+  if (!puedeGestionarAcuerdo()) { toast(`Tu rol (${DB.role}) no gestiona acuerdos.`, "danger"); return; }
+  openModal(`
+    <div class="modal-head"><h3>Editar acuerdo</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <label class="field-label">Monto acordado (CLP)</label><input type="number" id="acMonto" value="${a.montoAcordado}">
+      <div class="flex-gap" style="margin-top:10px;"><div style="flex:1"><label class="field-label">Vigencia desde</label><input type="date" id="acDesde" value="${a.vigenciaDesde}"></div>
+        <div style="flex:1"><label class="field-label">Vigencia hasta</label><input type="date" id="acHasta" value="${a.vigenciaHasta}"></div></div>
+      <label class="field-label" style="margin-top:10px;">Stock mínimo (% de la primera entrega)</label><input type="number" min="1" max="100" id="acPct" value="${a.minimoPct}">
+      <label class="field-label" style="margin-top:10px;">Motivo del cambio de monto (si cambia)</label><input type="text" id="acMotivoMonto" placeholder="Ej: ampliación acordada con Sonepar">
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="guardarEdicionAcuerdo('${aid}')">Guardar</button></div>`);
+}
+function guardarEdicionAcuerdo(aid) {
+  const a = (DB.acuerdos || []).find(x => x.id === aid); if (!a) return;
+  const monto = Number(document.getElementById('acMonto').value);
+  const pct = Number(document.getElementById('acPct').value);
+  if (!monto || monto <= 0 || !pct || pct <= 0 || pct > 100) { toast("Revisa monto y porcentaje.", "danger"); return; }
+  if (monto !== a.montoAcordado) {
+    a.ampliaciones = a.ampliaciones || [];
+    a.ampliaciones.push({ fecha: hoyISO(), por: DB.usuario + " · " + DB.role, tipo: "monto", desde: a.montoAcordado, hasta: monto, motivo: (document.getElementById('acMotivoMonto').value || "").trim() });
+    registrarHistorial({ proyecto: "General", accion: "Modificar", detalle: `Acuerdo ${a.nombre}: monto ${money(a.montoAcordado)} → ${money(monto)}`, usuario: DB.usuario + " · " + DB.role, criticidad: "Alta" });
+  }
+  a.montoAcordado = monto; a.minimoPct = pct;
+  a.vigenciaDesde = document.getElementById('acDesde').value || a.vigenciaDesde;
+  a.vigenciaHasta = document.getElementById('acHasta').value || a.vigenciaHasta;
+  guardarEstado("Acuerdo editado"); closeModal(); renderAll();
+}
+
+/* ---------- pantalla ---------- */
+function barraAcuerdo(pct, color) {
+  return `<div class="progressbar thin"><span style="width:${Math.min(100, pct).toFixed(1)}%; ${color ? 'background:' + color + ';' : ''}"></span></div>`;
+}
+function badgeEntregaAcuerdo(estado) {
+  const map = { "Planificada": "gris", "Solicitada": "transito", "Recibida": "recibido" };
+  return `<span class="badge b-${map[estado] || 'gris'}"><span class="dot"></span>${estado}</span>`;
+}
+function renderAcuerdos() {
+  const a = acuerdoActivo();
+  if (!a) {
+    return `<div class="page-head"><div><h1>Acuerdos comerciales</h1>
+      <div class="page-desc">Convenios con proveedores por un monto y una vigencia, con compendio de productos, entregas y control de saldo.</div></div></div>
+      <div class="card"><p>Todavía no hay acuerdos. Puedes crear el <strong>Convenio Sonepar – Weidmüller</strong> con el compendio del Excel (54 productos + 2 ampliaciones, 4 entregas planificadas y la entrega acelerada).</p>
+      ${puedeGestionarAcuerdo() ? `<button class="btn btn-primary" onclick="crearAcuerdoSoneparWeidmuller()">Crear convenio Sonepar – Weidmüller</button>` : '<p class="hint">Tu rol no puede crear acuerdos.</p>'}</div>`;
+  }
+  const m = montosAcuerdo(a), tp = porcentajeTiempoAcuerdo(a);
+  const alertas = alertasAcuerdo(a);
+  const colorAl = { danger: ['var(--danger-bg)', 'var(--danger)'], warn: ['var(--warn-bg)', 'var(--copper-dark)'], info: ['var(--blueprint-light)', 'var(--blueprint)'] };
+  const tabs = [['resumen', 'Resumen'], ['entregas', 'Entregas'], ['compendio', 'Compendio']];
+  return `
+  <div class="page-head">
+    <div><h1>${a.nombre}</h1>
+      <div class="page-desc">${a.proveedor} · ${a.marca} · vigencia ${a.vigenciaDesde} a ${a.vigenciaHasta} · stock mínimo ${a.minimoPct}% de la primera entrega · avisos a ${(a.avisarA || []).join(', ')}</div></div>
+    ${puedeGestionarAcuerdo() ? `<button class="btn" onclick="modalEditarAcuerdo('${a.id}')">⚙ Editar acuerdo</button>` : ''}
+  </div>
+  ${alertas.map(x => `<div class="ai-note" style="background:${colorAl[x.nivel][0]}; color:${colorAl[x.nivel][1]}; margin-bottom:8px; ${x.filtro ? 'cursor:pointer;' : ''}" ${x.filtro ? `onclick="acuerdoVista='compendio'; acuerdoFiltro='${x.filtro}'; renderAll();"` : ''}>${x.nivel === 'danger' ? '⛔' : (x.nivel === 'warn' ? '⚠' : 'ℹ')} ${x.texto}${x.filtro ? ' <u>Ver</u>' : ''}</div>`).join('')}
+  <div class="grid" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:12px; margin-bottom:14px;">
+    <div class="card"><div class="muted small">Monto acordado</div><div style="font-size:22px; font-weight:600;">${money(m.tope)}</div>
+      <div class="small muted">Productos valorizados: ${money(m.acordadoProductos)}</div></div>
+    <div class="card"><div class="muted small">Comprometido (solicitado + recibido)</div><div style="font-size:22px; font-weight:600;">${money(m.comprometido)}</div>
+      ${barraAcuerdo(m.pct, m.pct >= 95 ? 'var(--danger)' : (m.pct >= 80 ? 'var(--warn)' : ''))}<div class="small muted">${m.pct.toFixed(1)}% · saldo ${money(m.saldo)}</div></div>
+    <div class="card"><div class="muted small">Recibido en Bodega General</div><div style="font-size:22px; font-weight:600;">${money(m.recibido)}</div>
+      <div class="small muted">${m.tope ? (m.recibido / m.tope * 100).toFixed(1) : 0}% del monto</div></div>
+    <div class="card"><div class="muted small">Tiempo transcurrido de la vigencia</div><div style="font-size:22px; font-weight:600;">${tp.toFixed(1)}%</div>
+      ${barraAcuerdo(tp, 'var(--blueprint)')}<div class="small muted">${m.pct > tp + 10 ? 'Vas más rápido que el calendario' : (m.pct < tp - 10 ? 'Vas más lento que el calendario' : 'Ritmo acorde al calendario')}</div></div>
+  </div>
+  <div class="flex-gap" style="margin-bottom:12px;">${tabs.map(([k, l]) => `<button class="btn ${acuerdoVista === k ? 'btn-primary' : ''}" onclick="acuerdoVista='${k}'; renderAll();">${l}</button>`).join('')}</div>
+  ${acuerdoVista === 'entregas' ? htmlEntregasAcuerdo(a) : (acuerdoVista === 'compendio' ? htmlCompendioAcuerdo(a) : htmlResumenAcuerdo(a))}`;
+}
+function htmlResumenAcuerdo(a) {
+  const porRep = (a.items || []).map(it => ({ it, s: estadoItemAcuerdo(a, it) })).filter(x => x.s.bajoMinimo);
+  const hist = (a.ampliaciones || []).slice().reverse().slice(0, 8);
+  return `
+  <div class="card" style="margin-bottom:12px;"><h3>Por reponer (llegaron al stock mínimo)</h3>
+    ${porRep.length ? `<div class="table-wrap"><table><tr><th>Producto</th><th>Stock</th><th>Mínimo</th><th>Saldo del acuerdo</th></tr>
+      ${porRep.map(({ it, s }) => `<tr><td>${it.descripcion}<div class="mono muted small">${it.codigo}</div></td><td>${s.b.stock}</td><td>${s.b.minimo}</td><td>${s.t.saldo}</td></tr>`).join('')}</table></div>`
+      : '<p class="hint">Ningún producto está en su mínimo.</p>'}</div>
+  <div class="card"><h3>Ampliaciones registradas</h3>
+    ${hist.length ? `<ul style="margin:6px 0 0 18px;">${hist.map(h => `<li class="small">${h.fecha} · ${h.por} — ${h.tipo === 'monto' ? `monto ${money(h.desde)} → ${money(h.hasta)}` : `${h.descripcion} +${h.cantidad} (${h.entrega})`}${h.motivo ? ' · ' + h.motivo : ''}</li>`).join('')}</ul>` : '<p class="hint">Sin ampliaciones todavía.</p>'}</div>`;
+}
+function htmlEntregasAcuerdo(a) {
+  return `<div class="stack">${a.entregas.map(e => {
+    const plan = valorLineaEntrega(a, e, false), rec = valorLineaEntrega(a, e, true);
+    const dif = e.estado === "Recibida" ? e.lineas.filter(l => (Number(l.cantRecibida) || 0) < l.cantPlan).length : 0;
+    return `<div class="card"><div class="flex-between" style="flex-wrap:wrap; gap:8px;">
+      <div><h3>${e.nombre}</h3>
+        <p class="hint">${e.lineas.length} productos · planificado ${money(plan)}${e.estado === 'Recibida' ? ` · recibido ${money(rec)} · factura ${e.factura} (${e.fechaRecepcion})${dif ? ` · <span style="color:var(--copper-dark)">${dif} con diferencia</span>` : ''}` : ''}${e.fechaSolicitud ? ` · solicitada ${e.fechaSolicitud}` : ''}</p></div>
+      <div class="flex-gap">${badgeEntregaAcuerdo(e.estado)}
+        <button class="btn btn-sm" onclick="exportarPedidoEntregaExcel('${a.id}','${e.id}')">⬇ Pedido Excel</button>
+        ${puedeGestionarAcuerdo() && e.estado === 'Planificada' ? `<button class="btn btn-sm btn-primary" onclick="marcarEntregaSolicitada('${a.id}','${e.id}')">✉ Marcar solicitada</button>` : ''}
+        ${puedeGestionarAcuerdo() && e.estado !== 'Recibida' ? `<button class="btn btn-sm btn-primary" onclick="modalRecepcionEntregaAcuerdo('${a.id}','${e.id}')">📦 Registrar recepción</button>` : ''}
+      </div></div></div>`;
+  }).join('')}</div>`;
+}
+function htmlCompendioAcuerdo(a) {
+  const q = acuerdoBusqueda.trim().toLowerCase();
+  const filas = (a.items || []).map(it => ({ it, s: estadoItemAcuerdo(a, it) })).filter(({ it, s }) => {
+    if (q && !(`${it.codigo} ${it.descripcion} ${it.categoria}`.toLowerCase().includes(q))) return false;
+    if (acuerdoFiltro === "agotados") return s.agotado;
+    if (acuerdoFiltro === "sinPrecio") return s.sinPrecio;
+    if (acuerdoFiltro === "bajoMinimo") return s.bajoMinimo;
+    if (acuerdoFiltro === "pendientes") return s.t.pendiente > 0;
+    return true;
+  });
+  const sel = 'width:auto; font-size:12.5px; padding:8px 11px; border-radius:8px; border:1px solid var(--line); background:var(--card);';
+  return `
+  <div class="card" style="margin-bottom:12px;"><div class="flex-gap" style="flex-wrap:wrap;">
+    <input type="text" placeholder="Buscar por código, producto o familia..." style="flex:1; min-width:220px;" value="${acuerdoBusqueda}" oninput="acuerdoBusqueda=this.value; refrescarCompendioAcuerdo();">
+    <select style="${sel}" onchange="acuerdoFiltro=this.value; refrescarCompendioAcuerdo();">
+      ${[['todos', 'Todos'], ['pendientes', 'Con entrega solicitada'], ['agotados', 'Máximo alcanzado'], ['bajoMinimo', 'En stock mínimo'], ['sinPrecio', 'Sin precio']].map(([v, l]) => `<option value="${v}" ${acuerdoFiltro === v ? 'selected' : ''}>${l}</option>`).join('')}
+    </select></div></div>
+  <div id="compendioAcuerdoTabla">${tablaCompendioAcuerdo(a, filas)}</div>`;
+}
+function refrescarCompendioAcuerdo() {
+  const a = acuerdoActivo(); const el = document.getElementById('compendioAcuerdoTabla'); if (!a || !el) return;
+  const q = acuerdoBusqueda.trim().toLowerCase();
+  const filas = (a.items || []).map(it => ({ it, s: estadoItemAcuerdo(a, it) })).filter(({ it, s }) => {
+    if (q && !(`${it.codigo} ${it.descripcion} ${it.categoria}`.toLowerCase().includes(q))) return false;
+    if (acuerdoFiltro === "agotados") return s.agotado;
+    if (acuerdoFiltro === "sinPrecio") return s.sinPrecio;
+    if (acuerdoFiltro === "bajoMinimo") return s.bajoMinimo;
+    if (acuerdoFiltro === "pendientes") return s.t.pendiente > 0;
+    return true;
+  });
+  el.innerHTML = tablaCompendioAcuerdo(a, filas);
+}
+function tablaCompendioAcuerdo(a, filas) {
+  if (!filas.length) return `<div class="empty-state card">No hay productos con ese criterio.</div>`;
+  return `<div class="card card-flush"><div class="table-wrap"><table>
+    <tr><th>Producto</th><th>Acordado</th><th>Solicitado</th><th>Recibido</th><th>Saldo</th><th>Precio</th><th>Stock / mín.</th><th>Estado</th><th></th></tr>
+    ${filas.map(({ it, s }) => `<tr>
+      <td>${it.descripcion}<div class="mono muted small">${it.codigo} · ${it.categoria}${it.ampliacion ? ' · ampliación' : ''}</div></td>
+      <td>${s.t.acordada}</td><td>${s.t.pendiente}</td><td>${s.t.recibida}</td><td><strong>${s.t.saldo}</strong></td>
+      <td>${s.sinPrecio ? '<span style="color:var(--copper-dark)">pendiente</span>' : money(it.precio)}</td>
+      <td>${s.b ? `${s.b.stock} / ${s.b.minimo || '—'}` : '—'}</td>
+      <td>${s.agotado ? '<span class="badge b-rojo"><span class="dot"></span>Máximo alcanzado</span>' : (s.bajoMinimo ? '<span class="badge b-amarillo"><span class="dot"></span>En mínimo</span>' : '')}</td>
+      <td style="white-space:nowrap;">${puedeGestionarAcuerdo() ? `<button class="btn btn-sm" onclick="modalPrecioItemAcuerdo('${a.id}','${it.codigo}')">$</button> <button class="btn btn-sm" onclick="modalAmpliarCantidadAcuerdo('${a.id}','${it.codigo}')">＋ Cantidad</button>` : ''}</td>
+    </tr>`).join('')}
+  </table></div></div>`;
+}
+
 /* =====================================================================
    RESUMEN DE ÓRDENES DE COMPRA — solo cotizaciones con OC (no Compras
    Directas ni Pañol). Agrupado por día, con modalidad Despacho/Retiro,
@@ -8315,6 +8732,7 @@ function NAV_ACTUAL() {
       {id:"recepciones", label:"Buscar / Recepción OC", icon:iconSearch()},
       {id:"resumenOC", label:"Resumen de OC", icon:iconSearch()},
       {id:"panol", label:"Pañol", icon:iconPanol()},
+      {id:"acuerdos", label:"Acuerdos comerciales", icon:iconBox(), roles: ROLES_COMPRAS},
       {id:"bodegaGeneral", label:"Bodega General", icon:iconBox()},
       {id:"personal", label:"Personal", icon:iconUsers()},
     ]},
@@ -8532,7 +8950,7 @@ function renderAll() {
   const renderers = {
     dashboard: renderDashboard, miPanel: renderMiPanel, panelEquipo: renderPanelEquipo, bodegaGeneral: renderBodegaGeneral, personal: renderPersonal, proyecto360: renderProyecto360, planificacion: renderPlanificacion, compras: renderCompras,
     presupuesto: renderPresupuesto, bodega: renderBodega, reporteMateriales: renderReporteMateriales, comprasDirectas: renderComprasDirectas, punch: renderPunch, requerimientos: renderRequerimientos, galeria: renderGaleria, cuadroCarga: renderCuadroCarga,
-    recepciones: renderRecepciones, resumenOC: renderResumenOC, panol: renderPanol,
+    recepciones: renderRecepciones, resumenOC: renderResumenOC, panol: renderPanol, acuerdos: renderAcuerdos,
     fabricacion: renderFabricacion,
     reaperturas: renderReaperturas, copiloto: renderCopiloto, auditoria: renderAuditoria, actividad: renderActividad, respaldos: renderRespaldos,
   };

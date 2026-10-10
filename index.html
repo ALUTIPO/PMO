@@ -18,10 +18,7 @@
      solo, aunque nuestro código nunca lo use — así se evita del todo. -->
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-functions-compat.js"></script>
 <!-- SheetJS: genera el .xlsx real de exportación de Bodega para Bsale, y del reporte de KPIs -->
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <!-- jsPDF + autoTable: genera el reporte de KPIs en PDF -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <!-- Fuentes -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -451,7 +448,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.0";
+const APP_VERSION = "3.1";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -493,6 +490,10 @@ const sesionesRef = database.ref('sesiones');
    propio, separado de /state, para no arriesgar el estado en uso al
    escribir un respaldo. */
 const respaldosRef = database.ref('respaldos');
+/* Nodos propios (fuera del bloque 'state'): libro de movimientos valorizado, informes a Administración y contadores. */
+const movimientosRef = database.ref('movimientosBodega');
+const informesAdminRef = database.ref('informesAdministracion');
+const contadoresRef = database.ref('contadores');
 const storage = firebase.storage();
 /* Notificaciones push (FCM) — cada persona que activa notificaciones
    queda con su "token" guardado acá, asociado a su correo. Es lo que
@@ -1083,15 +1084,8 @@ function aplicarEstadoRemoto(data) {
   DB.proyectos = (data.proyectos || []).map(migrarProyecto);
 }
 
-async function guardarEstado(nota) {
-  if (_guardando) { _guardarPendiente = true; return; }
-  _guardando = true;
-  DB.syncStatus = "guardando";
-  actualizarIndicadorSync();
-
-  if (DB.historial.length > 300) DB.historial = DB.historial.slice(0, 300);
-
-  const payload = {
+function construirPayloadEstado() {
+  return {
     proyectos: DB.proyectos,
     historial: DB.historial,
     proveedores: DB.proveedores,
@@ -1104,6 +1098,18 @@ async function guardarEstado(nota) {
     acuerdos: DB.acuerdos || [],
     updatedAt: new Date().toISOString(),
   };
+}
+
+async function guardarEstado(nota) {
+  if (_guardando) { _guardarPendiente = true; return; }
+  _guardando = true;
+  DB.syncStatus = "guardando";
+  actualizarIndicadorSync();
+
+  if (DB.historial.length > 300) DB.historial = DB.historial.slice(0, 300);
+
+  const payload = construirPayloadEstado();
+
 
   try {
     await stateRef.set(payload);
@@ -1196,6 +1202,7 @@ async function cargarEstadoInicial() {
   configurarSesionUso();
   verificarYCrearRespaldoSemanal(); // en segundo plano, no bloquea nada
   registrarServiceWorker(); // habilita instalar la app y recibir notificaciones
+  setTimeout(precargarLibreriasExportacion, 6000); // Excel/PDF en segundo plano, sin frenar el arranque
   toast(`Bienvenido, ${DB.usuario} (${DB.role}).`, "ok");
 }
 
@@ -1817,6 +1824,7 @@ function agregarProductoBodegaGeneral(datos) {
     unidad: datos.unidad||"unidad", minimo: Number(datos.minimo)||0,
     precioUnitario,
   });
+  if (stockInicial > 0) registrarMovimientoBodega({ tipo:"Ingreso inicial", signo:1, codigo, material:datos.material.trim(), unidad:datos.unidad||"unidad", cantidad:stockInicial, costoUnitario:precioUnitario, total:stockInicial*precioUnitario, documento:"Producto nuevo", estadoInforme:"No aplica" });
   registrarHistorial({proyecto:"General", accion:"Crear", detalle:`Producto agregado a bodega general: ${datos.material} (${codigo})${precioUnitario?` — precio unitario $${precioUnitario}`:''}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
   toast("Producto agregado a la bodega general.", "ok");
   guardarEstado();
@@ -1845,6 +1853,10 @@ function ajustarStockBodegaGeneral(codigo, tipo, cantidad, motivo, precioTotalIn
   }
   else if (tipo === "Salida") b.stock = Math.max(0, antes - cant);
   else b.stock = cant;
+  if (b.stock !== antes) {
+    const delta = b.stock - antes, cu = Number(b.precioUnitario)||0;
+    registrarMovimientoBodega({ tipo: tipo==="Ingreso" ? "Ingreso manual" : (tipo==="Salida" ? "Salida manual" : "Ajuste de stock"), signo: delta>0 ? 1 : -1, codigo:b.codigo, material:b.material, unidad:b.unidad||"", cantidad:Math.abs(delta), costoUnitario:cu, total:Math.abs(delta)*cu, documento: motivo||"", estadoInforme:"No aplica" });
+  }
   registrarHistorial({proyecto:"General", accion:"Modificar", detalle:`Bodega general ${codigo} (${b.material}): ${tipo} ${cant} ${b.unidad} — stock ${antes} → ${b.stock}${notaPrecio}${motivo?` (${motivo})`:''}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
   toast(`Stock de ${b.material} actualizado: ${antes} → ${b.stock} ${b.unidad}.`, "ok");
   guardarEstado();
@@ -1864,6 +1876,8 @@ function asignarBodegaGeneralAProyecto(codigoGeneral, proyectoId, cantidad) {
   if (cant > b.stock) { toast(`Solo hay ${b.stock} ${b.unidad} disponibles en bodega general.`, "danger"); return false; }
 
   b.stock -= cant;
+  registrarMovimientoBodega({ tipo:"Traspaso a proyecto", signo:-1, codigo:b.codigo, material:b.material, unidad:b.unidad||"", cantidad:cant, costoUnitario:Number(b.precioUnitario)||0, total:cant*(Number(b.precioUnitario)||0),
+    proyectoId:p.id, proyectoCodigo:p.codigo, proyectoNombre:p.nombre, documento:"Traspaso desde Bodega General", acuerdoId:b.acuerdoId||"", estadoInforme:"Pendiente" });
   let destino = buscarBodegaPorNombre(p, b.material);
   if (!destino) {
     destino = { codigo:"MAT-"+String(1000+p.bodega.length+Math.floor(Math.random()*900)), material: b.material, stock:0, unidad: b.unidad, minimo:0 };
@@ -3574,8 +3588,8 @@ function renderReporteMateriales() {
   `;
 }
 
-function exportarReporteMaterialesExcel(pid) {
-  if (typeof XLSX === "undefined") { toast("No se pudo cargar el generador de Excel.", "danger"); return; }
+async function exportarReporteMaterialesExcel(pid) {
+  if (!(await asegurarXLSX())) { toast("No se pudo cargar el generador de Excel.", "danger"); return; }
   const p = proy(pid);
   const filas = datosReporteMateriales(pid);
   if (!filas.length) { toast("No hay datos que exportar en este proyecto.", "danger"); return; }
@@ -4263,10 +4277,10 @@ function marcarEntregaSolicitada(aid, eid) {
   toast(`${e.nombre} marcada como solicitada.`, "ok");
   renderAll();
 }
-function exportarPedidoEntregaExcel(aid, eid) {
+async function exportarPedidoEntregaExcel(aid, eid) {
   const a = (DB.acuerdos || []).find(x => x.id === aid); if (!a) return;
   const e = a.entregas.find(x => x.id === eid); if (!e) return;
-  if (typeof XLSX === "undefined") { toast("No se pudo cargar el generador de Excel.", "danger"); return; }
+  if (!(await asegurarXLSX())) { toast("No se pudo cargar el generador de Excel.", "danger"); return; }
   const filas = e.lineas.map(l => {
     const it = a.items.find(x => x.codigo === l.codigo) || {};
     return { "Código": l.codigo, "Descripción": it.descripcion || "", "Cantidad": l.cantPlan, "Precio unitario": Number(it.precio) || 0, "Total": l.cantPlan * (Number(it.precio) || 0) };
@@ -4302,7 +4316,7 @@ function modalRecepcionEntregaAcuerdo(aid, eid) {
       <button class="btn btn-primary" onclick="confirmarRecepcionAcuerdo('${aid}','${eid}')">Ingresar a Bodega General</button>
     </div>`);
 }
-function ingresarBodegaGeneralDesdeAcuerdo(a, it, qty, yaRecibido) {
+function ingresarBodegaGeneralDesdeAcuerdo(a, it, qty, yaRecibido, documento) {
   let b = buscarBodegaGeneralPorCodigo(it.codigo);
   if (!b) { b = { codigo: it.codigo, material: it.descripcion, stock: 0, unidad: it.unidad || "unidad", minimo: 0, precioUnitario: 0 }; DB.bodegaGeneral.push(b); }
   const precio = Number(it.precio) || 0;
@@ -4312,6 +4326,7 @@ function ingresarBodegaGeneralDesdeAcuerdo(a, it, qty, yaRecibido) {
   b.acuerdoId = a.id; b.marca = a.marca || "";
   // Stock mínimo: % de lo que realmente llegó en la PRIMERA entrega del producto.
   if (yaRecibido === 0 && !Number(b.minimo)) b.minimo = Math.max(1, Math.ceil(qty * (Number(a.minimoPct) || 25) / 100));
+  registrarMovimientoBodega({ tipo:"Ingreso por acuerdo", signo:1, codigo:it.codigo, material:it.descripcion, unidad:it.unidad||"", cantidad:qty, costoUnitario:precio, total:qty*precio, documento: documento||"", acuerdoId:a.id, estadoInforme:"No aplica" });
   return b;
 }
 function confirmarRecepcionAcuerdo(aid, eid) {
@@ -4327,7 +4342,7 @@ function confirmarRecepcionAcuerdo(aid, eid) {
     const q = cantidades[i];
     const ya = totalesItemAcuerdo(a, it).recibida;
     l.cantRecibida = q;
-    if (q > 0) { ingresarBodegaGeneralDesdeAcuerdo(a, it, q, ya); ingresados++; }
+    if (q > 0) { ingresarBodegaGeneralDesdeAcuerdo(a, it, q, ya, `Factura ${factura} (${e.nombre})`); ingresados++; }
     if (q < l.cantPlan) faltantes++;
   });
   e.estado = "Recibida"; e.factura = factura; e.fechaRecepcion = document.getElementById('acFechaRec').value || hoyISO();
@@ -4533,6 +4548,238 @@ function tablaCompendioAcuerdo(a, filas) {
 }
 
 /* =====================================================================
+   LIBRERÍAS DE EXPORTACIÓN BAJO DEMANDA — Excel (SheetJS) y PDF (jsPDF) ya
+   no se descargan al abrir la app (más de 1 MB); se cargan la primera vez
+   que se usan, y se precargan en segundo plano unos segundos después de
+   entrar, para que el primer clic sea casi instantáneo.
+   ===================================================================== */
+const URL_LIB_XLSX = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
+const URL_LIB_JSPDF = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+const URL_LIB_AUTOTABLE = "https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js";
+const _promesasLib = {};
+function cargarScriptExterno(src) {
+  if (_promesasLib[src]) return _promesasLib[src];
+  _promesasLib[src] = new Promise(resolve => {
+    const el = document.createElement('script');
+    el.src = src; el.async = true;
+    el.onload = () => resolve(true);
+    el.onerror = () => { delete _promesasLib[src]; resolve(false); };
+    document.head.appendChild(el);
+  });
+  return _promesasLib[src];
+}
+async function asegurarXLSX() {
+  if (typeof XLSX !== "undefined") return true;
+  await cargarScriptExterno(URL_LIB_XLSX);
+  return typeof XLSX !== "undefined";
+}
+async function asegurarPDF() {
+  if (!window.jspdf) await cargarScriptExterno(URL_LIB_JSPDF);
+  if (!window.jspdf) return false;
+  if (typeof window.jspdf.jsPDF.API.autoTable !== "function") await cargarScriptExterno(URL_LIB_AUTOTABLE);
+  return typeof window.jspdf.jsPDF.API.autoTable === "function";
+}
+function precargarLibreriasExportacion() { asegurarXLSX(); asegurarPDF(); }
+
+/* =====================================================================
+   MOVIMIENTOS DE BODEGA + INFORMES A ADMINISTRACIÓN (nota de venta)
+   Cada entrada/salida de la Bodega General queda como un registro
+   valorizado en su PROPIO nodo de Firebase (/movimientosBodega) — no dentro
+   del bloque principal de estado — para que el historial de un año no
+   haga más lento el guardado de todo lo demás. Las salidas a un proyecto
+   quedan "Pendiente" hasta que se incluyen en un informe a Administración
+   (/informesAdministracion), que sirve para crear en Bsale la nota de venta
+   (traspaso Bodega Central → Proyecto). Es un libro mayor: no se edita.
+   ===================================================================== */
+let _movimientosCache = null;
+let informesFiltroDesde = "";
+let informesFiltroHasta = "";
+let informesFiltroProyecto = "todos";
+let informesVerInformados = false;
+
+function mensajeErrorFirebase(e) {
+  return (e && e.code === "PERMISSION_DENIED")
+    ? "Firebase no permite escribir en este sector nuevo: hay que agregar sus reglas en la consola de Firebase."
+    : "No se pudo guardar (revisa la conexión).";
+}
+function registrarMovimientoBodega(m) {
+  const reg = JSON.parse(JSON.stringify(Object.assign({
+    fecha: hoyISO(), hora: new Date().toISOString(), por: DB.usuario + " · " + DB.role,
+    estadoInforme: "No aplica", informeId: "",
+  }, m)));
+  _movimientosCache = null;
+  return movimientosRef.push(reg).catch(e => {
+    console.error("Movimiento no registrado:", e);
+    toast("El stock se actualizó, pero el movimiento valorizado NO se registró. " + mensajeErrorFirebase(e), "danger");
+  });
+}
+function cargarMovimientosBodega(forzar) {
+  if (_movimientosCache && !forzar) return Promise.resolve(_movimientosCache);
+  return movimientosRef.once('value').then(snap => {
+    const v = snap.val() || {};
+    _movimientosCache = Object.entries(v).map(([id, m]) => Object.assign({ id }, m));
+    return _movimientosCache;
+  });
+}
+function movimientosFiltrados(todos) {
+  return todos.filter(m => {
+    if (m.estadoInforme === "No aplica") return false;
+    if (informesVerInformados ? m.estadoInforme !== "Informado" : m.estadoInforme !== "Pendiente") return false;
+    if (informesFiltroDesde && m.fecha < informesFiltroDesde) return false;
+    if (informesFiltroHasta && m.fecha > informesFiltroHasta) return false;
+    if (informesFiltroProyecto !== "todos" && m.proyectoCodigo !== informesFiltroProyecto) return false;
+    return true;
+  }).sort((a, b) => (a.proyectoCodigo || "").localeCompare(b.proyectoCodigo || "") || (a.hora || "").localeCompare(b.hora || ""));
+}
+function renderInformesAdmin() {
+  setTimeout(refrescarInformesAdmin, 0);
+  const sel = 'width:auto; font-size:12.5px; padding:8px 11px; border-radius:8px; border:1px solid var(--line); background:var(--card);';
+  return `
+  <div class="page-head"><div><h1>Informes a Administración</h1>
+    <div class="page-desc">Material que salió de la Bodega General hacia proyectos (Pañol y traspasos), valorizado, listo para crear en Bsale la <strong>nota de venta</strong> de Bodega Central al proyecto. Al generar el informe, esas salidas quedan marcadas como informadas y no se vuelven a incluir.</div></div></div>
+  <div class="card" style="margin-bottom:14px;"><div class="flex-gap" style="flex-wrap:wrap; align-items:center;">
+    <label class="small muted">Desde</label><input type="date" value="${informesFiltroDesde}" style="width:auto;" onchange="informesFiltroDesde=this.value; refrescarInformesAdmin();">
+    <label class="small muted">Hasta</label><input type="date" value="${informesFiltroHasta}" style="width:auto;" onchange="informesFiltroHasta=this.value; refrescarInformesAdmin();">
+    <select style="${sel}" onchange="informesVerInformados=(this.value==='informados'); refrescarInformesAdmin();">
+      <option value="pendientes" ${!informesVerInformados ? 'selected' : ''}>Pendientes de informar</option>
+      <option value="informados" ${informesVerInformados ? 'selected' : ''}>Ya informados</option></select>
+    <select id="informesSelProyecto" style="${sel}" onchange="informesFiltroProyecto=this.value; refrescarInformesAdmin();"><option value="todos">Todos los proyectos</option></select>
+  </div></div>
+  <div id="informesPendientes"><div class="hint">Cargando movimientos…</div></div>
+  <h3 style="margin:22px 0 8px;">Informes emitidos</h3>
+  <div id="informesEmitidos"><div class="hint">Cargando…</div></div>`;
+}
+function refrescarInformesAdmin() {
+  cargarMovimientosBodega(true).then(todos => {
+    const cont = document.getElementById('informesPendientes'); if (!cont) return;
+    const selP = document.getElementById('informesSelProyecto');
+    if (selP && selP.options.length <= 1) {
+      const cods = [...new Set(todos.filter(m => m.estadoInforme !== "No aplica").map(m => m.proyectoCodigo).filter(Boolean))].sort();
+      selP.innerHTML = `<option value="todos">Todos los proyectos</option>` + cods.map(c => `<option value="${c}" ${informesFiltroProyecto === c ? 'selected' : ''}>${c}</option>`).join('');
+    }
+    const filas = movimientosFiltrados(todos);
+    if (!filas.length) { cont.innerHTML = `<div class="empty-state card">${informesVerInformados ? 'No hay salidas informadas con ese filtro.' : 'No hay salidas pendientes de informar. Las salidas del Pañol y los traspasos a proyectos aparecen aquí cuando se entregan.'}</div>`; return; }
+    const porProy = {};
+    filas.forEach(m => { (porProy[m.proyectoCodigo || "(sin proyecto)"] = porProy[m.proyectoCodigo || "(sin proyecto)"] || []).push(m); });
+    cont.innerHTML = Object.keys(porProy).sort().map(cod => {
+      const ms = porProy[cod], total = ms.reduce((s, m) => s + (Number(m.total) || 0), 0);
+      const sinCosto = ms.filter(m => !(Number(m.costoUnitario) > 0)).length;
+      return `<div class="card" style="margin-bottom:14px;">
+        <div class="flex-between" style="flex-wrap:wrap; gap:8px;"><div><h3>${cod} <span class="muted small">${ms[0].proyectoNombre || ''}</span></h3>
+          <p class="hint">${ms.length} línea${ms.length !== 1 ? 's' : ''} · total neto ${money(total)}${sinCosto ? ` · <span style="color:var(--copper-dark)">${sinCosto} sin costo</span>` : ''}</p></div>
+          ${!informesVerInformados && puedeGestionarBodega() ? `<button class="btn btn-primary" onclick="generarInformeAdmin('${cod}')">🧾 Generar nota de venta (Excel + PDF)</button>` : ''}</div>
+        <div class="table-wrap"><table><tr><th>Fecha</th><th>Documento</th><th>SKU</th><th>Producto</th><th>Cant.</th><th>Costo unit.</th><th>Total neto</th>${informesVerInformados ? '<th>Informe</th>' : ''}</tr>
+        ${ms.map(m => `<tr><td>${m.fecha}</td><td>${m.documento || ''}</td><td class="mono small">${m.codigo}</td><td>${m.material}</td><td>${m.cantidad}</td>
+          <td>${Number(m.costoUnitario) > 0 ? money(m.costoUnitario) : '<span style="color:var(--copper-dark)">sin costo</span>'}</td><td>${money(m.total || 0)}</td>${informesVerInformados ? `<td>N° ${m.informeNumero || ''}</td>` : ''}</tr>`).join('')}
+        </table></div></div>`;
+    }).join('');
+  }).catch(e => { const c = document.getElementById('informesPendientes'); if (c) c.innerHTML = `<div class="empty-state card">No se pudieron leer los movimientos. ${mensajeErrorFirebase(e)}</div>`; });
+  informesAdminRef.once('value').then(snap => {
+    const cont = document.getElementById('informesEmitidos'); if (!cont) return;
+    const lista = Object.entries(snap.val() || {}).map(([id, v]) => Object.assign({ id }, v)).sort((a, b) => (b.numero || 0) - (a.numero || 0));
+    cont.innerHTML = lista.length ? `<div class="card card-flush"><div class="table-wrap"><table><tr><th>N°</th><th>Fecha</th><th>Proyecto</th><th>Líneas</th><th>Total neto</th><th>Emitido por</th><th></th></tr>
+      ${lista.map(i => `<tr><td>${i.numero}</td><td>${i.fecha}</td><td>${i.proyectoCodigo}</td><td>${(i.lineas || []).length}</td><td>${money(i.totalNeto || 0)}</td><td class="small">${i.creadoPor || ''}</td>
+      <td style="white-space:nowrap;"><button class="btn btn-sm" onclick="reimprimirInformeAdmin('${i.id}','excel')">⬇ Excel</button> <button class="btn btn-sm" onclick="reimprimirInformeAdmin('${i.id}','pdf')">🖨 PDF</button></td></tr>`).join('')}
+      </table></div></div>` : '<div class="empty-state card">Todavía no se ha emitido ningún informe.</div>';
+  }).catch(() => { const c = document.getElementById('informesEmitidos'); if (c) c.innerHTML = '<div class="hint">No se pudo leer el historial de informes.</div>'; });
+}
+async function generarInformeAdmin(codProyecto) {
+  if (!puedeGestionarBodega()) { toast(`Tu rol (${DB.role}) no gestiona bodega.`, "danger"); return; }
+  const todos = await cargarMovimientosBodega(true);
+  const ms = movimientosFiltrados(todos).filter(m => (m.proyectoCodigo || "(sin proyecto)") === codProyecto);
+  if (!ms.length) { toast("No hay líneas pendientes para ese proyecto con el filtro actual.", "danger"); return; }
+  const sinCosto = ms.filter(m => !(Number(m.costoUnitario) > 0)).length;
+  if (sinCosto && !confirm(`${sinCosto} línea(s) no tienen costo y saldrán en $0. Conviene corregir el precio antes (en Acuerdos o Bodega General). ¿Generar el informe igual?`)) return;
+  let numero;
+  try {
+    const r = await contadoresRef.child('informesAdmin').transaction(n => (n || 0) + 1);
+    numero = r.snapshot.val();
+  } catch (e) { toast(mensajeErrorFirebase(e), "danger"); return; }
+  const lineas = ms.map(m => ({ movId: m.id, fecha: m.fecha, documento: m.documento || "", codigo: m.codigo, material: m.material, unidad: m.unidad || "", cantidad: Number(m.cantidad) || 0, costoUnitario: Number(m.costoUnitario) || 0, total: Number(m.total) || 0 }));
+  const informe = JSON.parse(JSON.stringify({
+    numero, fecha: hoyISO(), proyectoCodigo: codProyecto, proyectoNombre: ms[0].proyectoNombre || "",
+    desde: ms.reduce((a, m) => (!a || m.fecha < a ? m.fecha : a), ""), hasta: ms.reduce((a, m) => (!a || m.fecha > a ? m.fecha : a), ""),
+    lineas, totalNeto: lineas.reduce((s, l) => s + l.total, 0), creadoPor: DB.usuario + " · " + DB.role,
+  }));
+  try {
+    const nuevoRef = informesAdminRef.push();
+    await nuevoRef.set(informe);
+    const upd = {};
+    ms.forEach(m => { upd[m.id + "/estadoInforme"] = "Informado"; upd[m.id + "/informeId"] = nuevoRef.key; upd[m.id + "/informeNumero"] = numero; });
+    await movimientosRef.update(upd);
+  } catch (e) { toast("El informe no se pudo guardar. " + mensajeErrorFirebase(e), "danger"); return; }
+  _movimientosCache = null;
+  registrarHistorial({ proyecto: codProyecto, accion: "Exportar", detalle: `Informe a Administración N° ${numero}: ${lineas.length} líneas, ${money(informe.totalNeto)} neto (nota de venta Bodega Central → ${codProyecto})`, usuario: DB.usuario + " · " + DB.role, criticidad: "Media" });
+  guardarEstado("Informe a Administración");
+  toast(`Informe N° ${numero} generado (${lineas.length} líneas).`, "ok");
+  await descargarInformeExcel(informe);
+  await descargarInformePdf(informe);
+  refrescarInformesAdmin();
+}
+async function reimprimirInformeAdmin(id, formato) {
+  const snap = await informesAdminRef.child(id).once('value');
+  const inf = snap.val(); if (!inf) { toast("No se encontró el informe.", "danger"); return; }
+  inf.lineas = inf.lineas || [];
+  if (formato === "excel") await descargarInformeExcel(inf); else await descargarInformePdf(inf);
+}
+async function descargarInformeExcel(inf) {
+  if (!(await asegurarXLSX())) { toast("No se pudo cargar el generador de Excel. Revisa tu conexión.", "danger"); return; }
+  const filas = inf.lineas.map(l => ({
+    "N° Informe": inf.numero, "Fecha": l.fecha, "Proyecto (cliente)": inf.proyectoCodigo, "Documento origen": l.documento,
+    "SKU": l.codigo, "Producto": l.material, "Cantidad": l.cantidad, "Unidad": l.unidad, "Costo neto unitario": l.costoUnitario, "Total neto": l.total,
+  }));
+  filas.push({ "N° Informe": "", "Fecha": "", "Proyecto (cliente)": "", "Documento origen": "", "SKU": "", "Producto": "TOTAL NETO", "Cantidad": "", "Unidad": "", "Costo neto unitario": "", "Total neto": inf.totalNeto });
+  const wb = XLSX.utils.book_new();
+  const hoja = XLSX.utils.json_to_sheet(filas);
+  hoja['!cols'] = [10, 11, 16, 18, 14, 48, 9, 9, 14, 14].map(w => ({ wch: w }));
+  XLSX.utils.book_append_sheet(wb, hoja, "Nota de venta");
+  XLSX.writeFile(wb, `Nota_de_venta_N${inf.numero}_${inf.proyectoCodigo}_${inf.fecha}.xlsx`);
+}
+async function descargarInformePdf(inf) {
+  if (!(await asegurarPDF())) { toast("No se pudo cargar el generador de PDF. Revisa tu conexión.", "danger"); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  doc.setFontSize(15); doc.setFont(undefined, 'bold');
+  doc.text(`ALUTIPO — Informe a Administración N° ${inf.numero}`, 14, 16);
+  doc.setFontSize(10); doc.setFont(undefined, 'normal');
+  doc.text("Traspaso de Bodega Central a proyecto — para registrar en Bsale como nota de venta", 14, 22);
+  doc.text(`Proyecto (cliente): ${inf.proyectoCodigo}${inf.proyectoNombre ? ' — ' + inf.proyectoNombre : ''}`, 14, 29);
+  doc.text(`Fecha de emisión: ${inf.fecha} · Período: ${inf.desde} a ${inf.hasta} · Emitido por: ${inf.creadoPor || ''}`, 14, 35);
+  doc.autoTable({
+    startY: 40,
+    head: [["Fecha", "Documento", "SKU", "Producto", "Cant.", "Unidad", "Costo neto unit.", "Total neto"]],
+    body: inf.lineas.map(l => [l.fecha, l.documento, l.codigo, l.material, l.cantidad, l.unidad, money(l.costoUnitario), money(l.total)]),
+    foot: [["", "", "", "", "", "", "TOTAL NETO", money(inf.totalNeto)]],
+    theme: 'grid', styles: { fontSize: 8, cellPadding: 1.6, overflow: 'linebreak' }, headStyles: { fillColor: [193, 113, 46] }, footStyles: { fillColor: [235, 235, 235], textColor: 20, fontStyle: 'bold' },
+    columnStyles: { 3: { cellWidth: 80 } }, margin: { left: 10, right: 10 },
+  });
+  let y = doc.lastAutoTable.finalY + 22;
+  if (y > 190) { doc.addPage(); y = 40; }
+  doc.setFontSize(9);
+  ["Entrega (Bodega)", "Recibe (Proyecto)", "Administración"].forEach((t, i) => { const x = 20 + i * 90; doc.line(x, y, x + 70, y); doc.text(t, x, y + 5); });
+  doc.setFontSize(8); doc.text("Valores netos (sin IVA). Costo según precio acordado / precio de bodega al momento de la salida.", 14, y + 14);
+  doc.save(`Informe_Administracion_N${inf.numero}_${inf.proyectoCodigo}.pdf`);
+}
+
+/* ---- Tamaño de los datos (para decidir cuándo conviene partir el estado) ---- */
+function tamanoDatosEstado() {
+  const p = construirPayloadEstado();
+  const filas = Object.entries(p).filter(([k]) => k !== "updatedAt").map(([k, v]) => ({ clave: k, bytes: new Blob([JSON.stringify(v == null ? null : v)]).size }));
+  filas.sort((a, b) => b.bytes - a.bytes);
+  return { filas, total: filas.reduce((s, f) => s + f.bytes, 0) };
+}
+function htmlTamanoDatos() {
+  const t = tamanoDatosEstado();
+  const kb = n => (n / 1024).toFixed(0) + " KB";
+  const nivel = t.total > 3 * 1024 * 1024 ? ['danger', 'Conviene partir los datos pronto: cada guardado reescribe todo este bloque.'] : (t.total > 1.5 * 1024 * 1024 ? ['warn', 'Empieza a ser grande: conviene planificar partir los datos.'] : ['ok', 'Tamaño cómodo.']);
+  const col = { danger: 'var(--danger)', warn: 'var(--copper-dark)', ok: 'var(--ok)' }[nivel[0]];
+  return `<div class="card" style="margin-bottom:14px;"><h3>Tamaño de los datos</h3>
+    <p style="margin:4px 0;"><strong style="font-size:20px; color:${col};">${kb(t.total)}</strong> en el bloque principal (se reescribe completo en cada guardado). <span style="color:${col};">${nivel[1]}</span></p>
+    <div class="small muted">${t.filas.slice(0, 6).map(f => `${f.clave}: ${kb(f.bytes)}`).join(' · ')}</div>
+    <div class="hint" style="margin-top:6px;">Referencia orientativa, no un límite de Firebase. Los movimientos de bodega e informes viven en sectores aparte y no suman aquí.</div></div>`;
+}
+
+/* =====================================================================
    RESUMEN DE ÓRDENES DE COMPRA — solo cotizaciones con OC (no Compras
    Directas ni Pañol). Agrupado por día, con modalidad Despacho/Retiro,
    imprimible (PDF apaisado) y exportable a Excel. La fecha de agrupación
@@ -4636,8 +4883,8 @@ function renderResumenOC() {
   </div>
   <div id="resumenOCResultados">${htmlResumenOC()}</div>`;
 }
-function exportarResumenOCExcel() {
-  if (typeof XLSX === "undefined") { toast("No se pudo cargar el generador de Excel. Revisa tu conexión.", "danger"); return; }
+async function exportarResumenOCExcel() {
+  if (!(await asegurarXLSX())) { toast("No se pudo cargar el generador de Excel. Revisa tu conexión.", "danger"); return; }
   const filas = filasResumenOC().map(resumenOCFilaDatos);
   if (!filas.length) { toast("No hay OC para exportar con estos filtros.", "danger"); return; }
   const wb = XLSX.utils.book_new();
@@ -4652,8 +4899,8 @@ function exportarResumenOCExcel() {
   XLSX.writeFile(wb, `Resumen_OC_${resumenOCDesde}_a_${resumenOCHasta}.xlsx`);
   toast("Excel exportado.", "ok");
 }
-function generarPdfResumenOC() {
-  if (typeof window.jspdf === "undefined") { toast("No se pudo cargar el generador de PDF. Revisa tu conexión.", "danger"); return; }
+async function generarPdfResumenOC() {
+  if (!(await asegurarPDF())) { toast("No se pudo cargar el generador de PDF. Revisa tu conexión.", "danger"); return; }
   const filas = filasResumenOC().map(resumenOCFilaDatos);
   if (!filas.length) { toast("No hay OC para imprimir con estos filtros.", "danger"); return; }
   const { jsPDF } = window.jspdf;
@@ -4871,8 +5118,8 @@ function renderBodegaGeneral() {
    plantilla real que exporta Bsale (confirmada contra un export real
    de la cuenta), así que el archivo generado se puede subir directo
    al importador de Stock de Bsale sin reordenar columnas. */
-function exportarBodegaExcelBsale() {
-  if (typeof XLSX === "undefined") { toast("No se pudo cargar el generador de Excel. Revisa tu conexión a internet e intenta de nuevo.", "danger"); return; }
+async function exportarBodegaExcelBsale() {
+  if (!(await asegurarXLSX())) { toast("No se pudo cargar el generador de Excel. Revisa tu conexión a internet e intenta de nuevo.", "danger"); return; }
   if (!DB.bodegaGeneral.length) { toast("La bodega general está vacía — no hay nada que exportar.", "danger"); return; }
 
   const filas = DB.bodegaGeneral.map(b => ({
@@ -5109,7 +5356,13 @@ function marcarSolicitudPanolEntregada(id) {
   s.items.forEach(it => {
     if (it.enStock && !it.entregado) {
       const prod = DB.bodegaGeneral.find(b => b.codigo === it.codigo);
-      if (prod) prod.stock = Math.max(0, (Number(prod.stock)||0) - (Number(it.cantidad)||0));
+      if (prod) {
+        const cantEnt = Number(it.cantidad)||0, stockAntes = Number(prod.stock)||0, cu = Number(prod.precioUnitario)||0;
+        prod.stock = Math.max(0, stockAntes - cantEnt);
+        registrarMovimientoBodega({ tipo:"Salida a proyecto", signo:-1, codigo:prod.codigo, material:prod.material, unidad:prod.unidad||"", cantidad:cantEnt, costoUnitario:cu, total:cantEnt*cu,
+          proyectoId:s.proyectoId, proyectoCodigo:s.proyectoCodigo, proyectoNombre:s.proyectoNombre, documento:`Pañol N° ${s.numero}`, origenId:s.id,
+          solicitante:s.solicitante, acuerdoId:prod.acuerdoId||"", stockInsuficiente: stockAntes < cantEnt, estadoInforme:"Pendiente" });
+      }
       it.entregado = true;
     }
   });
@@ -5154,10 +5407,10 @@ function reenviarWhatsAppPanol(id) {
   const texto = `📦 Solicitud de Pañol N° ${s.numero}\nProyecto: ${s.proyectoCodigo} — ${s.proyectoNombre}\nSolicita: ${s.solicitante} (${s.solicitanteRol})\nFecha: ${s.fecha}\n\nMateriales:\n${s.items.map(it=>`- ${it.cantidad} ${it.unidad} ${it.material}${it.codigo?` (${it.codigo})`:''}${!it.enStock?' [SIN STOCK]':''}`).join('\n')}${s.motivo?`\n\nMotivo: ${s.motivo}`:''}`;
   abrirWhatsApp(persona.telefono, texto);
 }
-function generarPdfSolicitudPanol(id) {
+async function generarPdfSolicitudPanol(id) {
   const s = (DB.solicitudesPanol||[]).find(x => x.id === id);
   if (!s) return;
-  if (typeof window.jspdf === "undefined") { toast("No se pudo cargar el generador de PDF. Revisa tu conexión.", "danger"); return; }
+  if (!(await asegurarPDF())) { toast("No se pudo cargar el generador de PDF. Revisa tu conexión.", "danger"); return; }
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -5305,12 +5558,12 @@ function modalImportarBodegaExcel() {
   `);
 }
 
-function previsualizarImportBodega(input) {
+async function previsualizarImportBodega(input) {
   const file = input.files[0];
   const preview = document.getElementById('bgImportPreview');
   const btn = document.getElementById('bgImportConfirmBtn');
   if (!file) { preview.innerHTML=''; btn.disabled=true; return; }
-  if (typeof XLSX === "undefined") { preview.innerHTML = `<div class="hint" style="color:var(--danger)">No se pudo cargar el lector de Excel. Revisa tu conexión.</div>`; return; }
+  if (!(await asegurarXLSX())) { preview.innerHTML = `<div class="hint" style="color:var(--danger)">No se pudo cargar el lector de Excel. Revisa tu conexión.</div>`; return; }
   const reader = new FileReader();
   reader.onload = (e) => {
     try {
@@ -5351,12 +5604,15 @@ function confirmarImportBodegaExcel() {
     let b = f.sku ? DB.bodegaGeneral.find(x=>x.codigo===f.sku) : null;
     if (!b && f.nombre) b = DB.bodegaGeneral.find(x=>x.material.trim().toLowerCase()===f.nombre.trim().toLowerCase());
     if (b) {
+      const antesImp = Number(b.stock)||0;
       b.stock = f.stock || b.stock;
       if (f.costo>0) b.precioUnitario = f.costo;
+      if ((Number(b.stock)||0) !== antesImp) { const d = (Number(b.stock)||0) - antesImp, cu = Number(b.precioUnitario)||0; registrarMovimientoBodega({ tipo:"Ajuste por importación", signo: d>0?1:-1, codigo:b.codigo, material:b.material, unidad:b.unidad||"", cantidad:Math.abs(d), costoUnitario:cu, total:Math.abs(d)*cu, documento:"Importación Excel", estadoInforme:"No aplica" }); }
       actualizados++;
     } else {
       const codigo = f.sku || ("MAT-G-"+String(1000+DB.bodegaGeneral.length+Math.floor(Math.random()*900)));
       DB.bodegaGeneral.push({ codigo, material: f.nombre||codigo, stock: f.stock||0, unidad:"unidad", minimo:0, precioUnitario: f.costo||0 });
+      if ((f.stock||0) > 0) registrarMovimientoBodega({ tipo:"Ingreso inicial", signo:1, codigo, material:f.nombre||codigo, unidad:"unidad", cantidad:f.stock, costoUnitario:f.costo||0, total:f.stock*(f.costo||0), documento:"Importación Excel", estadoInforme:"No aplica" });
       creados++;
     }
   });
@@ -7441,6 +7697,7 @@ function renderRespaldos() {
     </div>
     <button class="btn" onclick="descargarICSRespaldos()">📅 Agregar fechas a mi calendario</button>
   </div>
+  ${htmlTamanoDatos()}
   <div id="respaldosLista"><div class="hint">Cargando…</div></div>
   `;
 }
@@ -7597,8 +7854,8 @@ function datosReporteKPIs() {
   };
 }
 
-function exportarReporteKPIsExcel() {
-  if (typeof XLSX === "undefined") { toast("No se pudo cargar el generador de Excel. Revisa tu conexión.", "danger"); return; }
+async function exportarReporteKPIsExcel() {
+  if (!(await asegurarXLSX())) { toast("No se pudo cargar el generador de Excel. Revisa tu conexión.", "danger"); return; }
   const d = datosReporteKPIs();
   const wb = XLSX.utils.book_new();
 
@@ -7637,8 +7894,8 @@ function exportarReporteKPIsExcel() {
   toast("Reporte Excel descargado.", "ok");
 }
 
-function exportarReporteKPIsPDF() {
-  if (typeof window.jspdf === "undefined") { toast("No se pudo cargar el generador de PDF. Revisa tu conexión.", "danger"); return; }
+async function exportarReporteKPIsPDF() {
+  if (!(await asegurarPDF())) { toast("No se pudo cargar el generador de PDF. Revisa tu conexión.", "danger"); return; }
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
   const d = datosReporteKPIs();
@@ -8766,6 +9023,7 @@ function NAV_ACTUAL() {
       {id:"resumenOC", label:"Resumen de OC", icon:iconSearch()},
       {id:"panol", label:"Pañol", icon:iconPanol()},
       {id:"acuerdos", label:"Acuerdos comerciales", icon:iconBox(), roles: ROLES_COMPRAS},
+      {id:"informesAdmin", label:"Informes a Administración", icon:iconBox(), roles: ROLES_COMPRAS},
       {id:"bodegaGeneral", label:"Bodega General", icon:iconBox()},
       {id:"personal", label:"Personal", icon:iconUsers()},
     ]},
@@ -8983,7 +9241,7 @@ function renderAll() {
   const renderers = {
     dashboard: renderDashboard, miPanel: renderMiPanel, panelEquipo: renderPanelEquipo, bodegaGeneral: renderBodegaGeneral, personal: renderPersonal, proyecto360: renderProyecto360, planificacion: renderPlanificacion, compras: renderCompras,
     presupuesto: renderPresupuesto, bodega: renderBodega, reporteMateriales: renderReporteMateriales, comprasDirectas: renderComprasDirectas, punch: renderPunch, requerimientos: renderRequerimientos, galeria: renderGaleria, cuadroCarga: renderCuadroCarga,
-    recepciones: renderRecepciones, resumenOC: renderResumenOC, panol: renderPanol, acuerdos: renderAcuerdos,
+    recepciones: renderRecepciones, resumenOC: renderResumenOC, panol: renderPanol, acuerdos: renderAcuerdos, informesAdmin: renderInformesAdmin,
     fabricacion: renderFabricacion,
     reaperturas: renderReaperturas, copiloto: renderCopiloto, auditoria: renderAuditoria, actividad: renderActividad, respaldos: renderRespaldos,
   };

@@ -448,7 +448,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.1";
+const APP_VERSION = "3.2";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -494,6 +494,29 @@ const respaldosRef = database.ref('respaldos');
 const movimientosRef = database.ref('movimientosBodega');
 const informesAdminRef = database.ref('informesAdministracion');
 const contadoresRef = database.ref('contadores');
+/* Espejo de seguridad de los convenios: copia propia, fuera del bloque
+   'state'. Si una versión antigua de la app (pestaña/teléfono sin
+   recargar) pisa 'state' sin conocer 'acuerdos', la app lo recupera de aquí. */
+const acuerdosEspejoRef = database.ref('acuerdosEspejo');
+let _versionObsoleta = false;
+function versionMayor(a, b) { // ¿a es más nueva que b? ("3.10" > "3.9")
+  const pa = String(a||"0").split('.').map(Number), pb = String(b||"0").split('.').map(Number);
+  for (let i=0;i<Math.max(pa.length,pb.length);i++){ const x=pa[i]||0,y=pb[i]||0; if(x!==y) return x>y; }
+  return false;
+}
+function revisarVersionRemota(data) {
+  if (data && data.versionApp && versionMayor(data.versionApp, APP_VERSION)) {
+    if (!_versionObsoleta) {
+      _versionObsoleta = true;
+      const b = document.createElement('div');
+      b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#b91c1c;color:#fff;padding:12px;text-align:center;font-weight:600';
+      b.innerHTML = 'Hay una versión más nueva de la app (' + data.versionApp + '). Esta pestaña tiene la ' + APP_VERSION + ' y NO guardará cambios para proteger los datos. <button onclick="location.reload(true)" style="margin-left:10px;padding:4px 12px;font-weight:700">Actualizar ahora</button>';
+      document.body.appendChild(b);
+    }
+    return true;
+  }
+  return false;
+}
 const storage = firebase.storage();
 /* Notificaciones push (FCM) — cada persona que activa notificaciones
    queda con su "token" guardado acá, asociado a su correo. Es lo que
@@ -1096,11 +1119,13 @@ function construirPayloadEstado() {
     bodegaGeneral: DB.bodegaGeneral,
     solicitudesPanol: DB.solicitudesPanol,
     acuerdos: DB.acuerdos || [],
+    versionApp: APP_VERSION,
     updatedAt: new Date().toISOString(),
   };
 }
 
 async function guardarEstado(nota) {
+  if (_versionObsoleta) { toast("Esta pestaña tiene una versión antigua: actualiza la página antes de guardar.", "danger"); return; }
   if (_guardando) { _guardarPendiente = true; return; }
   _guardando = true;
   DB.syncStatus = "guardando";
@@ -1112,7 +1137,10 @@ async function guardarEstado(nota) {
 
 
   try {
-    await stateRef.set(payload);
+    // update() en vez de set(): solo toca las claves que esta versión conoce,
+    // así nunca borra datos que haya agregado una versión más nueva.
+    await stateRef.update(payload);
+    if ((DB.acuerdos||[]).length) acuerdosEspejoRef.set(DB.acuerdos).catch(function(){});
     DB.updatedAt = payload.updatedAt;
     DB.syncStatus = "ok";
     toast(nota ? `Guardado: ${nota}` : "Cambios guardados en la nube.", "ok");
@@ -1129,6 +1157,19 @@ async function guardarEstado(nota) {
   }
 }
 
+async function recuperarAcuerdosDesdeEspejo(data) {
+  try {
+    if (data && data.acuerdos && data.acuerdos.length) return;
+    const snap = await acuerdosEspejoRef.once('value');
+    const esp = snap.val();
+    if (esp && (Array.isArray(esp) ? esp.length : Object.keys(esp).length)) {
+      aplicarEstadoRemoto(Object.assign({}, data, { acuerdos: Array.isArray(esp) ? esp : Object.values(esp) }));
+      toast("Se recuperó el convenio desde la copia de seguridad.", "ok");
+      guardarEstado("Convenio recuperado");
+    }
+  } catch (e) { console.warn("Espejo de acuerdos no disponible:", e.message); }
+}
+
 async function cargarEstadoInicial() {
   DB.syncStatus = "cargando";
   actualizarIndicadorSync();
@@ -1137,7 +1178,9 @@ async function cargarEstadoInicial() {
     const snapshot = await stateRef.once('value');
     const data = snapshot.val();
     if (data) {
+      revisarVersionRemota(data);
       aplicarEstadoRemoto(data);
+      await recuperarAcuerdosDesdeEspejo(data);
       DB.syncStatus = "ok";
     } else {
       DB.historial = [];
@@ -1170,6 +1213,7 @@ async function cargarEstadoInicial() {
   if (DB.syncStatus !== "error") {
     stateRef.on('value', (snapshot) => {
       const data = snapshot.val();
+      revisarVersionRemota(data);
       if (data && data.updatedAt && data.updatedAt !== DB.updatedAt) {
         // Antes esto se descartaba entero si había un modal abierto — el
         // dato se perdía para siempre (nunca se reintentaba), y por eso

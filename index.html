@@ -448,7 +448,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.3";
+const APP_VERSION = "3.3.1";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -684,8 +684,35 @@ function avanceHasta(hasta, extra) {
   return o;
 }
 
+/* Convierte cualquier fecha razonable a AAAA-MM-DD; si no se puede, devuelve "". */
+function fechaISOSegura(f) {
+  if (!f) return "";
+  f = String(f).trim();
+  let m = f.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (!m) { const n = f.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2}|\d{4})$/); if (n) m = [null, n[3].length === 2 ? "20" + n[3] : n[3], n[2], n[1]]; }
+  if (!m) return "";
+  const y = +m[1], mo = +m[2], d = +m[3];
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return "";
+  return y + "-" + String(mo).padStart(2,"0") + "-" + String(d).padStart(2,"0");
+}
+/* Deja la planificación en forma segura: Firebase puede devolver objetos en
+   vez de arrays, y una sola tarea con fecha rara o sin nombre hacía que
+   toda la hoja del Gantt quedara en blanco. */
+function normalizarPlanificacion(lista) {
+  if (!lista) return [];
+  const arr = Array.isArray(lista) ? lista : Object.values(lista);
+  return arr.filter(t => t && typeof t === "object").map((t, i) => {
+    t.id = (t.id === undefined || t.id === null) ? i + 1 : t.id;
+    t.nombre = String(t.nombre || "(sin nombre)");
+    t.inicio = fechaISOSegura(t.inicio) || fechaISOSegura(t.fin) || hoyISO();
+    t.fin = fechaISOSegura(t.fin) || t.inicio;
+    t.avance = Math.max(0, Math.min(100, Number(t.avance) || 0));
+    t.predecesores = (Array.isArray(t.predecesores) ? t.predecesores : Object.values(t.predecesores || {})).filter(x => x && x.ref !== undefined);
+    return t;
+  });
+}
 function migrarProyecto(p) {
-  if(!p.planificacion) p.planificacion = [];
+  p.planificacion = normalizarPlanificacion(p.planificacion);
   if(!p.iaRiesgos) p.iaRiesgos = [];
   if(!p.reportesGerenciales) p.reportesGerenciales = [];
   if(!p.reaperturas) p.reaperturas = [];
@@ -9049,6 +9076,7 @@ function importarPegadoGantt(pid, texto) {
     delete n.predecesoresTexto;
   });
   p.planificacion.push(...nuevas);
+  p.planificacion = normalizarPlanificacion(p.planificacion);
   registrarHistorial({proyecto:p.codigo, accion:"Crear", detalle:`Importadas ${nuevas.length} tarea(s) de planificación`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"});
   guardarEstado();
   toast(`${nuevas.length} tarea(s) importada(s).`, "ok");
@@ -9677,7 +9705,15 @@ function renderAll() {
     reaperturas: renderReaperturas, copiloto: renderCopiloto, auditoria: renderAuditoria, actividad: renderActividad, respaldos: renderRespaldos,
   };
   const target = document.getElementById("page-"+currentPage);
-  if (target && renderers[currentPage]) target.innerHTML = renderers[currentPage]();
+  if (target && renderers[currentPage]) {
+    try { target.innerHTML = renderers[currentPage](); }
+    catch (err) {
+      console.error("Error al dibujar la página " + currentPage, err);
+      target.innerHTML = `<div class="card" style="border-color:var(--danger)"><h3>No se pudo dibujar esta página</h3>
+        <p class="hint">Es un error del programa, no de tus datos. Envíame esta línea para corregirlo:</p>
+        <pre style="white-space:pre-wrap; font-size:12px; user-select:all;">V${APP_VERSION} · ${escaparHtml(currentPage)} · ${escaparHtml(String(err && err.message))}\n${escaparHtml(String(err && err.stack || "").split("\n").slice(1,3).join("\n"))}</pre></div>`;
+    }
+  }
   if (currentPage === "requerimientos") {
     const box = document.getElementById("reqMessagesBox");
     if (box) box.scrollTop = box.scrollHeight;

@@ -448,7 +448,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.2";
+const APP_VERSION = "3.3";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -9055,6 +9055,392 @@ function importarPegadoGantt(pid, texto) {
   return true;
 }
 
+/* =====================================================================
+   PROTOCOLOS FAT / SAT — expediente por proyecto
+   Datos en su PROPIO nodo (/protocolos), fuera del bloque principal:
+     instrumentos/{id}  equipos de medición (tipo, serie, calibración, certificado)
+     pruebas/{id}       catálogo de pruebas (fase, instrumento exigido, a qué cargas aplica)
+     config/{pid}       perfil del proyecto (cargas) + pruebas agregadas/quitadas a mano
+     registros/{pid}/{FAT|SAT}/{pruebaId}   resultado + respaldos PDF/foto
+   Regla central: una prueba que exige un instrumento que NO está disponible
+   (no existe, está marcado fuera de servicio o con calibración vencida) queda
+   "No aplica — sin <instrumento>" y NO lleva respaldo.
+   Agregar pruebas/instrumentos y definir el perfil: jefaturas y supervisores.
+   Rellenar resultados y subir respaldos: todos.
+   ===================================================================== */
+const protocolosRef = database.ref('protocolos');
+let PROT = { instrumentos:{}, pruebas:{}, config:{}, registros:{} };
+let _protEscuchando = false;
+let protProyecto = "";
+let protFase = "FAT";
+let protVista = "expediente";
+const ROLES_GESTION_PROTOCOLOS = ["Administrador","Gerencia","Jefe de Servicios Eléctricos","Jefe de Proyecto","Jefe de Automatización","Jefe de Taller","Líder de Terreno","Jefe de Producción"];
+function puedeGestionarProtocolos() { return esAdministrador() || ROLES_GESTION_PROTOCOLOS.includes(DB.role); }
+const PROT_CARGAS = ["Motores","Variadores / arrancadores","Iluminación y fuerza","Control / PLC","Calefacción / resistencias","Transporte (monorriel / correas)","Tablero / MCC"];
+const PROT_TIPOS_INSTRUMENTO = ["Megger (aislación)","Telurómetro","Multímetro","Pinza amperimétrica","Analizador de redes","Cámara termográfica","Otro"];
+const PROT_SEED_PRUEBAS = [
+  {nombre:"Inspección visual y verificación de planos", fase:"ambas", requiere:"", cargas:[]},
+  {nombre:"Prueba de aislación (megger)", fase:"ambas", requiere:"Megger (aislación)", cargas:["Motores","Tablero / MCC","Iluminación y fuerza","Calefacción / resistencias"]},
+  {nombre:"Continuidad y resistencia de puesta a tierra", fase:"ambas", requiere:"Telurómetro", cargas:[]},
+  {nombre:"Verificación de tensiones y secuencia de fases", fase:"ambas", requiere:"Multímetro", cargas:[]},
+  {nombre:"Medición de corrientes en carga", fase:"SAT", requiere:"Pinza amperimétrica", cargas:["Motores","Variadores / arrancadores","Calefacción / resistencias"]},
+  {nombre:"Análisis de calidad de energía", fase:"SAT", requiere:"Analizador de redes", cargas:["Variadores / arrancadores","Tablero / MCC"]},
+  {nombre:"Termografía de conexiones", fase:"SAT", requiere:"Cámara termográfica", cargas:["Tablero / MCC","Motores"]},
+  {nombre:"Prueba funcional de lógica y enclavamientos", fase:"ambas", requiere:"", cargas:["Control / PLC"]},
+  {nombre:"Prueba de parada de emergencia y seguridades", fase:"ambas", requiere:"", cargas:[]},
+  {nombre:"Sentido de giro y arranque de motores", fase:"ambas", requiere:"", cargas:["Motores","Variadores / arrancadores","Transporte (monorriel / correas)"]},
+];
+function protId(s) { return String(s||"").replace(/[.$#\[\]\/]/g, "_"); }
+function protEscuchar() {
+  if (_protEscuchando) return;
+  _protEscuchando = true;
+  protocolosRef.on('value', function(snap){
+    const v = snap.val() || {};
+    PROT = { instrumentos: v.instrumentos||{}, pruebas: v.pruebas||{}, config: v.config||{}, registros: v.registros||{} };
+    if (currentPage === "protocolos" && !modalAbierto) renderAll();
+  }, function(err){
+    _protEscuchando = false;
+    toast("No se pudo leer Protocolos: " + err.message + " (revisa las reglas de Firebase).", "danger");
+  });
+}
+function instrumentoVencido(i) { return !!(i.calibVence && i.calibVence < hoyISO()); }
+function instrumentoOperativo(i) { return i.disponible !== false && !instrumentoVencido(i); }
+function instrumentoDisponible(tipo) {
+  if (!tipo) return { ok:true, motivo:"" };
+  const lista = Object.values(PROT.instrumentos).filter(i => i.tipo === tipo);
+  if (!lista.length) return { ok:false, motivo:"sin " + tipo };
+  if (lista.some(instrumentoOperativo)) return { ok:true, motivo:"" };
+  return { ok:false, motivo: lista.some(instrumentoVencido) ? tipo + " con calibración vencida" : tipo + " fuera de servicio" };
+}
+function protPruebasDeProyecto(pid, fase) {
+  const cfg = PROT.config[protId(pid)] || {};
+  const cargas = cfg.cargas ? Object.values(cfg.cargas) : [];
+  const agregadas = cfg.agregadas ? Object.values(cfg.agregadas) : [];
+  const quitadas = cfg.quitadas ? Object.values(cfg.quitadas) : [];
+  return Object.entries(PROT.pruebas).map(([id, t]) => Object.assign({id}, t)).filter(t => {
+    if (t.fase !== "ambas" && t.fase !== fase) return false;
+    if (quitadas.includes(t.id)) return false;
+    if (agregadas.includes(t.id)) return true;
+    const tc = t.cargas ? Object.values(t.cargas) : [];
+    return !tc.length || tc.some(c => cargas.includes(c));
+  }).sort((a,b) => a.nombre.localeCompare(b.nombre));
+}
+function protRegistro(pid, fase, pruebaId) {
+  const r = ((PROT.registros[protId(pid)]||{})[fase]||{})[pruebaId];
+  if (r && r.archivos && !Array.isArray(r.archivos)) r.archivos = Object.values(r.archivos);
+  return r || null;
+}
+function protEstadoFila(pid, fase, t) {
+  const disp = instrumentoDisponible(t.requiere);
+  if (!disp.ok) return { clave:"na", texto:"No aplica — " + disp.motivo, reg:null };
+  const r = protRegistro(pid, fase, t.id);
+  if (!r || !r.estado) return { clave:"pend", texto:"Pendiente", reg:r };
+  return { clave: r.estado, texto: r.estado === "ok" ? "Aprobada" : "Con observaciones", reg:r };
+}
+function protResumen(pid, fase) {
+  const filas = protPruebasDeProyecto(pid, fase).map(t => ({t, e: protEstadoFila(pid, fase, t)}));
+  const c = { total:filas.length, ok:0, obs:0, pend:0, na:0 };
+  filas.forEach(f => { c[f.e.clave === "ok" ? "ok" : f.e.clave === "obs" ? "obs" : f.e.clave === "na" ? "na" : "pend"]++; });
+  return { filas, c };
+}
+
+function renderProtocolos() {
+  protEscuchar();
+  const gest = puedeGestionarProtocolos();
+  if (!protProyecto || !proy(protProyecto)) protProyecto = DB.proyectoActivo || (DB.proyectos[0] && DB.proyectos[0].id) || "";
+  const tab = (id, txt) => `<button class="btn btn-sm ${protVista===id?'btn-primary':''}" onclick="protVista='${id}'; renderAll()">${txt}</button>`;
+  let cuerpo = "";
+  if (protVista === "instrumentos") cuerpo = protHtmlInstrumentos(gest);
+  else if (protVista === "pruebas") cuerpo = protHtmlPruebas(gest);
+  else cuerpo = protHtmlExpediente(gest);
+  return `
+  <div class="page-head">
+    <div>
+      <h1>Protocolos FAT / SAT</h1>
+      <div class="page-desc">Expediente de pruebas por proyecto. Una prueba solo se realiza —y solo lleva respaldo— si el instrumento que exige está disponible y con calibración vigente. Agregan pruebas e instrumentos jefaturas y supervisores; rellenan resultados todos.</div>
+    </div>
+  </div>
+  <div class="flex-gap" style="margin-bottom:12px; flex-wrap:wrap;">
+    ${tab('expediente','📁 Expediente')} ${tab('pruebas','🧪 Catálogo de pruebas')} ${tab('instrumentos','🔧 Instrumentos')}
+  </div>
+  ${cuerpo}`;
+}
+
+function protHtmlExpediente(gest) {
+  if (!DB.proyectos.length) return `<div class="card hint">No hay proyectos.</div>`;
+  if (!Object.keys(PROT.pruebas).length) {
+    return `<div class="card"><div class="hint" style="margin-bottom:10px;">Aún no hay catálogo de pruebas.</div>
+      ${gest ? `<button class="btn btn-primary" onclick="protCargarCatalogoInicial()">Cargar catálogo inicial (10 pruebas típicas)</button>` : `<div class="hint">Pide a una jefatura o supervisor que cargue el catálogo.</div>`}</div>`;
+  }
+  const p = proy(protProyecto);
+  const cfg = PROT.config[protId(protProyecto)] || {};
+  const cargas = cfg.cargas ? Object.values(cfg.cargas) : [];
+  const { filas, c } = protResumen(protProyecto, protFase);
+  const color = { ok:"#2e7d32", obs:"#b26a00", pend:"#666", na:"#999" };
+  const insignia = (e) => `<span style="font-weight:700; color:${color[e.clave]}">${e.clave==='ok'?'✔ ':e.clave==='obs'?'⚠ ':e.clave==='na'?'— ':'○ '}${escaparHtml(e.texto)}</span>`;
+  return `
+  <div class="card" style="margin-bottom:12px;">
+    <div class="flex-gap" style="flex-wrap:wrap; align-items:end;">
+      <div><label class="field-label">Proyecto</label>
+        <select onchange="protProyecto=this.value; renderAll()">${DB.proyectos.map(x => `<option value="${x.id}" ${x.id===protProyecto?'selected':''}>${escaparHtml(x.codigo||'')} — ${escaparHtml(x.nombre||'')}</option>`).join('')}</select></div>
+      <div><label class="field-label">Fase</label>
+        <select onchange="protFase=this.value; renderAll()"><option value="FAT" ${protFase==='FAT'?'selected':''}>FAT (en taller)</option><option value="SAT" ${protFase==='SAT'?'selected':''}>SAT (en sitio)</option></select></div>
+      <button class="btn" onclick="protImprimir()">🖨 Imprimir</button>
+      <button class="btn" onclick="protPdf()">📄 PDF del expediente</button>
+    </div>
+    <div style="margin-top:10px;"><label class="field-label">Perfil de carga del proyecto ${gest?'':'(solo jefaturas/supervisores lo editan)'}</label>
+      <div class="flex-gap" style="flex-wrap:wrap;">${PROT_CARGAS.map(cg => `<label style="display:flex; gap:5px; align-items:center; padding:5px 10px; border:1px solid var(--line); border-radius:16px;"><input type="checkbox" ${cargas.includes(cg)?'checked':''} ${gest?'':'disabled'} onchange="protToggleCarga(${JSON.stringify(cg).replace(/"/g,'&quot;')}, this.checked)"> ${cg}</label>`).join('')}</div>
+      <div class="hint" style="margin-top:4px;">Las pruebas se proponen según estas cargas. Sin ninguna marcada se muestran solo las pruebas generales.</div></div>
+  </div>
+  <div class="card" style="margin-bottom:12px;">
+    <b>${escaparHtml(p.codigo||'')} · ${protFase}</b> — ${c.total} pruebas: <span style="color:${color.ok}">${c.ok} aprobadas</span> · <span style="color:${color.obs}">${c.obs} con observaciones</span> · ${c.pend} pendientes · <span style="color:${color.na}">${c.na} no aplican</span>
+  </div>
+  <div class="card" style="padding:0; overflow:auto;"><table class="tbl" style="width:100%;">
+    <thead><tr><th>Prueba</th><th>Instrumento</th><th>Estado</th><th>Fecha / por</th><th>Respaldos</th><th></th></tr></thead>
+    <tbody>${filas.map(({t,e}) => {
+      const r = e.reg, arch = r && r.archivos ? r.archivos : [];
+      return `<tr style="${e.clave==='na'?'opacity:.6':''}">
+        <td><b>${escaparHtml(t.nombre)}</b></td>
+        <td>${escaparHtml(t.requiere||'—')}</td>
+        <td>${insignia(e)}</td>
+        <td>${r && r.fecha ? escaparHtml(r.fecha)+'<br><span class="hint">'+escaparHtml(r.por||'')+'</span>' : '—'}</td>
+        <td>${e.clave==='na' ? '<span class="hint">sin respaldo</span>' : arch.map(a => `<a href="${escaparHtml(a.url)}" target="_blank" rel="noopener">📎 ${escaparHtml(a.nombre)}</a>`).join('<br>') || '—'}</td>
+        <td>${e.clave==='na' ? '' : `<button class="btn btn-sm" onclick="protModalRegistro('${t.id}')">${r&&r.estado?'Ver / editar':'Registrar'}</button>`}</td>
+      </tr>`; }).join('') || `<tr><td colspan="6" class="hint">Ninguna prueba aplica a este perfil.</td></tr>`}</tbody>
+  </table></div>
+  ${gest ? protHtmlAjustesProyecto() : ''}`;
+}
+function protHtmlAjustesProyecto() {
+  const cfg = PROT.config[protId(protProyecto)] || {};
+  const agregadas = cfg.agregadas ? Object.values(cfg.agregadas) : [], quitadas = cfg.quitadas ? Object.values(cfg.quitadas) : [];
+  const activas = protPruebasDeProyecto(protProyecto, protFase).map(t => t.id);
+  const fuera = Object.entries(PROT.pruebas).map(([id,t]) => Object.assign({id},t)).filter(t => (t.fase==='ambas'||t.fase===protFase) && !activas.includes(t.id));
+  return `<div class="card" style="margin-top:12px;"><b>Ajustes de este proyecto</b>
+    <div class="hint" style="margin:4px 0 8px;">Agrega una prueba que el perfil no incluyó, o quita una que no corresponde.</div>
+    <div class="flex-gap" style="flex-wrap:wrap;">
+      ${fuera.map(t => `<button class="btn btn-sm" onclick="protAjustar('${t.id}','agregar')">➕ ${escaparHtml(t.nombre)}</button>`).join('') || '<span class="hint">No hay pruebas fuera de la lista.</span>'}
+    </div>
+    <div class="flex-gap" style="flex-wrap:wrap; margin-top:8px;">
+      ${protPruebasDeProyecto(protProyecto, protFase).map(t => `<button class="btn btn-sm" onclick="protAjustar('${t.id}','quitar')">✖ Quitar ${escaparHtml(t.nombre)}</button>`).join('')}
+    </div></div>`;
+}
+async function protToggleCarga(carga, on) {
+  const k = protId(protProyecto);
+  const actual = (PROT.config[k] && PROT.config[k].cargas) ? Object.values(PROT.config[k].cargas) : [];
+  const nuevo = on ? Array.from(new Set(actual.concat(carga))) : actual.filter(x => x !== carga);
+  try { await protocolosRef.child('config').child(k).child('cargas').set(nuevo.length ? nuevo : null); }
+  catch (e) { toast("No se pudo guardar: " + e.message, "danger"); }
+}
+async function protAjustar(pruebaId, modo) {
+  if (!puedeGestionarProtocolos()) { toast("Solo jefaturas y supervisores ajustan las pruebas del proyecto.", "danger"); return; }
+  const k = protId(protProyecto);
+  const cfg = PROT.config[k] || {};
+  let ag = cfg.agregadas ? Object.values(cfg.agregadas) : [], qu = cfg.quitadas ? Object.values(cfg.quitadas) : [];
+  if (modo === "agregar") { qu = qu.filter(x => x !== pruebaId); if (!ag.includes(pruebaId)) ag.push(pruebaId); }
+  else { ag = ag.filter(x => x !== pruebaId); if (!qu.includes(pruebaId)) qu.push(pruebaId); }
+  try {
+    await protocolosRef.child('config').child(k).child('agregadas').set(ag.length ? ag : null);
+    await protocolosRef.child('config').child(k).child('quitadas').set(qu.length ? qu : null);
+  } catch (e) { toast("No se pudo guardar: " + e.message, "danger"); }
+}
+async function protCargarCatalogoInicial() {
+  if (!puedeGestionarProtocolos()) return;
+  try {
+    for (const t of PROT_SEED_PRUEBAS) {
+      const ref = protocolosRef.child('pruebas').push();
+      await ref.set({ nombre:t.nombre, fase:t.fase, requiere:t.requiere, cargas:t.cargas.length ? t.cargas : null });
+    }
+    toast("Catálogo inicial cargado.", "ok");
+  } catch (e) { toast("No se pudo cargar: " + e.message, "danger"); }
+}
+
+/* ---- Registro de una prueba (todos) ---- */
+function protModalRegistro(pruebaId) {
+  const t = PROT.pruebas[pruebaId]; if (!t) return;
+  const r = protRegistro(protProyecto, protFase, pruebaId) || {};
+  const arch = r.archivos || [];
+  openModal(`
+    <div class="modal-head"><h3>${escaparHtml(t.nombre)} · ${protFase}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="hint" style="margin-bottom:8px;">Instrumento: ${escaparHtml(t.requiere||'ninguno')}</div>
+      <label class="field-label">Resultado *</label>
+      <select id="protEstado"><option value="">— Pendiente —</option><option value="ok" ${r.estado==='ok'?'selected':''}>Aprobada</option><option value="obs" ${r.estado==='obs'?'selected':''}>Con observaciones</option></select>
+      <label class="field-label">Fecha</label>
+      <input type="date" id="protFecha" value="${r.fecha||hoyISO()}">
+      <label class="field-label">Valores medidos / observaciones</label>
+      <textarea id="protObs" rows="4" style="width:100%;">${escaparHtml(r.obs||'')}</textarea>
+      <label class="field-label">Respaldos (PDF o foto) — puedes elegir varios</label>
+      <input type="file" id="protArchivos" accept=".pdf,.jpg,.jpeg,.png" multiple>
+      ${arch.length ? `<div class="hint" style="margin-top:6px;">Ya adjuntos:<br>${arch.map((a,i) => `📎 <a href="${escaparHtml(a.url)}" target="_blank" rel="noopener">${escaparHtml(a.nombre)}</a> <a href="#" onclick="protQuitarArchivo('${pruebaId}',${i}); return false;">quitar</a>`).join('<br>')}</div>` : ''}
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" id="protGuardarBtn" onclick="protGuardarRegistro('${pruebaId}')">Guardar</button></div>
+  `);
+}
+async function protGuardarRegistro(pruebaId) {
+  const t = PROT.pruebas[pruebaId]; if (!t) return;
+  if (!instrumentoDisponible(t.requiere).ok) { toast("El instrumento no está disponible: esta prueba no aplica.", "danger"); return; }
+  const estado = document.getElementById("protEstado").value;
+  const fecha = document.getElementById("protFecha").value;
+  const obs = document.getElementById("protObs").value.trim();
+  const files = Array.from(document.getElementById("protArchivos").files || []);
+  const btn = document.getElementById("protGuardarBtn"); btn.disabled = true; btn.textContent = "Guardando…";
+  try {
+    const prev = protRegistro(protProyecto, protFase, pruebaId) || {};
+    const archivos = (prev.archivos || []).slice();
+    const p = proy(protProyecto);
+    for (const f of files) {
+      const ruta = ["protocolos", sanitizarSegmentoRuta(p.codigo||p.id), protFase, sanitizarSegmentoRuta(t.nombre)].join("/") + "/" + Date.now() + "_" + sanitizarSegmentoRuta(f.name);
+      const ref = storage.ref(ruta);
+      await ref.put(f, { contentType: f.type || "application/octet-stream" });
+      archivos.push({ nombre: f.name, url: await ref.getDownloadURL(), subidoPor: DB.usuario||"", fecha: hoyISO() });
+    }
+    await protocolosRef.child('registros').child(protId(protProyecto)).child(protFase).child(pruebaId).set({
+      estado: estado || null, fecha: fecha || null, obs: obs || null, por: DB.usuario || "", archivos: archivos.length ? archivos : null, actualizado: new Date().toISOString(),
+    });
+    closeModal(); toast("Prueba registrada.", "ok");
+  } catch (e) { btn.disabled = false; btn.textContent = "Guardar"; toast("No se pudo guardar: " + e.message, "danger"); }
+}
+async function protQuitarArchivo(pruebaId, idx) {
+  const r = protRegistro(protProyecto, protFase, pruebaId); if (!r || !r.archivos) return;
+  const arch = r.archivos.filter((_, i) => i !== idx);
+  try {
+    await protocolosRef.child('registros').child(protId(protProyecto)).child(protFase).child(pruebaId).child('archivos').set(arch.length ? arch : null);
+    closeModal(); toast("Respaldo quitado de la lista.", "ok");
+  } catch (e) { toast("No se pudo quitar: " + e.message, "danger"); }
+}
+
+/* ---- Catálogo de pruebas ---- */
+function protHtmlPruebas(gest) {
+  const lista = Object.entries(PROT.pruebas).map(([id,t]) => Object.assign({id},t)).sort((a,b) => a.nombre.localeCompare(b.nombre));
+  return `<div class="card" style="margin-bottom:10px;">${gest ? `<button class="btn btn-primary" onclick="protModalPrueba('')">➕ Nueva prueba</button>` : '<span class="hint">Solo jefaturas y supervisores agregan o editan pruebas.</span>'}</div>
+  <div class="card" style="padding:0; overflow:auto;"><table class="tbl" style="width:100%;"><thead><tr><th>Prueba</th><th>Fase</th><th>Instrumento exigido</th><th>Aplica a cargas</th><th></th></tr></thead><tbody>
+  ${lista.map(t => `<tr><td><b>${escaparHtml(t.nombre)}</b></td><td>${t.fase==='ambas'?'FAT y SAT':t.fase}</td><td>${escaparHtml(t.requiere||'—')}</td><td>${t.cargas ? escaparHtml(Object.values(t.cargas).join(', ')) : 'Todas'}</td><td>${gest?`<button class="btn btn-sm" onclick="protModalPrueba('${t.id}')">Editar</button>`:''}</td></tr>`).join('') || '<tr><td colspan="5" class="hint">Sin pruebas.</td></tr>'}
+  </tbody></table></div>`;
+}
+function protModalPrueba(id) {
+  if (!puedeGestionarProtocolos()) return;
+  const t = id ? PROT.pruebas[id] : {nombre:"",fase:"ambas",requiere:"",cargas:null};
+  const cs = t.cargas ? Object.values(t.cargas) : [];
+  openModal(`
+    <div class="modal-head"><h3>${id?'Editar':'Nueva'} prueba</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <label class="field-label">Nombre *</label><input id="ptNombre" value="${escaparHtml(t.nombre)}" style="width:100%;">
+      <label class="field-label">Fase</label><select id="ptFase"><option value="ambas" ${t.fase==='ambas'?'selected':''}>FAT y SAT</option><option value="FAT" ${t.fase==='FAT'?'selected':''}>Solo FAT</option><option value="SAT" ${t.fase==='SAT'?'selected':''}>Solo SAT</option></select>
+      <label class="field-label">Instrumento que exige</label>
+      <select id="ptReq"><option value="">Ninguno</option>${PROT_TIPOS_INSTRUMENTO.map(x => `<option ${t.requiere===x?'selected':''}>${x}</option>`).join('')}</select>
+      <label class="field-label">Aplica a estas cargas (ninguna marcada = a todos los proyectos)</label>
+      <div class="flex-gap" style="flex-wrap:wrap;">${PROT_CARGAS.map((c,i) => `<label style="display:flex; gap:5px; padding:4px 9px; border:1px solid var(--line); border-radius:14px;"><input type="checkbox" class="ptCarga" value="${i}" ${cs.includes(c)?'checked':''}> ${c}</label>`).join('')}</div>
+    </div>
+    <div class="modal-foot">${id?`<button class="btn" onclick="protEliminarPrueba('${id}')">Eliminar</button>`:''}<button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="protGuardarPrueba('${id}')">Guardar</button></div>`);
+}
+async function protGuardarPrueba(id) {
+  const nombre = document.getElementById("ptNombre").value.trim();
+  if (!nombre) { toast("Escribe el nombre de la prueba.", "danger"); return; }
+  const cargas = Array.from(document.querySelectorAll(".ptCarga:checked")).map(x => PROT_CARGAS[Number(x.value)]);
+  const data = { nombre, fase: document.getElementById("ptFase").value, requiere: document.getElementById("ptReq").value, cargas: cargas.length ? cargas : null };
+  try { await (id ? protocolosRef.child('pruebas').child(id).set(data) : protocolosRef.child('pruebas').push().set(data)); closeModal(); toast("Prueba guardada.", "ok"); }
+  catch (e) { toast("No se pudo guardar: " + e.message, "danger"); }
+}
+async function protEliminarPrueba(id) {
+  if (!confirm("¿Eliminar esta prueba del catálogo? Los resultados ya registrados quedan guardados pero dejan de mostrarse.")) return;
+  try { await protocolosRef.child('pruebas').child(id).remove(); closeModal(); } catch (e) { toast("No se pudo eliminar: " + e.message, "danger"); }
+}
+
+/* ---- Instrumentos ---- */
+function protHtmlInstrumentos(gest) {
+  const lista = Object.entries(PROT.instrumentos).map(([id,i]) => Object.assign({id},i)).sort((a,b) => (a.tipo||"").localeCompare(b.tipo||""));
+  return `<div class="card" style="margin-bottom:10px;">${gest ? `<button class="btn btn-primary" onclick="protModalInstrumento('')">➕ Nuevo instrumento</button>` : '<span class="hint">Solo jefaturas y supervisores agregan o editan instrumentos.</span>'}</div>
+  <div class="card" style="padding:0; overflow:auto;"><table class="tbl" style="width:100%;"><thead><tr><th>Tipo</th><th>Equipo / serie</th><th>Calibración vence</th><th>Estado</th><th>Certificado</th><th></th></tr></thead><tbody>
+  ${lista.map(i => { const op = instrumentoOperativo(i); return `<tr><td><b>${escaparHtml(i.tipo||'')}</b></td><td>${escaparHtml(i.nombre||'')} ${i.serie?'<br><span class="hint">S/N '+escaparHtml(i.serie)+'</span>':''}</td><td>${escaparHtml(i.calibVence||'—')}</td>
+    <td style="font-weight:700; color:${op?'#2e7d32':'#b3261e'}">${op?'Disponible':(instrumentoVencido(i)?'Calibración vencida':'Fuera de servicio')}</td>
+    <td>${i.certUrl?`<a href="${escaparHtml(i.certUrl)}" target="_blank" rel="noopener">📎 ver</a>`:'—'}</td><td>${gest?`<button class="btn btn-sm" onclick="protModalInstrumento('${i.id}')">Editar</button>`:''}</td></tr>`; }).join('') || '<tr><td colspan="6" class="hint">Sin instrumentos: todas las pruebas que exigen instrumento quedan como "No aplica".</td></tr>'}
+  </tbody></table></div>`;
+}
+function protModalInstrumento(id) {
+  if (!puedeGestionarProtocolos()) return;
+  const i = id ? PROT.instrumentos[id] : {tipo:"",nombre:"",serie:"",calibVence:"",disponible:true,certUrl:""};
+  openModal(`
+    <div class="modal-head"><h3>${id?'Editar':'Nuevo'} instrumento</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <label class="field-label">Tipo *</label><select id="piTipo">${PROT_TIPOS_INSTRUMENTO.map(x => `<option ${i.tipo===x?'selected':''}>${x}</option>`).join('')}</select>
+      <label class="field-label">Marca / modelo</label><input id="piNombre" value="${escaparHtml(i.nombre||'')}" style="width:100%;">
+      <label class="field-label">N° de serie</label><input id="piSerie" value="${escaparHtml(i.serie||'')}" style="width:100%;">
+      <label class="field-label">Calibración vigente hasta</label><input type="date" id="piVence" value="${i.calibVence||''}">
+      <label style="display:flex; gap:6px; margin-top:8px;"><input type="checkbox" id="piDisp" ${i.disponible!==false?'checked':''}> Disponible (desmarcar si está en reparación, prestado o fuera de servicio)</label>
+      <label class="field-label">Certificado de calibración (PDF)</label><input type="file" id="piCert" accept=".pdf,.jpg,.jpeg,.png">
+      ${i.certUrl?`<div class="hint">Ya hay certificado: <a href="${escaparHtml(i.certUrl)}" target="_blank" rel="noopener">verlo</a>. Elige otro solo para reemplazarlo.</div>`:''}
+    </div>
+    <div class="modal-foot">${id?`<button class="btn" onclick="protEliminarInstrumento('${id}')">Eliminar</button>`:''}<button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" id="piGuardarBtn" onclick="protGuardarInstrumento('${id}')">Guardar</button></div>`);
+}
+async function protGuardarInstrumento(id) {
+  const btn = document.getElementById("piGuardarBtn"); btn.disabled = true;
+  try {
+    const prev = id ? PROT.instrumentos[id] : {};
+    const data = { tipo: document.getElementById("piTipo").value, nombre: document.getElementById("piNombre").value.trim(), serie: document.getElementById("piSerie").value.trim(),
+      calibVence: document.getElementById("piVence").value || "", disponible: document.getElementById("piDisp").checked, certUrl: prev.certUrl || "" };
+    const f = document.getElementById("piCert").files[0];
+    if (f) { const ref = storage.ref("protocolos/instrumentos/" + Date.now() + "_" + sanitizarSegmentoRuta(f.name)); await ref.put(f, {contentType: f.type||"application/octet-stream"}); data.certUrl = await ref.getDownloadURL(); }
+    await (id ? protocolosRef.child('instrumentos').child(id).set(data) : protocolosRef.child('instrumentos').push().set(data));
+    closeModal(); toast("Instrumento guardado.", "ok");
+  } catch (e) { btn.disabled = false; toast("No se pudo guardar: " + e.message, "danger"); }
+}
+async function protEliminarInstrumento(id) {
+  if (!confirm("¿Eliminar este instrumento? Las pruebas que lo exigen quedarán como \"No aplica\" si no hay otro del mismo tipo.")) return;
+  try { await protocolosRef.child('instrumentos').child(id).remove(); closeModal(); } catch (e) { toast("No se pudo eliminar: " + e.message, "danger"); }
+}
+
+/* ---- Exportar: imprimir y PDF ---- */
+function protDatosExpediente() {
+  const p = proy(protProyecto);
+  const { filas, c } = protResumen(protProyecto, protFase);
+  return { p, c, filas: filas.map(({t,e}) => ({
+    prueba:t.nombre, instrumento:t.requiere||"—", estado:e.texto, fecha:e.reg&&e.reg.fecha||"", por:e.reg&&e.reg.por||"", obs:e.reg&&e.reg.obs||"",
+    archivos: e.clave==="na" ? [] : (e.reg&&e.reg.archivos||[]), na: e.clave==="na" })) };
+}
+function protImprimir() {
+  const d = protDatosExpediente();
+  const w = window.open("", "_blank");
+  if (!w) { toast("El navegador bloqueó la ventana de impresión. Permite ventanas emergentes.", "danger"); return; }
+  const inst = Object.values(PROT.instrumentos).filter(instrumentoOperativo);
+  w.document.write(`<html><head><meta charset="utf-8"><title>Expediente ${protFase} ${escaparHtml(d.p.codigo||'')}</title>
+  <style>body{font-family:Arial,sans-serif;font-size:12px;margin:18mm} h1{font-size:18px;margin:0} table{width:100%;border-collapse:collapse;margin-top:10px} th,td{border:1px solid #999;padding:5px;vertical-align:top;text-align:left} th{background:#f0e3d3} .na td{color:#777} @media print{a{color:#000;text-decoration:none}}</style></head><body>
+  <h1>ALUTIPO — Expediente ${protFase}</h1>
+  <div>Proyecto: <b>${escaparHtml(d.p.codigo||'')} ${escaparHtml(d.p.nombre||'')}</b> · Emitido ${hoyISO()} por ${escaparHtml(DB.usuario||'')}</div>
+  <div>Resumen: ${d.c.ok} aprobadas · ${d.c.obs} con observaciones · ${d.c.pend} pendientes · ${d.c.na} no aplican</div>
+  <div>Instrumentos usados/disponibles: ${inst.length ? inst.map(i => escaparHtml(i.tipo+(i.serie?' S/N '+i.serie:'')+(i.calibVence?' (calib. hasta '+i.calibVence+')':''))).join('; ') : 'ninguno'}</div>
+  <table><tr><th>Prueba</th><th>Instrumento</th><th>Estado</th><th>Fecha / por</th><th>Valores / observaciones</th><th>Respaldos</th></tr>
+  ${d.filas.map(f => `<tr class="${f.na?'na':''}"><td>${escaparHtml(f.prueba)}</td><td>${escaparHtml(f.instrumento)}</td><td>${escaparHtml(f.estado)}</td><td>${escaparHtml(f.fecha)} ${escaparHtml(f.por)}</td><td>${escaparHtml(f.obs)}</td><td>${f.archivos.map(a => `<a href="${escaparHtml(a.url)}">${escaparHtml(a.nombre)}</a>`).join('<br>')}</td></tr>`).join('')}
+  </table><p style="margin-top:30px">Firma responsable: ______________________ &nbsp;&nbsp; Firma cliente: ______________________</p>
+  <script>window.onload=function(){window.print();}<\/script></body></html>`);
+  w.document.close();
+}
+async function protPdf() {
+  if (!(await asegurarPDF())) { toast("No se pudo cargar el generador de PDF. Revisa tu conexión.", "danger"); return; }
+  const d = protDatosExpediente();
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  doc.setFontSize(15); doc.setFont(undefined,'bold');
+  doc.text(`ALUTIPO — Expediente ${protFase}`, 14, 16);
+  doc.setFontSize(10); doc.setFont(undefined,'normal');
+  doc.text(`Proyecto: ${d.p.codigo||''} ${d.p.nombre||''} · Emitido ${hoyISO()} por ${DB.usuario||''}`, 14, 23);
+  doc.text(`${d.c.ok} aprobadas · ${d.c.obs} con observaciones · ${d.c.pend} pendientes · ${d.c.na} no aplican`, 14, 29);
+  doc.autoTable({
+    startY: 34,
+    head: [["Prueba","Instrumento","Estado","Fecha / por","Valores / observaciones","Respaldos (enlace)"]],
+    body: d.filas.map(f => [f.prueba, f.instrumento, f.estado, (f.fecha+" "+f.por).trim(), f.obs, f.archivos.map(a => a.nombre).join("\n")]),
+    theme: 'grid', styles:{fontSize:8, cellPadding:1.6, overflow:'linebreak'}, headStyles:{fillColor:[193,113,46]}, margin:{left:10,right:10},
+    didDrawCell: function(data) {
+      if (data.section === 'body' && data.column.index === 5) {
+        const f = d.filas[data.row.index];
+        if (f && f.archivos[0]) doc.link(data.cell.x, data.cell.y, data.cell.width, data.cell.height, { url: f.archivos[0].url });
+      }
+    },
+  });
+  const y = (doc.lastAutoTable.finalY || 40) + 18;
+  doc.text("Firma responsable: ____________________", 14, y); doc.text("Firma cliente: ____________________", 150, y);
+  doc.save(`Expediente_${protFase}_${(d.p.codigo||'proyecto').replace(/[^\w-]/g,'_')}_${hoyISO()}.pdf`);
+}
+
 // ================================================================
 // 8. SHELL Y NAVEGACIÓN
 // ================================================================
@@ -9068,6 +9454,7 @@ function NAV_ACTUAL() {
       {id:"panol", label:"Pañol", icon:iconPanol()},
       {id:"acuerdos", label:"Acuerdos comerciales", icon:iconBox(), roles: ROLES_COMPRAS},
       {id:"informesAdmin", label:"Informes a Administración", icon:iconBox(), roles: ROLES_COMPRAS},
+      {id:"protocolos", label:"Protocolos FAT / SAT", icon:iconCheck()},
       {id:"bodegaGeneral", label:"Bodega General", icon:iconBox()},
       {id:"personal", label:"Personal", icon:iconUsers()},
     ]},
@@ -9285,7 +9672,7 @@ function renderAll() {
   const renderers = {
     dashboard: renderDashboard, miPanel: renderMiPanel, panelEquipo: renderPanelEquipo, bodegaGeneral: renderBodegaGeneral, personal: renderPersonal, proyecto360: renderProyecto360, planificacion: renderPlanificacion, compras: renderCompras,
     presupuesto: renderPresupuesto, bodega: renderBodega, reporteMateriales: renderReporteMateriales, comprasDirectas: renderComprasDirectas, punch: renderPunch, requerimientos: renderRequerimientos, galeria: renderGaleria, cuadroCarga: renderCuadroCarga,
-    recepciones: renderRecepciones, resumenOC: renderResumenOC, panol: renderPanol, acuerdos: renderAcuerdos, informesAdmin: renderInformesAdmin,
+    recepciones: renderRecepciones, resumenOC: renderResumenOC, panol: renderPanol, acuerdos: renderAcuerdos, informesAdmin: renderInformesAdmin, protocolos: renderProtocolos,
     fabricacion: renderFabricacion,
     reaperturas: renderReaperturas, copiloto: renderCopiloto, auditoria: renderAuditoria, actividad: renderActividad, respaldos: renderRespaldos,
   };

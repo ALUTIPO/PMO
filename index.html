@@ -448,7 +448,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.3.1";
+const APP_VERSION = "3.3.2";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -692,7 +692,7 @@ function fechaISOSegura(f) {
   if (!m) { const n = f.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2}|\d{4})$/); if (n) m = [null, n[3].length === 2 ? "20" + n[3] : n[3], n[2], n[1]]; }
   if (!m) return "";
   const y = +m[1], mo = +m[2], d = +m[3];
-  if (mo < 1 || mo > 12 || d < 1 || d > 31) return "";
+  if (y < 2000 || y > 2100 || mo < 1 || mo > 12 || d < 1 || d > 31) return "";
   return y + "-" + String(mo).padStart(2,"0") + "-" + String(d).padStart(2,"0");
 }
 /* Deja la planificación en forma segura: Firebase puede devolver objetos en
@@ -704,8 +704,10 @@ function normalizarPlanificacion(lista) {
   return arr.filter(t => t && typeof t === "object").map((t, i) => {
     t.id = (t.id === undefined || t.id === null) ? i + 1 : t.id;
     t.nombre = String(t.nombre || "(sin nombre)");
+    const iniOrig = t.inicio, finOrig = t.fin;
     t.inicio = fechaISOSegura(t.inicio) || fechaISOSegura(t.fin) || hoyISO();
     t.fin = fechaISOSegura(t.fin) || t.inicio;
+    if (t.inicio !== iniOrig || t.fin !== finOrig) t.fechaOriginal = (iniOrig||"(vacío)") + " → " + (finOrig||"(vacío)");
     t.avance = Math.max(0, Math.min(100, Number(t.avance) || 0));
     t.predecesores = (Array.isArray(t.predecesores) ? t.predecesores : Object.values(t.predecesores || {})).filter(x => x && x.ref !== undefined);
     return t;
@@ -3277,7 +3279,13 @@ function accionesPosta(p, t, habilitadaFlag, puede) {
 
 // --- Planificación (Gantt) ---
 function diasEntre(a, b) { return Math.round((new Date(b) - new Date(a)) / 86400000); }
-function sumarDias(fecha, dias) { const d = new Date(fecha); d.setDate(d.getDate()+dias); return d.toISOString().slice(0,10); }
+function sumarDias(fecha, dias) {
+  const d = new Date(fecha);
+  if (isNaN(d.getTime())) return hoyISO();
+  d.setDate(d.getDate()+dias);
+  if (isNaN(d.getTime())) return hoyISO();
+  return d.toISOString().slice(0,10);
+}
 function parsePredecesoresTexto(texto) {
   if(!texto) return [];
   return texto.split(",").map(s => s.trim()).filter(Boolean).map(s => {
@@ -3332,6 +3340,18 @@ let ganttDrag = null;
 const GANTT_LABEL_ANCHO = 260;
 
 function ganttHTML(tareas, cpm) {
+  const malas = tareas.filter(t => !fechaISOSegura(t.inicio) || !fechaISOSegura(t.fin));
+  if (malas.length) {
+    return `<div class="card" style="border-color:var(--danger)"><b>Hay ${malas.length} tarea(s) con fechas que no se pueden leer.</b>
+      <pre style="white-space:pre-wrap; font-size:12px; user-select:all;">${malas.slice(0,15).map(t => escaparHtml(`#${t.id} ${t.nombre} | inicio=${JSON.stringify(t.inicio)} fin=${JSON.stringify(t.fin)}`)).join("\n")}</pre></div>`;
+  }
+  if (tareas.length) {
+    const ds = tareas.flatMap(t => [t.inicio, t.fin]).sort();
+    if (diasEntre(ds[0], ds[ds.length-1]) > 5000) {
+      return `<div class="card" style="border-color:var(--danger)"><b>Las fechas abarcan más de 13 años; probablemente hay una fecha mal escrita.</b>
+        <pre style="white-space:pre-wrap; font-size:12px; user-select:all;">${tareas.filter(t => t.inicio===ds[0]||t.fin===ds[0]||t.inicio===ds[ds.length-1]||t.fin===ds[ds.length-1]).map(t => escaparHtml(`#${t.id} ${t.nombre} | ${t.inicio} → ${t.fin}`)).join("\n")}</pre></div>`;
+    }
+  }
   const fechas = tareas.flatMap(t => [t.inicio, t.fin]).filter(Boolean);
   const minFecha = fechas.reduce((m,f) => !m || f<m ? f : m, null);
   const maxFecha = fechas.reduce((m,f) => !m || f>m ? f : m, null);
@@ -3542,6 +3562,8 @@ function renderPlanificacion() {
     <div class="card kpi"><div class="kpi-label">Fin del programa</div><div class="kpi-value" style="font-size:16px;">${tareas.reduce((m,t) => !m || t.fin>m ? t.fin : m, null)}</div></div>
   </div>
 
+  ${tareas.some(t => t.fechaOriginal) ? `<div class="card" style="border-color:var(--warn); margin-bottom:12px;"><b>⚠ Se corrigieron fechas ilegibles en ${tareas.filter(t => t.fechaOriginal).length} tarea(s).</b> Revísalas y edítalas (al guardar la tarea desaparece este aviso):
+    <div class="hint" style="margin-top:4px;">${tareas.filter(t => t.fechaOriginal).map(t => `#${t.id} ${escaparHtml(t.nombre)} — decía ${escaparHtml(t.fechaOriginal)}, ahora ${t.inicio} → ${t.fin}`).join('<br>')}</div></div>` : ''}
   <div class="card card-flush" id="ganttContenedor" style="padding:14px;">
     ${ganttSVG(tareas, cpm)}
   </div>
@@ -8993,6 +9015,7 @@ function agregarTareaGantt(pid, datos) {
     inicio: datos.inicio, fin: datos.fin, avance: Number(datos.avance) || 0,
     hito: !!datos.hito, predecesores: parsePredecesoresTexto(datos.predecesores),
   });
+  delete t.fechaOriginal;
   registrarHistorial({proyecto:p.codigo, accion:"Crear", detalle:`Nueva tarea de planificación: ${datos.nombre}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
   guardarEstado();
   return true;

@@ -501,7 +501,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.4.2";
+const APP_VERSION = "3.5";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -1206,6 +1206,115 @@ function construirPayloadEstado() {
   };
 }
 
+/* =====================================================================
+   MIGRACIÓN A DATOS POR BLOQUES (nodo /v2) — FASE 1: COPIA EN ESPEJO
+   Cada vez que se guarda, además del bloque actual (/state, que sigue
+   siendo la fuente de verdad y NO se toca), se copia cada proyecto en su
+   propio lugar (/v2/proyectos/{id}) y cada área por separado
+   (/v2/bodegaGeneral, /v2/acuerdos, /v2/personal…). Solo se reescribe lo
+   que cambió. En esta fase NADA se lee desde /v2: si falla o falta
+   permiso, la app funciona igual que siempre. Cuando la verificación
+   confirme que ambas estructuras son idénticas, una versión posterior
+   pasará a leer desde /v2 y recién ahí se gana velocidad.
+   ===================================================================== */
+const v2Ref = database.ref('v2');
+let _v2Hash = {};
+let V2_ESTADO = { ok: null, cuando: "", error: "" };
+let _v2AvisoPermiso = false;
+function canonV2(x) {
+  if (x === null || x === undefined) return undefined;
+  if (Array.isArray(x)) { const o = {}; x.forEach((v,i) => { const c = canonV2(v); if (c !== undefined) o[i] = c; }); return Object.keys(o).length ? o : undefined; }
+  if (typeof x === "object") { const o = {}; Object.keys(x).sort().forEach(k => { const c = canonV2(x[k]); if (c !== undefined) o[k] = c; }); return Object.keys(o).length ? o : undefined; }
+  if (typeof x === "number" && !isFinite(x)) return undefined;
+  return x;
+}
+function igualesV2(a, b) { return JSON.stringify(canonV2(a)) === JSON.stringify(canonV2(b)); }
+function v2Limpio(x) { return x === undefined ? null : JSON.parse(JSON.stringify(x)); }
+async function espejarV2(payload, forzar) {
+  try {
+    const updates = {};
+    Object.keys(payload).filter(k => k !== "updatedAt" && k !== "versionApp").forEach(k => {
+      const v = payload[k];
+      if (k === "proyectos") {
+        const lista = Array.isArray(v) ? v : Object.values(v || {});
+        if (forzar) {
+          const mapa = {};
+          lista.forEach(p => { const id = protId(p.id); mapa[id] = v2Limpio(p); _v2Hash["p_" + id] = JSON.stringify(p); });
+          updates["proyectos"] = Object.keys(mapa).length ? mapa : null;
+        } else {
+          const ids = [];
+          lista.forEach(p => {
+            const id = protId(p.id); ids.push(id);
+            const txt = JSON.stringify(p);
+            if (_v2Hash["p_" + id] !== txt) { updates["proyectos/" + id] = v2Limpio(p); _v2Hash["p_" + id] = txt; }
+          });
+          Object.keys(_v2Hash).filter(h => h.startsWith("p_") && !ids.includes(h.slice(2))).forEach(h => { updates["proyectos/" + h.slice(2)] = null; delete _v2Hash[h]; });
+        }
+      } else {
+        const txt = JSON.stringify(v === undefined ? null : v);
+        if (forzar || _v2Hash[k] !== txt) { updates[k] = v2Limpio(v); _v2Hash[k] = txt; }
+      }
+    });
+    if (!Object.keys(updates).length) { V2_ESTADO.ok = true; return true; }
+    updates["meta"] = { updatedAt: payload.updatedAt || "", versionApp: APP_VERSION };
+    await v2Ref.update(updates);
+    V2_ESTADO = { ok: true, cuando: new Date().toISOString(), error: "" };
+    return true;
+  } catch (e) {
+    _v2Hash = {};   // si falló, la próxima vez se reintenta todo
+    V2_ESTADO = { ok: false, cuando: new Date().toISOString(), error: e.message || String(e) };
+    if (!_v2AvisoPermiso && /permission/i.test(V2_ESTADO.error) && esAdministrador()) {
+      _v2AvisoPermiso = true;
+      toast("Migración: falta permitir el nodo 'v2' en las reglas de Firebase. La app sigue funcionando normal.", "danger");
+    }
+    return false;
+  }
+}
+async function copiarTodoAV2() {
+  if (!esAdministrador()) { toast("Solo el Administrador puede copiar los datos a la nueva estructura.", "danger"); return; }
+  if (!confirm("Se copiarán TODOS los datos actuales a la nueva estructura (/v2). No se modifica ni borra nada de lo actual. ¿Continuar?")) return;
+  toast("Copiando a la nueva estructura…", "ok");
+  const ok = await espejarV2(construirPayloadEstado(), true);
+  toast(ok ? "Copia completa lista. Ahora pulsa «Verificar»." : "No se pudo copiar: " + V2_ESTADO.error, ok ? "ok" : "danger");
+  refrescarPanelV2();
+}
+async function verificarMigracionV2() {
+  const caja = document.getElementById("v2Informe");
+  if (caja) caja.innerHTML = '<div class="hint">Comparando…</div>';
+  try {
+    const [sSnap, vSnap] = await Promise.all([stateRef.once("value"), v2Ref.once("value")]);
+    const s = sSnap.val() || {}, v = vSnap.val() || {};
+    const filas = [];
+    const claves = Array.from(new Set(Object.keys(s).concat(Object.keys(v)))).filter(k => !["updatedAt","versionApp","meta","proyectos"].includes(k));
+    claves.forEach(k => filas.push({ area: k, ok: igualesV2(s[k], v[k]) }));
+    const sp = {}; (Array.isArray(s.proyectos) ? s.proyectos : Object.values(s.proyectos || {})).forEach(p => { if (p) sp[protId(p.id)] = p; });
+    const vp = v.proyectos || {};
+    Array.from(new Set(Object.keys(sp).concat(Object.keys(vp)))).forEach(id => {
+      const nombre = (sp[id] && sp[id].codigo) || id;
+      filas.push({ area: "Proyecto " + nombre, ok: igualesV2(sp[id], vp[id]) });
+    });
+    const malas = filas.filter(f => !f.ok);
+    if (caja) caja.innerHTML = `<div class="card" style="margin-top:10px; border-color:${malas.length?'var(--danger)':'var(--ok)'}">
+      <b>${malas.length ? '⚠ '+malas.length+' área(s) con diferencias' : '✓ Todo idéntico: la nueva estructura coincide con la actual'}</b>
+      <div class="hint" style="margin-top:6px;">${filas.map(f => (f.ok?'✔ ':'✖ ')+escaparHtml(f.area)).join(' · ')}</div>
+      ${malas.length ? '<div class="hint" style="margin-top:6px;">Pulsa «Copiar todo ahora» y verifica de nuevo. Si persiste, avísame antes de continuar.</div>' : ''}</div>`;
+  } catch (e) {
+    if (caja) caja.innerHTML = `<div class="card" style="border-color:var(--danger)">No se pudo verificar: ${escaparHtml(e.message)}</div>`;
+  }
+}
+function refrescarPanelV2() { const c = document.getElementById("v2Panel"); if (c) c.innerHTML = htmlPanelV2Interno(); }
+function htmlPanelV2Interno() {
+  const est = V2_ESTADO.ok === null ? "Aún sin copias en esta sesión (se hace sola al guardar cualquier cambio)."
+    : V2_ESTADO.ok ? "✓ Copia en espejo funcionando" + (V2_ESTADO.cuando ? " (última: " + V2_ESTADO.cuando.slice(11,16) + ")" : "")
+    : "✖ No se pudo copiar: " + escaparHtml(V2_ESTADO.error);
+  return `<b>Migración a datos por bloques (fase 1 de 2)</b>
+    <div class="hint" style="margin:4px 0 8px;">Cada proyecto y cada área se guardan además en su propio lugar. La app sigue leyendo de la estructura actual; no cambia nada para nadie.</div>
+    <div style="font-size:13px; margin-bottom:8px; color:${V2_ESTADO.ok===false?'var(--danger)':'inherit'}">${est}</div>
+    ${esAdministrador() ? `<div class="flex-gap"><button class="btn btn-sm" onclick="copiarTodoAV2()">Copiar todo ahora</button><button class="btn btn-sm btn-primary" onclick="verificarMigracionV2()">Verificar que sean idénticas</button></div>` : '<div class="hint">Solo el Administrador puede copiar y verificar.</div>'}
+    <div id="v2Informe"></div>`;
+}
+function htmlPanelV2() { return `<div class="card" id="v2Panel" style="margin-bottom:14px;">${htmlPanelV2Interno()}</div>`; }
+
 async function guardarEstado(nota) {
   if (_versionObsoleta) { toast("Esta pestaña tiene una versión antigua: actualiza la página antes de guardar.", "danger"); return; }
   if (_guardando) { _guardarPendiente = true; return; }
@@ -1223,6 +1332,7 @@ async function guardarEstado(nota) {
     // así nunca borra datos que haya agregado una versión más nueva.
     await stateRef.update(payload);
     if ((DB.acuerdos||[]).length) acuerdosEspejoRef.set(DB.acuerdos).catch(function(){});
+    espejarV2(payload, false);
     DB.updatedAt = payload.updatedAt;
     DB.syncStatus = "ok";
     toast(nota ? `Guardado: ${nota}` : "Cambios guardados en la nube.", "ok");
@@ -7949,6 +8059,7 @@ function renderRespaldos() {
     <button class="btn" onclick="descargarICSRespaldos()">📅 Agregar fechas a mi calendario</button></div>
   </div>
   ${htmlTamanoDatos()}
+  ${htmlPanelV2()}
   <div id="respaldosLista"><div class="hint">Cargando…</div></div>
   `;
 }

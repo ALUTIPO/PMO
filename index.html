@@ -448,7 +448,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.3.2";
+const APP_VERSION = "3.3.3";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -7764,6 +7764,27 @@ async function verificarYCrearRespaldoSemanal() {
 }
 
 let _respaldosCache = [];
+/* Descarga TODOS los datos de la nube en un solo archivo .json — para
+   guardarlo en el computador. Lee cada nodo por separado. */
+async function descargarRespaldoCompleto() {
+  if (!esAdministrador() && !puedeGestionarCompras()) { toast("Tu rol no puede descargar el respaldo completo.", "danger"); return; }
+  toast("Preparando respaldo completo…", "ok");
+  const nodos = ["state","protocolos","movimientosBodega","informesAdministracion","contadores","acuerdosEspejo","mensajes","bitacoraPunch","cuadroCarga","bibliotecaTecnica","usuariosAutorizados"];
+  const salida = { app: "ALUTIPO PMO", version: APP_VERSION, generado: new Date().toISOString(), por: DB.usuario||"", nodos: {}, omitidos: {} };
+  for (const n of nodos) {
+    try { const snap = await database.ref(n).once('value'); salida.nodos[n] = snap.val(); }
+    catch (e) { salida.omitidos[n] = e.message; }
+  }
+  const blob = new Blob([JSON.stringify(salida)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "PMO_datos_V" + APP_VERSION + "_" + hoyISO() + ".json";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  const om = Object.keys(salida.omitidos);
+  toast(om.length ? "Respaldo descargado; no se pudo leer: " + om.join(", ") : "Respaldo completo descargado.", om.length ? "danger" : "ok");
+}
+
 function renderRespaldos() {
   respaldosRef.once('value').then(function(snap){
     const todos = snap.val() || {};
@@ -7788,7 +7809,8 @@ function renderRespaldos() {
       <h1>Respaldos</h1>
       <div class="page-desc">Copia automática de toda la información cada 7 días — se conservan los últimos ${RESPALDO_MAX_GUARDADOS} (aprox. 1 mes rodante). No requiere que nadie haga nada — se crea sola.</div>
     </div>
-    <button class="btn" onclick="descargarICSRespaldos()">📅 Agregar fechas a mi calendario</button>
+    <div class="flex-gap"><button class="btn btn-primary" onclick="descargarRespaldoCompleto()">⬇ Descargar respaldo completo (.json)</button>
+    <button class="btn" onclick="descargarICSRespaldos()">📅 Agregar fechas a mi calendario</button></div>
   </div>
   ${htmlTamanoDatos()}
   <div id="respaldosLista"><div class="hint">Cargando…</div></div>

@@ -482,6 +482,7 @@ table { min-width: 560px; }
 .mp-g-row{border-top:1px solid var(--line-soft)}
 .mp-g-row .mp-g-lab{justify-content:space-between;border-right:1px solid var(--line)}
 .mp-g-nom{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mp-mas{width:18px;height:18px;border:1.5px solid;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;line-height:1;flex:none}
 .mp-g-bar{position:absolute;top:8px;height:20px;border:1.5px solid;border-radius:5px;overflow:hidden}
 .mp-g-bar i{display:block;height:100%}
 @media(max-width:760px){.mp-kpis{grid-template-columns:repeat(2,1fr)}.mp-board{grid-template-columns:repeat(4,240px)}}
@@ -500,7 +501,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.4";
+const APP_VERSION = "3.4.1";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -5876,6 +5877,28 @@ let filtroAsignacionProyecto = "todos";
 let calendarioSemanaOffset = 0;
 let filtroMiPanel = "pendientes";
 let vistaMiPanel = "tablero";
+let mpGanttColapsados = {};   // código de proyecto -> true si está plegado
+function mpToggleGrupoGantt(cod) {
+  const el = document.querySelector('.mp-gantt');
+  const x = el ? el.scrollLeft : 0;
+  mpGanttColapsados[cod] = !mpGanttColapsados[cod];
+  renderAll();
+  const el2 = document.querySelector('.mp-gantt');
+  if (el2) el2.scrollLeft = x;
+}
+function mpGanttTodos(plegar) {
+  const el = document.querySelector('.mp-gantt');
+  const x = el ? el.scrollLeft : 0;
+  tareasPunchDePersonaGlobal((personaPanelVista() || {}).id).forEach(t => { mpGanttColapsados[t.proyectoCodigo] = plegar; });
+  renderAll();
+  const el2 = document.querySelector('.mp-gantt');
+  if (el2) el2.scrollLeft = x;
+}
+/* Persona cuyo panel se está viendo: en Panel de Equipo la elegida, en Mi Panel la propia. */
+function personaPanelVista() {
+  if (currentPage === 'panelEquipo') return (DB.personal||[]).find(p => p.id === personaPanelEquipo) || null;
+  return personaActual();
+}
 /* =====================================================================
    MI PANEL — vista personal del trabajador (pensada primero para
    Técnico de Terreno, pero disponible para cualquier rol con tareas
@@ -6095,8 +6118,9 @@ function mpVistaGantt(todas) {
   conF.forEach(t => (grupos[t.proyectoCodigo] = grupos[t.proyectoCodigo] || []).push(t));
   const filas = Object.entries(grupos).map(([cod, ts]) => {
     const color = mpColorProyecto(cod);
-    return `<div class="mp-g-head" style="background:${color}18"><div class="mp-g-lab" style="background:#fff;border-right:1px solid var(--line)"><span class="mp-dot" style="background:${color}"></span><b>${escaparHtml(cod)}</b> <em>${ts.length}</em></div><div style="width:${ancho}px;position:relative">${lineaHoy}</div></div>` +
-      ts.sort((a,b) => fechaISOSegura(a.fechaInicio).localeCompare(fechaISOSegura(b.fechaInicio))).map(t => {
+    const plegado = !!mpGanttColapsados[cod];
+    return `<div class="mp-g-head" style="background:${color}18;cursor:pointer" onclick="mpToggleGrupoGantt('${cod.replace(/'/g,"")}')" title="${plegado?'Desplegar':'Plegar'} tareas de ${escaparHtml(cod)}"><div class="mp-g-lab" style="background:#fff;border-right:1px solid var(--line)"><span class="mp-mas" style="border-color:${color};color:${color}">${plegado?'+':'−'}</span><b>${escaparHtml(cod)}</b> <em>${ts.length}</em></div><div style="width:${ancho}px;position:relative">${lineaHoy}</div></div>` +
+      (plegado ? '' : ts.sort((a,b) => fechaISOSegura(a.fechaInicio).localeCompare(fechaISOSegura(b.fechaInicio))).map(t => {
         const i0 = fechaISOSegura(t.fechaInicio), f0 = fechaISOSegura(t.fechaTermino);
         const x = diasEntre(ini, i0) * dia, w = Math.max(dia, (diasEntre(i0, f0) + 1) * dia);
         const c = MP_COLUMNAS.find(x => x.id === mpColumna(t)).color;
@@ -6104,9 +6128,10 @@ function mpVistaGantt(todas) {
         return `<div class="mp-g-row"><div class="mp-g-lab" title="${escaparHtml(nombre)}"><span class="mp-g-nom">${escaparHtml(t.subitem || t.tarea)}</span><span class="mono muted" style="font-size:10px">${t.avance}%</span></div>
           <div style="width:${ancho}px;position:relative;${grid}">${lineaHoy}
             <div class="mp-g-bar" style="left:${x}px;width:${w}px;border-color:${c};background:${c}22" title="${escaparHtml(nombre)} · ${i0} → ${f0} · ${t.avance}%"><i style="width:${t.avance}%;background:${c}55"></i></div></div></div>`;
-      }).join('');
+      }).join(''));
   }).join('');
-  return `<div class="mp-gantt"><div style="width:${LAB+ancho}px">
+  return `<div class="flex-gap" style="margin-bottom:8px;"><button class="btn btn-sm" onclick="mpGanttTodos(false)">＋ Desplegar todo</button><button class="btn btn-sm" onclick="mpGanttTodos(true)">－ Plegar todo</button></div>
+    <div class="mp-gantt"><div style="width:${LAB+ancho}px">
       <div class="mp-g-hdr"><div class="mp-g-lab" style="background:#fff;border-right:1px solid var(--line)"></div><div style="width:${ancho}px;position:relative;height:44px">${meses}<div style="position:absolute;left:0;right:0;top:24px;height:16px">${dias}</div></div></div>
       ${filas}</div></div>
     ${sinF.length ? `<div class="hint" style="margin-top:8px;">${sinF.length} tarea(s) sin fecha de inicio y término no aparecen en el Gantt (sí en Tablero y Lista).</div>` : ''}`;

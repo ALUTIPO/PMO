@@ -501,7 +501,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.4.1";
+const APP_VERSION = "3.4.2";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -5877,6 +5877,7 @@ let filtroAsignacionProyecto = "todos";
 let calendarioSemanaOffset = 0;
 let filtroMiPanel = "pendientes";
 let vistaMiPanel = "tablero";
+let mpGanttAutoScroll = true;  // centrar en "hoy" la primera vez que se dibuja el Gantt
 let mpGanttColapsados = {};   // código de proyecto -> true si está plegado
 function mpToggleGrupoGantt(cod) {
   const el = document.querySelector('.mp-gantt');
@@ -5885,6 +5886,13 @@ function mpToggleGrupoGantt(cod) {
   renderAll();
   const el2 = document.querySelector('.mp-gantt');
   if (el2) el2.scrollLeft = x;
+}
+function mpGanttIrAHoy(instantaneo) {
+  const el = document.querySelector('.mp-gantt');
+  const linea = el && el.querySelector('[data-hoy]');
+  if (!el || !linea) return;
+  const x = Number(linea.dataset.hoy);
+  el.scrollTo({ left: Math.max(0, x - (el.clientWidth - 220) / 3), behavior: instantaneo ? 'auto' : 'smooth' });
 }
 function mpGanttTodos(plegar) {
   const el = document.querySelector('.mp-gantt');
@@ -5975,7 +5983,7 @@ function cuerpoPanelTrabajador(persona) {
   const urgentes = [...vencidas, ...proximas].sort((a,b) => (a.fechaTermino||'').localeCompare(b.fechaTermino||''));
   const top = urgentes[0];
   const reqAsignados = requerimientosAsignadosA(persona.nombre);
-  const tab = (id, icono, txt) => `<button class="mp-tab ${vistaMiPanel===id?'on':''}" onclick="vistaMiPanel='${id}'; renderAll();">${icono} ${txt}</button>`;
+  const tab = (id, icono, txt) => `<button class="mp-tab ${vistaMiPanel===id?'on':''}" onclick="vistaMiPanel='${id}'; mpGanttAutoScroll=true; renderAll();">${icono} ${txt}</button>`;
 
   let vista = "";
   if (!todas.length) vista = `<div class="empty-state card">Aún no tienes tareas asignadas en el Punch List.</div>`;
@@ -6099,11 +6107,13 @@ function mpVistaGantt(todas) {
   const sinF = todas.filter(t => !(fechaISOSegura(t.fechaInicio) && fechaISOSegura(t.fechaTermino)));
   if (!conF.length) return `<div class="empty-state card">Ninguna de tus tareas tiene fecha de inicio y término, por eso no hay Gantt. Pide que las agreguen en el Punch List.</div>`;
   const fs = conF.flatMap(t => [fechaISOSegura(t.fechaInicio), fechaISOSegura(t.fechaTermino)]).sort();
-  let ini = sumarDias(fs[0], -2), fin = sumarDias(fs[fs.length-1], 4);
+  const hoy = hoyISO();
+  // El rango SIEMPRE incluye "hoy", aunque todas las tareas sean pasadas o futuras
+  let ini = sumarDias(fs[0] < hoy ? fs[0] : hoy, -2), fin = sumarDias(fs[fs.length-1] > hoy ? fs[fs.length-1] : hoy, 4);
   if (diasEntre(ini, fin) < 28) fin = sumarDias(ini, 28);
   const total = diasEntre(ini, fin) + 1;
   const dia = total > 120 ? 10 : total > 60 ? 18 : 30;
-  const ancho = total * dia, LAB = 220, hoy = hoyISO();
+  const ancho = total * dia, LAB = 220;
   const nm = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
   let meses = "", dias = "", mesAct = "";
   for (let d=0; d<total; d++) {
@@ -6113,7 +6123,8 @@ function mpVistaGantt(todas) {
   }
   const grid = `background-image:repeating-linear-gradient(90deg,transparent 0,transparent ${dia-1}px,var(--line-soft) ${dia-1}px,var(--line-soft) ${dia}px)`;
   const xHoy = diasEntre(ini, hoy) * dia + dia/2;
-  const lineaHoy = (xHoy >= 0 && xHoy <= ancho) ? `<div style="position:absolute;left:${xHoy}px;top:0;bottom:0;width:0;border-left:1.5px dashed var(--copper)"></div>` : '';
+  const lineaHoy = (xHoy >= 0 && xHoy <= ancho) ? `<div style="position:absolute;left:${xHoy-1}px;top:0;bottom:0;width:2px;background:var(--copper);opacity:.85;z-index:1"></div>` : '';
+  const etiquetaHoy = (xHoy >= 0 && xHoy <= ancho) ? `<div data-hoy="${xHoy}" style="position:absolute;left:${xHoy-18}px;top:0;width:36px;text-align:center;background:var(--copper);color:#fff;font-size:10px;font-weight:700;border-radius:4px;padding:1px 0;z-index:3">HOY</div>` : '';
   const grupos = {};
   conF.forEach(t => (grupos[t.proyectoCodigo] = grupos[t.proyectoCodigo] || []).push(t));
   const filas = Object.entries(grupos).map(([cod, ts]) => {
@@ -6130,10 +6141,11 @@ function mpVistaGantt(todas) {
             <div class="mp-g-bar" style="left:${x}px;width:${w}px;border-color:${c};background:${c}22" title="${escaparHtml(nombre)} · ${i0} → ${f0} · ${t.avance}%"><i style="width:${t.avance}%;background:${c}55"></i></div></div></div>`;
       }).join(''));
   }).join('');
-  return `<div class="flex-gap" style="margin-bottom:8px;"><button class="btn btn-sm" onclick="mpGanttTodos(false)">＋ Desplegar todo</button><button class="btn btn-sm" onclick="mpGanttTodos(true)">－ Plegar todo</button></div>
+  return `<div class="flex-gap" style="margin-bottom:8px;"><button class="btn btn-sm" onclick="mpGanttTodos(false)">＋ Desplegar todo</button><button class="btn btn-sm" onclick="mpGanttTodos(true)">－ Plegar todo</button><button class="btn btn-sm" onclick="mpGanttIrAHoy()">◉ Ir a hoy</button></div>
     <div class="mp-gantt"><div style="width:${LAB+ancho}px">
-      <div class="mp-g-hdr"><div class="mp-g-lab" style="background:#fff;border-right:1px solid var(--line)"></div><div style="width:${ancho}px;position:relative;height:44px">${meses}<div style="position:absolute;left:0;right:0;top:24px;height:16px">${dias}</div></div></div>
+      <div class="mp-g-hdr"><div class="mp-g-lab" style="background:#fff;border-right:1px solid var(--line)"></div><div style="width:${ancho}px;position:relative;height:44px">${meses}<div style="position:absolute;left:0;right:0;top:24px;height:16px">${dias}</div>${etiquetaHoy}</div></div>
       ${filas}</div></div>
+    ${(() => { if (mpGanttAutoScroll) { mpGanttAutoScroll = false; setTimeout(() => mpGanttIrAHoy(true), 30); } return ''; })()}
     ${sinF.length ? `<div class="hint" style="margin-top:8px;">${sinF.length} tarea(s) sin fecha de inicio y término no aparecen en el Gantt (sí en Tablero y Lista).</div>` : ''}`;
 }
 

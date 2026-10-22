@@ -483,6 +483,7 @@ table { min-width: 560px; }
 .mp-g-row .mp-g-lab{justify-content:space-between;border-right:1px solid var(--line)}
 .mp-g-nom{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mp-mas{width:18px;height:18px;border:1.5px solid;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;line-height:1;flex:none}
+.fs-row{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;padding:11px 14px;border-top:1px solid var(--line-soft)}
 .mp-g-bar{position:absolute;top:8px;height:20px;border:1.5px solid;border-radius:5px;overflow:hidden}
 .mp-g-bar i{display:block;height:100%}
 @media(max-width:760px){.mp-kpis{grid-template-columns:repeat(2,1fr)}.mp-board{grid-template-columns:repeat(4,240px)}}
@@ -501,7 +502,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.5";
+const APP_VERSION = "3.6";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -768,6 +769,8 @@ function normalizarPlanificacion(lista) {
 }
 function migrarProyecto(p) {
   p.planificacion = normalizarPlanificacion(p.planificacion);
+  p.metasFinSemana = normalizarMetasFinSemana(p.metasFinSemana);
+  p.catalogoZonas = normalizarCatalogoZonas(p.catalogoZonas);
   if(!p.iaRiesgos) p.iaRiesgos = [];
   if(!p.reportesGerenciales) p.reportesGerenciales = [];
   if(!p.reaperturas) p.reaperturas = [];
@@ -9761,6 +9764,374 @@ async function protPdf() {
   doc.save(`Expediente_${protFase}_${(d.p.codigo||'proyecto').replace(/[^\w-]/g,'_')}_${hoyISO()}.pdf`);
 }
 
+/* =====================================================================
+   METAS DE FIN DE SEMANA — plan de trabajo con metas claras
+   Cada plan (un sábado + domingo) vive dentro del proyecto
+   (p.metasFinSemana). Cada tarea lleva zona, meta medible, día y
+   responsables. Al guardar, cada tarea se registra sola en la Carta Gantt
+   del proyecto (fase "Fin de semana", marcada con origenFinSemana) y su
+   avance se actualiza cuando se marca el resultado. El plan se envía por
+   WhatsApp (un mensaje por persona, o uno para el grupo) mediante el
+   enlace wa.me: WhatsApp se abre con el texto listo y tú pulsas Enviar.
+   ===================================================================== */
+let finSemanaPlanId = "";
+const FS_ZONAS_RIELES = [
+  {zona:"Compac", tareas:["Marcas de seccionadores","Instalar tapas amarillas de seccionadores","Sentido de giro","Paradas de emergencia y pull cord","Conexión Hytrol 24 V","Normalizar fuentes IOP","Conexión de motores en tableros","Montaje de sensor box","Conexión de sensor box in/out","Verificar postura de sensor"]},
+  {zona:"Tornamesa", tareas:["Canalización a piso","Conexión de motor principal inicial","Conexión Hytrol 24 V","Paradas de emergencia y pull cord","Marcas de seccionadores","Instalar tapas amarillas de seccionadores","Sentido de giro","Instalar fuentes Hytrol","Montaje de sensor box","Conexión de sensor box in/out","Conexión de motores","Canalización de salida","Verificar postura de sensor"]},
+  {zona:"Segregado", tareas:["Verificar cable de control","Montaje de seccionadores","Marca de seccionadores","Sentido de giro","Paradas de emergencia y pull cord","Montaje de fuente Hytrol","Montaje de sensor box","Conexión de sensor box in/out","Verificar postura de sensor","Montaje de IOP"]},
+  {zona:"Calibrador", tareas:["Cintas de reciclaje (4 unid.)","Alimentadores (mejorar tendido)","Marca de seccionadores","Tapas amarillas","Sentido de giro","Loop de emergencia y cases","Cable de control y seguridad U1 → U2","Verificación de canalización de flexibles y fijaciones (abrazadera sin pernos)","Verificar conexionado","Paradas de emergencia y montaje","Cambio de puertas","Verificación de manilla y puerta nueva","Normalización de testeros","Conexión analizador de red U2","Montaje de contacto aux. de guardamotor"]},
+  {zona:"Tierra general", tareas:["Comprar cable desnudo","Instalar cable desnudo"]},
+  {zona:"Infeed", tareas:["Cables tirados y conectados al tablero","Peinado de flexibles","Canalizaciones","Cruce al volcador"]},
+  {zona:"Segregado – canalización", tareas:["Canalización","Cableado","Montaje de seccionador","Montaje de sensor box","Montaje de fuentes"]},
+];
+function puedeGestionarMetasFS() { return puedeGestionarProtocolos(); }
+function normalizarMetasFinSemana(lista) {
+  if (!lista) return [];
+  return (Array.isArray(lista) ? lista : Object.values(lista)).filter(x => x && typeof x === "object").map(pl => {
+    pl.items = (Array.isArray(pl.items) ? pl.items : Object.values(pl.items || {})).filter(Boolean).map(it => {
+      it.responsables = Array.isArray(it.responsables) ? it.responsables : Object.values(it.responsables || {});
+      if (it.meta === undefined) it.meta = ""; if (!it.dia) it.dia = "ambos"; if (!it.resultado) it.resultado = ""; if (it.nota === undefined) it.nota = "";
+      return it;
+    });
+    pl.estado = pl.estado || "borrador";
+    return pl;
+  });
+}
+function normalizarCatalogoZonas(c) {
+  if (!c) return [];
+  return (Array.isArray(c) ? c : Object.values(c)).filter(Boolean).map(z => { z.tareas = Array.isArray(z.tareas) ? z.tareas : Object.values(z.tareas || {}); return z; });
+}
+function fsSabadoProximo(desde) {
+  const f = desde || hoyISO();
+  const dow = new Date(f + "T12:00:00").getDay();
+  return sumarDias(f, (6 - dow + 7) % 7);
+}
+function fsFechaCorta(f) {
+  const d = new Date(f + "T12:00:00");
+  return ["dom","lun","mar","mié","jue","vie","sáb"][d.getDay()] + " " + String(d.getDate()).padStart(2,"0") + "-" + ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"][d.getMonth()];
+}
+function fsFechasItem(plan, it) {
+  const sab = plan.sabado, dom = sumarDias(plan.sabado, 1);
+  return it.dia === "sab" ? [sab, sab] : it.dia === "dom" ? [dom, dom] : [sab, dom];
+}
+function fsNombresResp(it) {
+  return (it.responsables || []).map(id => { const per = (DB.personal||[]).find(x => x.id === id); return per ? per.nombre : null; }).filter(Boolean);
+}
+function fsProyectoYPlan(pid, planId) { const p = proy(pid); return { p, plan: p && (p.metasFinSemana||[]).find(x => x.id === planId) }; }
+
+/* --- Registro en la Carta Gantt --- */
+function fsSincronizarGantt(p, plan) {
+  p.planificacion = (p.planificacion || []).filter(t => t.origenFinSemana !== plan.id);
+  let nextId = p.planificacion.reduce((m, t) => Math.max(m, Number(t.id) || 0), 0) + 1;
+  plan.items.forEach(it => {
+    const [ini, fin] = fsFechasItem(plan, it);
+    p.planificacion.push({
+      id: nextId++, origenFinSemana: plan.id, origenFinSemanaItem: it.id,
+      nombre: "🗓 " + (it.zona ? it.zona + ": " : "") + it.tarea,
+      fase: "Fin de semana", responsable: fsNombresResp(it).join(", ") || "Sin asignar",
+      inicio: ini, fin: fin, avance: it.resultado === "cumplida" ? 100 : it.resultado === "parcial" ? 50 : 0,
+      hito: false, predecesores: [], meta: it.meta || "",
+    });
+  });
+}
+function fsQuitarDeGantt(p, planId) { p.planificacion = (p.planificacion || []).filter(t => t.origenFinSemana !== planId); }
+function fsGuardar(p, plan, nota) {
+  fsSincronizarGantt(p, plan);
+  registrarHistorial({proyecto:p.codigo, accion:"Modificar", detalle:`Metas de fin de semana (${fsFechaCorta(plan.sabado)}): ${nota}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
+  guardarEstado();
+}
+
+/* --- Mensajes de WhatsApp --- */
+function fsTelefonoWA(tel) {
+  let d = String(tel || "").replace(/\D/g, "");
+  if (!d) return "";
+  if (d.startsWith("56")) return d;
+  if (d.length === 9 && d.startsWith("9")) return "56" + d;
+  if (d.length === 8) return "569" + d;
+  return d;
+}
+function fsLineasItems(plan, items, conResp) {
+  return items.map((it, i) => `${i+1}. *${it.zona ? it.zona + " – " : ""}${it.tarea}*\n   🎯 Meta: ${it.meta}\n   📅 ${it.dia==="sab"?"Sábado":it.dia==="dom"?"Domingo":"Sáb y Dom"}${conResp && fsNombresResp(it).length ? "\n   👷 " + fsNombresResp(it).join(", ") : ""}`).join("\n\n");
+}
+function fsMensajePersona(p, plan, persona) {
+  const mios = plan.items.filter(it => (it.responsables||[]).includes(persona.id));
+  return `*Metas fin de semana – ${p.codigo}*\n${fsFechaCorta(plan.sabado)} / ${fsFechaCorta(sumarDias(plan.sabado,1))}\n\nHola ${persona.nombre.split(" ")[0]}, estas son tus metas:\n\n${fsLineasItems(plan, mios, false)}\n\nAl terminar, avísame qué quedó ✅ cumplido, 🟡 parcial o ❌ pendiente.`;
+}
+function fsMensajeGrupo(p, plan) {
+  return `*Metas fin de semana – ${p.codigo} ${p.nombre}*\n${fsFechaCorta(plan.sabado)} / ${fsFechaCorta(sumarDias(plan.sabado,1))}\n\n${fsLineasItems(plan, plan.items, true)}\n\nAl terminar, informar qué quedó ✅ cumplido, 🟡 parcial o ❌ pendiente.`;
+}
+function fsValidarEnvio(plan) {
+  if (!plan.items.length) return "El plan no tiene tareas.";
+  const sinMeta = plan.items.filter(it => !String(it.meta || "").trim()).length;
+  if (sinMeta) return `Faltan metas claras en ${sinMeta} tarea(s). Escribe qué debe quedar terminado y cómo se comprueba.`;
+  const sinResp = plan.items.filter(it => !(it.responsables || []).length).length;
+  if (sinResp) return `Faltan responsables en ${sinResp} tarea(s).`;
+  return "";
+}
+function fsModalEnviar(pid, planId) {
+  const { p, plan } = fsProyectoYPlan(pid, planId); if (!plan) return;
+  const err = fsValidarEnvio(plan);
+  if (err) { toast(err, "danger"); return; }
+  const ids = Array.from(new Set(plan.items.flatMap(it => it.responsables || [])));
+  const personas = ids.map(id => (DB.personal||[]).find(x => x.id === id)).filter(Boolean);
+  openModal(`
+    <div class="modal-head"><h3>Enviar por WhatsApp</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="hint" style="margin-bottom:10px;">Se abre WhatsApp con el mensaje ya escrito; solo pulsas Enviar. Cada persona recibe únicamente sus metas.</div>
+      ${personas.map(per => { const n = plan.items.filter(it => (it.responsables||[]).includes(per.id)).length, tel = fsTelefonoWA(per.telefono);
+        return `<div class="flex-between" style="padding:8px 0; border-top:1px solid var(--line-soft); gap:8px;"><div><b>${escaparHtml(per.nombre)}</b> <span class="muted small">· ${n} meta(s)</span>${tel ? '' : '<div class="hint" style="color:var(--danger)">Sin teléfono en Personal: se abrirá WhatsApp para que elijas el contacto.</div>'}</div>
+          <button class="btn btn-sm btn-primary" onclick="fsEnviarWA('${pid}','${planId}','${per.id}')">📲 WhatsApp</button></div>`; }).join('')}
+      <div class="flex-between" style="padding:10px 0 0; border-top:1px solid var(--line); margin-top:6px; gap:8px;"><div><b>Mensaje para el grupo</b><div class="hint">Todas las tareas con sus responsables.</div></div>
+        <div class="flex-gap"><button class="btn btn-sm" onclick="fsCopiarGrupo('${pid}','${planId}')">Copiar</button><button class="btn btn-sm btn-primary" onclick="fsEnviarWA('${pid}','${planId}','grupo')">📲 Abrir</button></div></div>
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cerrar</button></div>`);
+}
+function fsMarcarEnviado(p, plan) {
+  if (plan.estado === "borrador") { plan.estado = "enviado"; }
+  plan.enviadoEn = new Date().toISOString();
+  fsGuardar(p, plan, "plan enviado por WhatsApp");
+}
+function fsEnviarWA(pid, planId, quien) {
+  const { p, plan } = fsProyectoYPlan(pid, planId); if (!plan) return;
+  let texto, tel = "";
+  if (quien === "grupo") texto = fsMensajeGrupo(p, plan);
+  else { const per = (DB.personal||[]).find(x => x.id === quien); if (!per) return; texto = fsMensajePersona(p, plan, per); tel = fsTelefonoWA(per.telefono); }
+  window.open("https://wa.me/" + tel + "?text=" + encodeURIComponent(texto), "_blank");
+  fsMarcarEnviado(p, plan);
+}
+function fsCopiarGrupo(pid, planId) {
+  const { p, plan } = fsProyectoYPlan(pid, planId); if (!plan) return;
+  const t = fsMensajeGrupo(p, plan);
+  (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => toast("Mensaje copiado. Pégalo en WhatsApp.", "ok")).catch(() => toast("No se pudo copiar automáticamente.", "danger"));
+}
+
+/* --- Acciones del plan --- */
+function fsNuevoPlan() {
+  if (!puedeGestionarMetasFS()) { toast("Solo jefaturas y supervisores crean planes de fin de semana.", "danger"); return; }
+  const p = proy(); if (!p) return;
+  openModal(`
+    <div class="modal-head"><h3>Nuevo plan de fin de semana</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <label class="field-label">Sábado del fin de semana *</label>
+      <input type="date" id="fsSabado" value="${fsSabadoProximo()}">
+      <div class="hint">El domingo se toma como el día siguiente.</div>
+      <label class="field-label">Objetivo general (opcional)</label>
+      <input type="text" id="fsTitulo" placeholder="Ej: Dejar Compac y Segregado listos para pruebas" style="width:100%;">
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="fsCrearPlan()">Crear plan</button></div>`);
+}
+function fsCrearPlan() {
+  const p = proy(); const sab = document.getElementById("fsSabado").value;
+  if (!sab || !fechaISOSegura(sab)) { toast("Elige una fecha válida.", "danger"); return; }
+  if (new Date(sab + "T12:00:00").getDay() !== 6 && !confirm("Esa fecha no es sábado. ¿Crear el plan igual?")) return;
+  p.metasFinSemana = p.metasFinSemana || [];
+  const plan = { id: "FS-" + Date.now(), sabado: fechaISOSegura(sab), titulo: document.getElementById("fsTitulo").value.trim(), estado: "borrador", creadoPor: DB.usuario || "", items: [] };
+  p.metasFinSemana.push(plan); finSemanaPlanId = plan.id;
+  registrarHistorial({proyecto:p.codigo, accion:"Crear", detalle:`Plan de metas de fin de semana ${fsFechaCorta(plan.sabado)}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
+  guardarEstado(); closeModal(); renderAll();
+}
+function fsEliminarPlan(planId) {
+  const p = proy(); const plan = (p.metasFinSemana||[]).find(x => x.id === planId); if (!plan) return;
+  if (!puedeGestionarMetasFS()) return;
+  if (!confirm("¿Eliminar este plan? También se quitan sus tareas de la Carta Gantt.")) return;
+  p.metasFinSemana = p.metasFinSemana.filter(x => x.id !== planId); fsQuitarDeGantt(p, planId);
+  finSemanaPlanId = ""; guardarEstado(); renderAll();
+}
+function fsCerrarPlan(planId) {
+  const p = proy(); const plan = (p.metasFinSemana||[]).find(x => x.id === planId); if (!plan) return;
+  const sin = plan.items.filter(it => !it.resultado).length;
+  if (sin && !confirm(`${sin} tarea(s) no tienen resultado y quedarán como no cumplidas. ¿Cerrar el plan?`)) return;
+  plan.items.forEach(it => { if (!it.resultado) it.resultado = "no"; });
+  plan.estado = "cerrado"; plan.cerradoEn = new Date().toISOString();
+  fsGuardar(p, plan, "plan cerrado"); renderAll();
+}
+function fsReabrirPlan(planId) {
+  const p = proy(); const plan = (p.metasFinSemana||[]).find(x => x.id === planId); if (!plan || !puedeGestionarMetasFS()) return;
+  plan.estado = "enviado"; delete plan.cerradoEn; fsGuardar(p, plan, "plan reabierto"); renderAll();
+}
+function fsTrasladarPendientes(planId) {
+  const p = proy(); const plan = (p.metasFinSemana||[]).find(x => x.id === planId); if (!plan || !puedeGestionarMetasFS()) return;
+  const pend = plan.items.filter(it => it.resultado !== "cumplida");
+  if (!pend.length) { toast("No hay tareas pendientes que trasladar.", "ok"); return; }
+  const nuevo = { id: "FS-" + Date.now(), sabado: sumarDias(plan.sabado, 7), titulo: "Pendientes del " + fsFechaCorta(plan.sabado), estado: "borrador", creadoPor: DB.usuario || "",
+    items: pend.map((it, i) => ({ id: i + 1, zona: it.zona, tarea: it.tarea, meta: it.meta, dia: it.dia, responsables: (it.responsables||[]).slice(), resultado: "", nota: it.resultado === "parcial" ? "Quedó parcial el fin de semana anterior" : "" })) };
+  p.metasFinSemana.push(nuevo); finSemanaPlanId = nuevo.id;
+  fsGuardar(p, nuevo, `${pend.length} tarea(s) trasladadas desde ${fsFechaCorta(plan.sabado)}`); renderAll();
+  toast(`${pend.length} tarea(s) trasladadas al próximo fin de semana.`, "ok");
+}
+function fsMarcarResultado(planId, itemId, valor) {
+  const p = proy(); const plan = (p.metasFinSemana||[]).find(x => x.id === planId); if (!plan) return;
+  const it = plan.items.find(x => x.id === itemId); if (!it) return;
+  it.resultado = valor; fsGuardar(p, plan, `resultado de «${it.tarea}»: ${valor || "sin resultado"}`); renderAll();
+}
+function fsNotaItem(planId, itemId, texto) {
+  const p = proy(); const plan = (p.metasFinSemana||[]).find(x => x.id === planId); const it = plan && plan.items.find(x => x.id === itemId); if (!it) return;
+  it.nota = String(texto || "").trim(); guardarEstado();
+}
+function fsQuitarItem(planId, itemId) {
+  const p = proy(); const plan = (p.metasFinSemana||[]).find(x => x.id === planId); if (!plan || !puedeGestionarMetasFS()) return;
+  plan.items = plan.items.filter(x => x.id !== itemId); fsGuardar(p, plan, "tarea quitada"); renderAll();
+}
+
+/* --- Catálogo de zonas --- */
+function fsCargarZonasRieles() {
+  const p = proy(); if (!puedeGestionarMetasFS()) return;
+  p.catalogoZonas = JSON.parse(JSON.stringify(FS_ZONAS_RIELES));
+  guardarEstado(); renderAll(); toast("Zonas cargadas desde tus apuntes. Revisa que los nombres calcen con terreno.", "ok");
+}
+function fsAprenderCatalogo(p, zona, tarea) {
+  if (!zona) return;
+  p.catalogoZonas = p.catalogoZonas || [];
+  let z = p.catalogoZonas.find(x => x.zona.toLowerCase() === zona.toLowerCase());
+  if (!z) { z = { zona, tareas: [] }; p.catalogoZonas.push(z); }
+  if (tarea && !z.tareas.some(t => t.toLowerCase() === tarea.toLowerCase())) z.tareas.push(tarea);
+}
+function fsChecksResp(sel) {
+  return `<div class="flex-gap" style="flex-wrap:wrap;">${(DB.personal||[]).filter(per => per.nombre).map(per => `<label style="display:flex; gap:5px; align-items:center; padding:4px 10px; border:1px solid var(--line); border-radius:16px; font-size:12.5px;"><input type="checkbox" class="fsResp" value="${per.id}" ${sel.includes(per.id)?'checked':''}> ${escaparHtml(per.nombre)}</label>`).join('')}</div>`;
+}
+function fsRespSeleccionados() { return Array.from(document.querySelectorAll(".fsResp:checked")).map(x => x.value); }
+function fsModalItem(planId, itemId) {
+  if (!puedeGestionarMetasFS()) { toast("Solo jefaturas y supervisores editan las tareas del plan.", "danger"); return; }
+  const p = proy(); const plan = p.metasFinSemana.find(x => x.id === planId); if (!plan) return;
+  const it = itemId ? plan.items.find(x => x.id === itemId) : { zona:"", tarea:"", meta:"", dia:"ambos", responsables:[] };
+  const cat = p.catalogoZonas || [];
+  openModal(`
+    <div class="modal-head"><h3>${itemId ? 'Editar' : 'Nueva'} tarea</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <label class="field-label">Zona / equipo</label>
+      <input list="fsZonas" id="fsZona" value="${escaparHtml(it.zona)}" placeholder="Ej: Compac" style="width:100%;" oninput="fsActualizarTareas()">
+      <datalist id="fsZonas">${cat.map(z => `<option value="${escaparHtml(z.zona)}">`).join('')}</datalist>
+      <label class="field-label">Tarea *</label>
+      <input list="fsTareas" id="fsTarea" value="${escaparHtml(it.tarea)}" placeholder="Qué se hace" style="width:100%;">
+      <datalist id="fsTareas"></datalist>
+      <label class="field-label">Meta clara *</label>
+      <input type="text" id="fsMeta" value="${escaparHtml(it.meta)}" placeholder="Qué debe quedar terminado y cómo se comprueba. Ej: 6 seccionadores marcados y fotografiados" style="width:100%;">
+      <label class="field-label">Día</label>
+      <select id="fsDia"><option value="ambos" ${it.dia==='ambos'?'selected':''}>Sábado y domingo</option><option value="sab" ${it.dia==='sab'?'selected':''}>Solo sábado</option><option value="dom" ${it.dia==='dom'?'selected':''}>Solo domingo</option></select>
+      <label class="field-label">Responsables *</label>
+      ${fsChecksResp(it.responsables || [])}
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="fsGuardarItem('${planId}', ${itemId ? itemId : 'null'})">Guardar</button></div>`);
+  fsActualizarTareas();
+}
+function fsActualizarTareas() {
+  const p = proy(); const zona = (document.getElementById("fsZona") || {}).value || "";
+  const z = (p.catalogoZonas || []).find(x => x.zona.toLowerCase() === zona.trim().toLowerCase());
+  const dl = document.getElementById("fsTareas"); if (dl) dl.innerHTML = (z ? z.tareas : []).map(t => `<option value="${escaparHtml(t)}">`).join("");
+}
+function fsGuardarItem(planId, itemId) {
+  const p = proy(); const plan = p.metasFinSemana.find(x => x.id === planId); if (!plan) return;
+  const zona = document.getElementById("fsZona").value.trim(), tarea = document.getElementById("fsTarea").value.trim();
+  if (!tarea) { toast("Escribe la tarea.", "danger"); return; }
+  const datos = { zona, tarea, meta: document.getElementById("fsMeta").value.trim(), dia: document.getElementById("fsDia").value, responsables: fsRespSeleccionados() };
+  if (itemId) Object.assign(plan.items.find(x => x.id === itemId), datos);
+  else plan.items.push(Object.assign({ id: plan.items.reduce((m, x) => Math.max(m, x.id), 0) + 1, resultado: "", nota: "" }, datos));
+  fsAprenderCatalogo(p, zona, tarea);
+  fsGuardar(p, plan, `tarea «${tarea}»`); closeModal(); renderAll();
+}
+function fsModalDesdeZona(planId) {
+  if (!puedeGestionarMetasFS()) return;
+  const p = proy(); const cat = p.catalogoZonas || [];
+  if (!cat.length) { toast("Primero carga las zonas (botón «Cargar zonas de Rieles») o agrega tareas una a una.", "danger"); return; }
+  openModal(`
+    <div class="modal-head"><h3>Agregar tareas desde una zona</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <label class="field-label">Zona</label>
+      <select id="fsZonaSel" onchange="fsPintarChecks()">${cat.map((z, i) => `<option value="${i}">${escaparHtml(z.zona)} (${z.tareas.length})</option>`).join('')}</select>
+      <div id="fsChecks" style="max-height:240px; overflow:auto; margin:10px 0; border:1px solid var(--line-soft); border-radius:8px; padding:8px;"></div>
+      <label class="field-label">Día</label>
+      <select id="fsDia"><option value="ambos">Sábado y domingo</option><option value="sab">Solo sábado</option><option value="dom">Solo domingo</option></select>
+      <label class="field-label">Responsables</label>${fsChecksResp([])}
+      <div class="hint" style="margin-top:8px;">Las metas las completas después en cada tarea: el plan no se puede enviar mientras falte alguna.</div>
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="fsAgregarDesdeZona('${planId}')">Agregar seleccionadas</button></div>`);
+  fsPintarChecks();
+}
+function fsPintarChecks() {
+  const p = proy(); const z = (p.catalogoZonas || [])[Number(document.getElementById("fsZonaSel").value)]; if (!z) return;
+  document.getElementById("fsChecks").innerHTML = z.tareas.map((t, i) => `<label style="display:flex; gap:7px; padding:3px 0; font-size:13px;"><input type="checkbox" class="fsTarChk" value="${i}"> ${escaparHtml(t)}</label>`).join('');
+}
+function fsAgregarDesdeZona(planId) {
+  const p = proy(); const plan = p.metasFinSemana.find(x => x.id === planId); if (!plan) return;
+  const z = p.catalogoZonas[Number(document.getElementById("fsZonaSel").value)];
+  const idx = Array.from(document.querySelectorAll(".fsTarChk:checked")).map(x => Number(x.value));
+  if (!idx.length) { toast("Marca al menos una tarea.", "danger"); return; }
+  const dia = document.getElementById("fsDia").value, resp = fsRespSeleccionados();
+  let id = plan.items.reduce((m, x) => Math.max(m, x.id), 0);
+  idx.forEach(i => plan.items.push({ id: ++id, zona: z.zona, tarea: z.tareas[i], meta: "", dia, responsables: resp.slice(), resultado: "", nota: "" }));
+  fsGuardar(p, plan, `${idx.length} tarea(s) de ${z.zona}`); closeModal(); renderAll();
+}
+
+/* --- Página --- */
+const FS_RESULTADOS = { "": {t:"Pendiente", c:"var(--muted)"}, cumplida: {t:"✅ Cumplida", c:"#2e9e5b"}, parcial: {t:"🟡 Parcial", c:"#b8860b"}, no: {t:"❌ No cumplida", c:"var(--danger)"} };
+function fsCumplimiento(plan) {
+  const n = plan.items.length || 1;
+  const ok = plan.items.filter(i => i.resultado === "cumplida").length, par = plan.items.filter(i => i.resultado === "parcial").length;
+  return { ok, par, pct: Math.round((ok + par * 0.5) / n * 100), total: plan.items.length };
+}
+function renderFinSemana() {
+  if (!proyectosDelArea().length) return `<div class="page-head"><div><h1>Metas de fin de semana</h1></div></div><div class="empty-state card">Aún no hay proyectos.</div>`;
+  const p = proy(); p.metasFinSemana = normalizarMetasFinSemana(p.metasFinSemana);
+  const gest = puedeGestionarMetasFS();
+  const planes = p.metasFinSemana.slice().sort((a, b) => b.sabado.localeCompare(a.sabado));
+  if (!planes.find(x => x.id === finSemanaPlanId)) finSemanaPlanId = planes.length ? planes[0].id : "";
+  const plan = planes.find(x => x.id === finSemanaPlanId);
+  const estBadge = { borrador:'<span class="badge b-gris"><span class="dot"></span>Borrador</span>', enviado:'<span class="badge b-amarillo"><span class="dot"></span>Enviado</span>', cerrado:'<span class="badge b-verde"><span class="dot"></span>Cerrado</span>' };
+  let cuerpo = "";
+  if (!plan) {
+    cuerpo = `<div class="empty-state card"><p>Este proyecto aún no tiene planes de fin de semana.</p>${gest ? `<button class="btn btn-primary" onclick="fsNuevoPlan()">+ Crear el primer plan</button>` : '<p class="hint">Un Jefe o Supervisor puede crearlo.</p>'}</div>`;
+  } else {
+    const cum = fsCumplimiento(plan);
+    const zonas = {}; plan.items.forEach(it => (zonas[it.zona || "Sin zona"] = zonas[it.zona || "Sin zona"] || []).push(it));
+    const err = fsValidarEnvio(plan);
+    cuerpo = `
+    <div class="card" style="margin-bottom:12px;">
+      <div class="flex-between" style="flex-wrap:wrap; gap:10px;">
+        <div><div style="font-size:16px; font-weight:700;">${fsFechaCorta(plan.sabado)} → ${fsFechaCorta(sumarDias(plan.sabado,1))} ${estBadge[plan.estado] || ''}</div>
+          ${plan.titulo ? `<div class="muted small" style="margin-top:2px;">🎯 ${escaparHtml(plan.titulo)}</div>` : ''}
+          ${plan.enviadoEn ? `<div class="hint">Enviado el ${plan.enviadoEn.slice(0,10)} ${plan.enviadoEn.slice(11,16)} UTC</div>` : ''}</div>
+        <div class="flex-gap" style="flex-wrap:wrap;">
+          ${gest && plan.estado !== 'cerrado' ? `<button class="btn btn-sm" onclick="fsModalItem('${plan.id}', null)">＋ Tarea</button><button class="btn btn-sm" onclick="fsModalDesdeZona('${plan.id}')">＋ Desde zona</button>` : ''}
+          ${gest && plan.estado !== 'cerrado' ? `<button class="btn btn-sm btn-primary" onclick="fsModalEnviar('${p.id}','${plan.id}')">📲 Enviar por WhatsApp</button>` : ''}
+          ${plan.estado !== 'cerrado' ? `<button class="btn btn-sm" onclick="fsCerrarPlan('${plan.id}')">Cerrar plan</button>` : (gest ? `<button class="btn btn-sm" onclick="fsReabrirPlan('${plan.id}')">Reabrir</button>` : '')}
+          ${gest && plan.items.some(i => i.resultado !== 'cumplida') && plan.estado === 'cerrado' ? `<button class="btn btn-sm" onclick="fsTrasladarPendientes('${plan.id}')">↪ Trasladar pendientes</button>` : ''}
+          ${gest ? `<button class="btn btn-sm" onclick="fsEliminarPlan('${plan.id}')">🗑</button>` : ''}
+        </div>
+      </div>
+      <div style="margin-top:10px; display:flex; gap:12px; align-items:center;"><div class="mp-bar"><i style="width:${cum.pct}%; background:#2e9e5b"></i></div><b class="mono">${cum.pct}%</b><span class="muted small">${cum.ok} cumplidas · ${cum.par} parciales · ${cum.total} en total</span></div>
+      ${plan.estado !== 'cerrado' && plan.items.length && err ? `<div class="mp-alerta" style="margin:10px 0 0;">⚠ ${err}</div>` : ''}
+      <div class="hint" style="margin-top:8px;">✓ Cada tarea queda registrada en la Carta Gantt del proyecto (fase «Fin de semana») y su avance sube al marcar el resultado.</div>
+    </div>
+    ${Object.keys(zonas).length ? Object.entries(zonas).map(([zona, its]) => `
+      <div class="card" style="margin-bottom:10px; padding:0;">
+        <div style="padding:10px 14px; font-weight:700; border-bottom:1px solid var(--line-soft);">${escaparHtml(zona)} <span class="muted small">· ${its.length}</span></div>
+        ${its.map(it => { const r = FS_RESULTADOS[it.resultado] || FS_RESULTADOS[""]; const nombres = fsNombresResp(it);
+          return `<div class="fs-row">
+            <div style="flex:1; min-width:210px;">
+              <div style="font-weight:600;">${escaparHtml(it.tarea)}</div>
+              ${it.meta ? `<div class="small" style="margin-top:2px;">🎯 ${escaparHtml(it.meta)}</div>` : `<div class="small" style="color:var(--danger); margin-top:2px;">⚠ Falta la meta</div>`}
+              <div class="muted small" style="margin-top:3px;">${it.dia==='sab'?'Sábado':it.dia==='dom'?'Domingo':'Sáb y Dom'} · ${nombres.length ? nombres.map(escaparHtml).join(', ') : '<span style="color:var(--danger)">sin responsable</span>'}</div>
+            </div>
+            <div style="min-width:170px;">
+              <select class="mp-sel" style="color:${r.c}; font-weight:600;" onchange="fsMarcarResultado('${plan.id}', ${it.id}, this.value)" ${plan.estado==='cerrado'&&!gest?'disabled':''}>
+                ${Object.entries(FS_RESULTADOS).map(([k, v]) => `<option value="${k}" ${it.resultado===k?'selected':''}>${v.t}</option>`).join('')}
+              </select>
+              <input type="text" class="mp-sel" style="width:100%; margin-top:4px;" placeholder="Nota (opcional)" value="${escaparHtml(it.nota||'')}" onchange="fsNotaItem('${plan.id}', ${it.id}, this.value)">
+            </div>
+            ${gest && plan.estado !== 'cerrado' ? `<div class="flex-gap"><button class="btn btn-sm" onclick="fsModalItem('${plan.id}', ${it.id})">Editar</button><button class="btn btn-sm" onclick="fsQuitarItem('${plan.id}', ${it.id})">✕</button></div>` : ''}
+          </div>`; }).join('')}
+      </div>`).join('') : `<div class="empty-state card">El plan está vacío. ${gest ? 'Agrega tareas una a una o desde una zona.' : ''}</div>`}`;
+  }
+  return `
+  <div class="page-head">
+    <div><h1>Metas de fin de semana</h1><div class="page-desc">Plan de trabajo con metas claras para el sábado y domingo: se envía por WhatsApp a cada responsable y queda registrado en la Carta Gantt.</div></div>
+    <div class="flex-gap">${selectorProyectos()}${gest ? `<button class="btn btn-primary" onclick="fsNuevoPlan()">+ Nuevo plan</button>` : ''}</div>
+  </div>
+  ${planes.length > 1 ? `<div class="mp-chips">${planes.map(x => `<button class="mp-chip ${x.id===finSemanaPlanId?'on':''}" onclick="finSemanaPlanId='${x.id}'; renderAll();">${fsFechaCorta(x.sabado)}${x.estado==='cerrado'?' ✓':''}</button>`).join('')}</div>` : ''}
+  ${gest && !(p.catalogoZonas||[]).length ? `<div class="mp-alerta" style="background:var(--card); border:1px dashed var(--line);"><span>¿Es el proyecto de los rieles? Carga las zonas y tareas típicas (Compac, Tornamesa, Segregado, Calibrador, Tierra, Infeed) desde tus apuntes.</span><button class="btn btn-sm" onclick="fsCargarZonasRieles()">Cargar zonas de Rieles</button></div>` : ''}
+  ${cuerpo}`;
+}
+
 // ================================================================
 // 8. SHELL Y NAVEGACIÓN
 // ================================================================
@@ -9784,6 +10155,7 @@ function NAV_ACTUAL() {
       {id:"dashboard", label:"Dashboard", icon:iconGrid()},
       {id:"proyecto360", label:"Proyecto 360°", icon:iconLayers()},
       {id:"planificacion", label:"Planificación (Gantt)", icon:iconGantt()},
+      {id:"finSemana", label:"Metas fin de semana", icon:iconTarget()},
       {id:"compras", label:"Compras", icon:iconCart()},
       {id:"comprasDirectas", label:"Compras Directas", icon:iconBolt()},
       {id:"presupuesto", label:"Presupuesto", icon:iconCoin()},
@@ -9992,7 +10364,7 @@ function renderAll() {
   const renderers = {
     dashboard: renderDashboard, miPanel: renderMiPanel, panelEquipo: renderPanelEquipo, bodegaGeneral: renderBodegaGeneral, personal: renderPersonal, proyecto360: renderProyecto360, planificacion: renderPlanificacion, compras: renderCompras,
     presupuesto: renderPresupuesto, bodega: renderBodega, reporteMateriales: renderReporteMateriales, comprasDirectas: renderComprasDirectas, punch: renderPunch, requerimientos: renderRequerimientos, galeria: renderGaleria, cuadroCarga: renderCuadroCarga,
-    recepciones: renderRecepciones, resumenOC: renderResumenOC, panol: renderPanol, acuerdos: renderAcuerdos, informesAdmin: renderInformesAdmin, protocolos: renderProtocolos,
+    recepciones: renderRecepciones, resumenOC: renderResumenOC, panol: renderPanol, acuerdos: renderAcuerdos, informesAdmin: renderInformesAdmin, protocolos: renderProtocolos, finSemana: renderFinSemana,
     fabricacion: renderFabricacion,
     reaperturas: renderReaperturas, copiloto: renderCopiloto, auditoria: renderAuditoria, actividad: renderActividad, respaldos: renderRespaldos,
   };

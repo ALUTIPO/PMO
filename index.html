@@ -502,7 +502,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.6.1";
+const APP_VERSION = "3.6.2";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -7052,10 +7052,10 @@ function modalBitacoraPunch(proyectoId, punchId, subId) {
         <textarea id="bitacoraTexto" rows="2" placeholder="Ej: Se instaló el tablero, falta rotular."></textarea>
         <label class="field-label">Fotos (opcional, puedes elegir varias)</label>
         <div class="flex-gap" style="flex-wrap:wrap;">
-          <button type="button" class="btn btn-sm" onclick="document.getElementById('bitacoraFotoGaleria').click()">🖼 Elegir de la galería</button>
+          <button type="button" class="btn btn-sm" onclick="document.getElementById('bitacoraFotoGaleria').click()">🖼 Elegir de galería / archivos</button>
           <button type="button" class="btn btn-sm" onclick="document.getElementById('bitacoraFotoCamara').click()">📷 Tomar foto ahora</button>
         </div>
-        <input type="file" id="bitacoraFotoGaleria" accept="image/*" multiple style="display:none" onchange="agregarFotosBitacora(this)">
+        <input type="file" id="bitacoraFotoGaleria" accept="image/jpeg,image/png,image/webp,image/heic,.jpg,.jpeg,.png,.webp,.heic" multiple style="display:none" onchange="agregarFotosBitacora(this)">
         <input type="file" id="bitacoraFotoCamara" accept="image/*" capture="environment" style="display:none" onchange="agregarFotosBitacora(this)">
         <div id="bitacoraFotosCount" class="hint"></div>
         <button class="btn btn-primary" style="margin-top:10px;" id="bitacoraEnviarBtn" onclick="enviarBitacoraPunch('${proyectoId}','${punchId}',${subId!=null?subId:'null'})">Publicar</button>

@@ -502,7 +502,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.6";
+const APP_VERSION = "3.6.1";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -771,6 +771,7 @@ function migrarProyecto(p) {
   p.planificacion = normalizarPlanificacion(p.planificacion);
   p.metasFinSemana = normalizarMetasFinSemana(p.metasFinSemana);
   p.catalogoZonas = normalizarCatalogoZonas(p.catalogoZonas);
+  fsRenombrarTornamesa(p);
   if(!p.iaRiesgos) p.iaRiesgos = [];
   if(!p.reportesGerenciales) p.reportesGerenciales = [];
   if(!p.reaperturas) p.reaperturas = [];
@@ -7022,6 +7023,13 @@ function cerrarCamaraDocumento() {
 }
 
 let _bitacoraFotosSeleccionadas = [];
+/* Suma las fotos elegidas (galería o cámara) a la selección actual, sin pisar las anteriores. */
+function agregarFotosBitacora(input) {
+  _bitacoraFotosSeleccionadas = _bitacoraFotosSeleccionadas.concat(Array.from(input.files || []));
+  input.value = "";
+  const c = document.getElementById('bitacoraFotosCount');
+  if (c) c.innerHTML = _bitacoraFotosSeleccionadas.length ? '📎 ' + _bitacoraFotosSeleccionadas.length + ' foto(s) lista(s) para publicar — <a href="#" onclick="_bitacoraFotosSeleccionadas=[]; document.getElementById(\'bitacoraFotosCount\').textContent=\'\'; return false;">quitar todas</a>' : '';
+}
 let _bitacoraFotosFlat = [];
 
 function modalBitacoraPunch(proyectoId, punchId, subId) {
@@ -7043,7 +7051,12 @@ function modalBitacoraPunch(proyectoId, punchId, subId) {
         <label class="field-label">Nuevo comentario</label>
         <textarea id="bitacoraTexto" rows="2" placeholder="Ej: Se instaló el tablero, falta rotular."></textarea>
         <label class="field-label">Fotos (opcional, puedes elegir varias)</label>
-        <input type="file" accept="image/*" multiple capture="environment" onchange="_bitacoraFotosSeleccionadas = Array.from(this.files); document.getElementById('bitacoraFotosCount').textContent = this.files.length ? this.files.length+' foto(s) seleccionada(s)' : '';">
+        <div class="flex-gap" style="flex-wrap:wrap;">
+          <button type="button" class="btn btn-sm" onclick="document.getElementById('bitacoraFotoGaleria').click()">🖼 Elegir de la galería</button>
+          <button type="button" class="btn btn-sm" onclick="document.getElementById('bitacoraFotoCamara').click()">📷 Tomar foto ahora</button>
+        </div>
+        <input type="file" id="bitacoraFotoGaleria" accept="image/*" multiple style="display:none" onchange="agregarFotosBitacora(this)">
+        <input type="file" id="bitacoraFotoCamara" accept="image/*" capture="environment" style="display:none" onchange="agregarFotosBitacora(this)">
         <div id="bitacoraFotosCount" class="hint"></div>
         <button class="btn btn-primary" style="margin-top:10px;" id="bitacoraEnviarBtn" onclick="enviarBitacoraPunch('${proyectoId}','${punchId}',${subId!=null?subId:'null'})">Publicar</button>
       ` : `<div class="hint" style="margin-top:10px;">Solo la persona asignada a esta tarea, o un supervisor (Líder de Terreno / Jefe de Proyecto / Gerencia), puede agregar comentarios acá.</div>`}
@@ -9777,7 +9790,7 @@ async function protPdf() {
 let finSemanaPlanId = "";
 const FS_ZONAS_RIELES = [
   {zona:"Compac", tareas:["Marcas de seccionadores","Instalar tapas amarillas de seccionadores","Sentido de giro","Paradas de emergencia y pull cord","Conexión Hytrol 24 V","Normalizar fuentes IOP","Conexión de motores en tableros","Montaje de sensor box","Conexión de sensor box in/out","Verificar postura de sensor"]},
-  {zona:"Tornamesa", tareas:["Canalización a piso","Conexión de motor principal inicial","Conexión Hytrol 24 V","Paradas de emergencia y pull cord","Marcas de seccionadores","Instalar tapas amarillas de seccionadores","Sentido de giro","Instalar fuentes Hytrol","Montaje de sensor box","Conexión de sensor box in/out","Conexión de motores","Canalización de salida","Verificar postura de sensor"]},
+  {zona:"Tomra", tareas:["Canalización a piso","Conexión de motor principal inicial","Conexión Hytrol 24 V","Paradas de emergencia y pull cord","Marcas de seccionadores","Instalar tapas amarillas de seccionadores","Sentido de giro","Instalar fuentes Hytrol","Montaje de sensor box","Conexión de sensor box in/out","Conexión de motores","Canalización de salida","Verificar postura de sensor"]},
   {zona:"Segregado", tareas:["Verificar cable de control","Montaje de seccionadores","Marca de seccionadores","Sentido de giro","Paradas de emergencia y pull cord","Montaje de fuente Hytrol","Montaje de sensor box","Conexión de sensor box in/out","Verificar postura de sensor","Montaje de IOP"]},
   {zona:"Calibrador", tareas:["Cintas de reciclaje (4 unid.)","Alimentadores (mejorar tendido)","Marca de seccionadores","Tapas amarillas","Sentido de giro","Loop de emergencia y cases","Cable de control y seguridad U1 → U2","Verificación de canalización de flexibles y fijaciones (abrazadera sin pernos)","Verificar conexionado","Paradas de emergencia y montaje","Cambio de puertas","Verificación de manilla y puerta nueva","Normalización de testeros","Conexión analizador de red U2","Montaje de contacto aux. de guardamotor"]},
   {zona:"Tierra general", tareas:["Comprar cable desnudo","Instalar cable desnudo"]},
@@ -9974,6 +9987,11 @@ function fsQuitarItem(planId, itemId) {
 }
 
 /* --- Catálogo de zonas --- */
+/* Corrige el nombre de la zona "Tornamesa" → "Tomra" en catálogos y planes ya creados. */
+function fsRenombrarTornamesa(p) {
+  (p.catalogoZonas || []).forEach(z => { if (z.zona === "Tornamesa") z.zona = "Tomra"; });
+  (p.metasFinSemana || []).forEach(pl => { let cambio = false; pl.items.forEach(it => { if (it.zona === "Tornamesa") { it.zona = "Tomra"; cambio = true; } }); if (cambio) fsSincronizarGantt(p, pl); });
+}
 function fsCargarZonasRieles() {
   const p = proy(); if (!puedeGestionarMetasFS()) return;
   p.catalogoZonas = JSON.parse(JSON.stringify(FS_ZONAS_RIELES));
@@ -10128,7 +10146,7 @@ function renderFinSemana() {
     <div class="flex-gap">${selectorProyectos()}${gest ? `<button class="btn btn-primary" onclick="fsNuevoPlan()">+ Nuevo plan</button>` : ''}</div>
   </div>
   ${planes.length > 1 ? `<div class="mp-chips">${planes.map(x => `<button class="mp-chip ${x.id===finSemanaPlanId?'on':''}" onclick="finSemanaPlanId='${x.id}'; renderAll();">${fsFechaCorta(x.sabado)}${x.estado==='cerrado'?' ✓':''}</button>`).join('')}</div>` : ''}
-  ${gest && !(p.catalogoZonas||[]).length ? `<div class="mp-alerta" style="background:var(--card); border:1px dashed var(--line);"><span>¿Es el proyecto de los rieles? Carga las zonas y tareas típicas (Compac, Tornamesa, Segregado, Calibrador, Tierra, Infeed) desde tus apuntes.</span><button class="btn btn-sm" onclick="fsCargarZonasRieles()">Cargar zonas de Rieles</button></div>` : ''}
+  ${gest && !(p.catalogoZonas||[]).length ? `<div class="mp-alerta" style="background:var(--card); border:1px dashed var(--line);"><span>¿Es el proyecto de los rieles? Carga las zonas y tareas típicas (Compac, Tomra, Segregado, Calibrador, Tierra, Infeed) desde tus apuntes.</span><button class="btn btn-sm" onclick="fsCargarZonasRieles()">Cargar zonas de Rieles</button></div>` : ''}
   ${cuerpo}`;
 }
 

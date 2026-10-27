@@ -502,7 +502,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.6.2";
+const APP_VERSION = "3.6.3";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -772,6 +772,7 @@ function migrarProyecto(p) {
   p.metasFinSemana = normalizarMetasFinSemana(p.metasFinSemana);
   p.catalogoZonas = normalizarCatalogoZonas(p.catalogoZonas);
   fsRenombrarTornamesa(p);
+  (p.metasFinSemana || []).forEach(pl => pl.items.forEach(it => { if (!it.area) { const z = (p.catalogoZonas || []).find(x => x.zona === it.zona); it.area = z ? z.area : ""; } }));
   if(!p.iaRiesgos) p.iaRiesgos = [];
   if(!p.reportesGerenciales) p.reportesGerenciales = [];
   if(!p.reaperturas) p.reaperturas = [];
@@ -9788,6 +9789,7 @@ async function protPdf() {
    enlace wa.me: WhatsApp se abre con el texto listo y tú pulsas Enviar.
    ===================================================================== */
 let finSemanaPlanId = "";
+const FS_AREA_RIELES = "Rieles";
 const FS_ZONAS_RIELES = [
   {zona:"Compac", tareas:["Marcas de seccionadores","Instalar tapas amarillas de seccionadores","Sentido de giro","Paradas de emergencia y pull cord","Conexión Hytrol 24 V","Normalizar fuentes IOP","Conexión de motores en tableros","Montaje de sensor box","Conexión de sensor box in/out","Verificar postura de sensor"]},
   {zona:"Tomra", tareas:["Canalización a piso","Conexión de motor principal inicial","Conexión Hytrol 24 V","Paradas de emergencia y pull cord","Marcas de seccionadores","Instalar tapas amarillas de seccionadores","Sentido de giro","Instalar fuentes Hytrol","Montaje de sensor box","Conexión de sensor box in/out","Conexión de motores","Canalización de salida","Verificar postura de sensor"]},
@@ -9812,7 +9814,12 @@ function normalizarMetasFinSemana(lista) {
 }
 function normalizarCatalogoZonas(c) {
   if (!c) return [];
-  return (Array.isArray(c) ? c : Object.values(c)).filter(Boolean).map(z => { z.tareas = Array.isArray(z.tareas) ? z.tareas : Object.values(z.tareas || {}); return z; });
+  const zonasRieles = FS_ZONAS_RIELES.map(z => z.zona.toLowerCase().replace("tornamesa", "tomra"));
+  return (Array.isArray(c) ? c : Object.values(c)).filter(Boolean).map(z => {
+    z.tareas = Array.isArray(z.tareas) ? z.tareas : Object.values(z.tareas || {});
+    if (!z.area) z.area = zonasRieles.includes(String(z.zona).toLowerCase().replace("tornamesa", "tomra")) ? FS_AREA_RIELES : "General";
+    return z;
+  });
 }
 function fsSabadoProximo(desde) {
   const f = desde || hoyISO();
@@ -9864,7 +9871,7 @@ function fsTelefonoWA(tel) {
   return d;
 }
 function fsLineasItems(plan, items, conResp) {
-  return items.map((it, i) => `${i+1}. *${it.zona ? it.zona + " – " : ""}${it.tarea}*\n   🎯 Meta: ${it.meta}\n   📅 ${it.dia==="sab"?"Sábado":it.dia==="dom"?"Domingo":"Sáb y Dom"}${conResp && fsNombresResp(it).length ? "\n   👷 " + fsNombresResp(it).join(", ") : ""}`).join("\n\n");
+  return items.map((it, i) => `${i+1}. *${it.area && it.zona ? it.area + " › " : ""}${it.zona ? it.zona + " – " : ""}${it.tarea}*\n   🎯 Meta: ${it.meta}\n   📅 ${it.dia==="sab"?"Sábado":it.dia==="dom"?"Domingo":"Sáb y Dom"}${conResp && fsNombresResp(it).length ? "\n   👷 " + fsNombresResp(it).join(", ") : ""}`).join("\n\n");
 }
 function fsMensajePersona(p, plan, persona) {
   const mios = plan.items.filter(it => (it.responsables||[]).includes(persona.id));
@@ -9967,7 +9974,7 @@ function fsTrasladarPendientes(planId) {
   const pend = plan.items.filter(it => it.resultado !== "cumplida");
   if (!pend.length) { toast("No hay tareas pendientes que trasladar.", "ok"); return; }
   const nuevo = { id: "FS-" + Date.now(), sabado: sumarDias(plan.sabado, 7), titulo: "Pendientes del " + fsFechaCorta(plan.sabado), estado: "borrador", creadoPor: DB.usuario || "",
-    items: pend.map((it, i) => ({ id: i + 1, zona: it.zona, tarea: it.tarea, meta: it.meta, dia: it.dia, responsables: (it.responsables||[]).slice(), resultado: "", nota: it.resultado === "parcial" ? "Quedó parcial el fin de semana anterior" : "" })) };
+    items: pend.map((it, i) => ({ id: i + 1, area: it.area || "", zona: it.zona, tarea: it.tarea, meta: it.meta, dia: it.dia, responsables: (it.responsables||[]).slice(), resultado: "", nota: it.resultado === "parcial" ? "Quedó parcial el fin de semana anterior" : "" })) };
   p.metasFinSemana.push(nuevo); finSemanaPlanId = nuevo.id;
   fsGuardar(p, nuevo, `${pend.length} tarea(s) trasladadas desde ${fsFechaCorta(plan.sabado)}`); renderAll();
   toast(`${pend.length} tarea(s) trasladadas al próximo fin de semana.`, "ok");
@@ -9994,14 +10001,14 @@ function fsRenombrarTornamesa(p) {
 }
 function fsCargarZonasRieles() {
   const p = proy(); if (!puedeGestionarMetasFS()) return;
-  p.catalogoZonas = JSON.parse(JSON.stringify(FS_ZONAS_RIELES));
+  p.catalogoZonas = JSON.parse(JSON.stringify(FS_ZONAS_RIELES)).map(z => Object.assign({ area: FS_AREA_RIELES }, z));
   guardarEstado(); renderAll(); toast("Zonas cargadas desde tus apuntes. Revisa que los nombres calcen con terreno.", "ok");
 }
-function fsAprenderCatalogo(p, zona, tarea) {
+function fsAprenderCatalogo(p, zona, tarea, area) {
   if (!zona) return;
   p.catalogoZonas = p.catalogoZonas || [];
   let z = p.catalogoZonas.find(x => x.zona.toLowerCase() === zona.toLowerCase());
-  if (!z) { z = { zona, tareas: [] }; p.catalogoZonas.push(z); }
+  if (!z) { z = { zona, area: area || "General", tareas: [] }; p.catalogoZonas.push(z); }
   if (tarea && !z.tareas.some(t => t.toLowerCase() === tarea.toLowerCase())) z.tareas.push(tarea);
 }
 function fsChecksResp(sel) {
@@ -10011,11 +10018,14 @@ function fsRespSeleccionados() { return Array.from(document.querySelectorAll(".f
 function fsModalItem(planId, itemId) {
   if (!puedeGestionarMetasFS()) { toast("Solo jefaturas y supervisores editan las tareas del plan.", "danger"); return; }
   const p = proy(); const plan = p.metasFinSemana.find(x => x.id === planId); if (!plan) return;
-  const it = itemId ? plan.items.find(x => x.id === itemId) : { zona:"", tarea:"", meta:"", dia:"ambos", responsables:[] };
+  const it = itemId ? plan.items.find(x => x.id === itemId) : { area:"", zona:"", tarea:"", meta:"", dia:"ambos", responsables:[] };
   const cat = p.catalogoZonas || [];
   openModal(`
     <div class="modal-head"><h3>${itemId ? 'Editar' : 'Nueva'} tarea</h3><button class="close-x" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
+      <label class="field-label">Área</label>
+      <input list="fsAreas" id="fsArea" value="${escaparHtml(it.area || '')}" placeholder="Ej: Rieles" style="width:100%;">
+      <datalist id="fsAreas">${Array.from(new Set(cat.map(z => z.area))).map(a => `<option value="${escaparHtml(a)}">`).join('')}</datalist>
       <label class="field-label">Zona / equipo</label>
       <input list="fsZonas" id="fsZona" value="${escaparHtml(it.zona)}" placeholder="Ej: Compac" style="width:100%;" oninput="fsActualizarTareas()">
       <datalist id="fsZonas">${cat.map(z => `<option value="${escaparHtml(z.zona)}">`).join('')}</datalist>
@@ -10035,16 +10045,18 @@ function fsModalItem(planId, itemId) {
 function fsActualizarTareas() {
   const p = proy(); const zona = (document.getElementById("fsZona") || {}).value || "";
   const z = (p.catalogoZonas || []).find(x => x.zona.toLowerCase() === zona.trim().toLowerCase());
+  const aIn = document.getElementById("fsArea"); if (z && aIn && !aIn.value.trim()) aIn.value = z.area || "";
   const dl = document.getElementById("fsTareas"); if (dl) dl.innerHTML = (z ? z.tareas : []).map(t => `<option value="${escaparHtml(t)}">`).join("");
 }
 function fsGuardarItem(planId, itemId) {
   const p = proy(); const plan = p.metasFinSemana.find(x => x.id === planId); if (!plan) return;
   const zona = document.getElementById("fsZona").value.trim(), tarea = document.getElementById("fsTarea").value.trim();
   if (!tarea) { toast("Escribe la tarea.", "danger"); return; }
-  const datos = { zona, tarea, meta: document.getElementById("fsMeta").value.trim(), dia: document.getElementById("fsDia").value, responsables: fsRespSeleccionados() };
+  const area = document.getElementById("fsArea").value.trim();
+  const datos = { area, zona, tarea, meta: document.getElementById("fsMeta").value.trim(), dia: document.getElementById("fsDia").value, responsables: fsRespSeleccionados() };
   if (itemId) Object.assign(plan.items.find(x => x.id === itemId), datos);
   else plan.items.push(Object.assign({ id: plan.items.reduce((m, x) => Math.max(m, x.id), 0) + 1, resultado: "", nota: "" }, datos));
-  fsAprenderCatalogo(p, zona, tarea);
+  fsAprenderCatalogo(p, zona, tarea, area);
   fsGuardar(p, plan, `tarea «${tarea}»`); closeModal(); renderAll();
 }
 function fsModalDesdeZona(planId) {
@@ -10055,7 +10067,7 @@ function fsModalDesdeZona(planId) {
     <div class="modal-head"><h3>Agregar tareas desde una zona</h3><button class="close-x" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
       <label class="field-label">Zona</label>
-      <select id="fsZonaSel" onchange="fsPintarChecks()">${cat.map((z, i) => `<option value="${i}">${escaparHtml(z.zona)} (${z.tareas.length})</option>`).join('')}</select>
+      <select id="fsZonaSel" onchange="fsPintarChecks()">${cat.map((z, i) => `<option value="${i}">${escaparHtml(z.area ? z.area + ' › ' : '')}${escaparHtml(z.zona)} (${z.tareas.length})</option>`).join('')}</select>
       <div id="fsChecks" style="max-height:240px; overflow:auto; margin:10px 0; border:1px solid var(--line-soft); border-radius:8px; padding:8px;"></div>
       <label class="field-label">Día</label>
       <select id="fsDia"><option value="ambos">Sábado y domingo</option><option value="sab">Solo sábado</option><option value="dom">Solo domingo</option></select>
@@ -10076,7 +10088,7 @@ function fsAgregarDesdeZona(planId) {
   if (!idx.length) { toast("Marca al menos una tarea.", "danger"); return; }
   const dia = document.getElementById("fsDia").value, resp = fsRespSeleccionados();
   let id = plan.items.reduce((m, x) => Math.max(m, x.id), 0);
-  idx.forEach(i => plan.items.push({ id: ++id, zona: z.zona, tarea: z.tareas[i], meta: "", dia, responsables: resp.slice(), resultado: "", nota: "" }));
+  idx.forEach(i => plan.items.push({ id: ++id, area: z.area || "", zona: z.zona, tarea: z.tareas[i], meta: "", dia, responsables: resp.slice(), resultado: "", nota: "" }));
   fsGuardar(p, plan, `${idx.length} tarea(s) de ${z.zona}`); closeModal(); renderAll();
 }
 
@@ -10100,7 +10112,7 @@ function renderFinSemana() {
     cuerpo = `<div class="empty-state card"><p>Este proyecto aún no tiene planes de fin de semana.</p>${gest ? `<button class="btn btn-primary" onclick="fsNuevoPlan()">+ Crear el primer plan</button>` : '<p class="hint">Un Jefe o Supervisor puede crearlo.</p>'}</div>`;
   } else {
     const cum = fsCumplimiento(plan);
-    const zonas = {}; plan.items.forEach(it => (zonas[it.zona || "Sin zona"] = zonas[it.zona || "Sin zona"] || []).push(it));
+    const zonas = {}; plan.items.slice().sort((a, b) => ((a.area||"~")+(a.zona||"")).localeCompare((b.area||"~")+(b.zona||""))).forEach(it => { const k = (it.area || "") + "||" + (it.zona || "Sin zona"); (zonas[k] = zonas[k] || []).push(it); });
     const err = fsValidarEnvio(plan);
     cuerpo = `
     <div class="card" style="margin-bottom:12px;">
@@ -10120,9 +10132,9 @@ function renderFinSemana() {
       ${plan.estado !== 'cerrado' && plan.items.length && err ? `<div class="mp-alerta" style="margin:10px 0 0;">⚠ ${err}</div>` : ''}
       <div class="hint" style="margin-top:8px;">✓ Cada tarea queda registrada en la Carta Gantt del proyecto (fase «Fin de semana») y su avance sube al marcar el resultado.</div>
     </div>
-    ${Object.keys(zonas).length ? Object.entries(zonas).map(([zona, its]) => `
+    ${Object.keys(zonas).length ? Object.entries(zonas).map(([clave, its]) => { const [area, zona] = clave.split('||'); return `
       <div class="card" style="margin-bottom:10px; padding:0;">
-        <div style="padding:10px 14px; font-weight:700; border-bottom:1px solid var(--line-soft);">${escaparHtml(zona)} <span class="muted small">· ${its.length}</span></div>
+        <div style="padding:10px 14px; font-weight:700; border-bottom:1px solid var(--line-soft);">${area ? `<span class="mp-proy" style="background:#6d5bd0; margin-right:8px;">${escaparHtml(area)}</span>` : ''}${escaparHtml(zona)} <span class="muted small">· ${its.length}</span></div>
         ${its.map(it => { const r = FS_RESULTADOS[it.resultado] || FS_RESULTADOS[""]; const nombres = fsNombresResp(it);
           return `<div class="fs-row">
             <div style="flex:1; min-width:210px;">
@@ -10138,7 +10150,7 @@ function renderFinSemana() {
             </div>
             ${gest && plan.estado !== 'cerrado' ? `<div class="flex-gap"><button class="btn btn-sm" onclick="fsModalItem('${plan.id}', ${it.id})">Editar</button><button class="btn btn-sm" onclick="fsQuitarItem('${plan.id}', ${it.id})">✕</button></div>` : ''}
           </div>`; }).join('')}
-      </div>`).join('') : `<div class="empty-state card">El plan está vacío. ${gest ? 'Agrega tareas una a una o desde una zona.' : ''}</div>`}`;
+      </div>`; }).join('') : `<div class="empty-state card">El plan está vacío. ${gest ? 'Agrega tareas una a una o desde una zona.' : ''}</div>`}`;
   }
   return `
   <div class="page-head">
@@ -10146,7 +10158,7 @@ function renderFinSemana() {
     <div class="flex-gap">${selectorProyectos()}${gest ? `<button class="btn btn-primary" onclick="fsNuevoPlan()">+ Nuevo plan</button>` : ''}</div>
   </div>
   ${planes.length > 1 ? `<div class="mp-chips">${planes.map(x => `<button class="mp-chip ${x.id===finSemanaPlanId?'on':''}" onclick="finSemanaPlanId='${x.id}'; renderAll();">${fsFechaCorta(x.sabado)}${x.estado==='cerrado'?' ✓':''}</button>`).join('')}</div>` : ''}
-  ${gest && !(p.catalogoZonas||[]).length ? `<div class="mp-alerta" style="background:var(--card); border:1px dashed var(--line);"><span>¿Es el proyecto de los rieles? Carga las zonas y tareas típicas (Compac, Tomra, Segregado, Calibrador, Tierra, Infeed) desde tus apuntes.</span><button class="btn btn-sm" onclick="fsCargarZonasRieles()">Cargar zonas de Rieles</button></div>` : ''}
+  ${gest && !(p.catalogoZonas||[]).length ? `<div class="mp-alerta" style="background:var(--card); border:1px dashed var(--line);"><span>¿Es el proyecto de los rieles? Carga el área Rieles con sus zonas y tareas típicas (Compac, Tomra, Segregado, Calibrador, Tierra, Infeed) desde tus apuntes.</span><button class="btn btn-sm" onclick="fsCargarZonasRieles()">Cargar zonas de Rieles</button></div>` : ''}
   ${cuerpo}`;
 }
 

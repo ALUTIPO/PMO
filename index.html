@@ -502,7 +502,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.6.4";
+const APP_VERSION = "3.6.5";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -768,6 +768,7 @@ function normalizarPlanificacion(lista) {
   });
 }
 function migrarProyecto(p) {
+  exNormalizarProyecto(p);
   p.planificacion = normalizarPlanificacion(p.planificacion);
   p.metasFinSemana = normalizarMetasFinSemana(p.metasFinSemana);
   p.catalogoZonas = normalizarCatalogoZonas(p.catalogoZonas);
@@ -3209,8 +3210,8 @@ function renderDashboard() {
       <div class="page-desc">${esFab ? 'Perfilería de aluminio — carritos logísticos, pasarelas, barandas, escaleras y otros equipos de taller.' : 'Instalaciones eléctricas — avance ponderado, semáforo por desviación y alertas de compras críticas.'} Solo se muestra información de esta área.</div>
     </div>
     <div class="flex-gap">
-      ${(!esFab && !proyectoCL511Existe() && (esAdministrador() || DB.role==="Jefe de Proyecto" || DB.role==="Gerencia")) ? `
-        <button class="btn btn-primary" onclick="cargarProyectoCL511()" title="Crea el proyecto con las tareas del Planner y las fechas críticas del Kick-off">➕ Cargar CL511-01-A (TOMRA Baika)</button>
+      ${(!esFab && puedeImportarProyecto()) ? `
+        <button class="btn btn-primary" onclick="modalImportarProyecto()" title="Crea o actualiza un proyecto desde el documento madre Project Delivery (Excel)">📥 Importar proyecto desde Excel</button>
       ` : ''}
       ${(!esFab && (esAdministrador() || ROLES_VER_ACTIVIDAD.includes(DB.role))) ? `
         <button class="btn" onclick="exportarReporteKPIsPDF()" title="Descargar reporte de KPIs en PDF, para la reunión">📄 Reporte PDF</button>
@@ -9149,38 +9150,379 @@ function modalEditarProyecto(pid) {
 
 
 /* =====================================================================
-   CARGA DE PROYECTO DESDE DOCUMENTO MADRE: CL511-01-A (TOMRA Baika T5S)
-   Se crea con un botón (no automático) y solo si no existe ya.
+   IMPORTADOR DE PROYECTO DESDE EXCEL "Project Delivery" (V3.7)
+   Lee las hojas Kick-off, CPM, Planner y Follow Up del documento madre y
+   deja todo explícito en la app: datos generales, montos con conversión
+   USD→CLP (tipo de cambio y fecha), CPM con check, acuerdos, fechas
+   críticas, seguimiento de compras al exterior y observaciones detectadas.
+   Funciones ex* = lectura pura (probadas con datos reales del Excel).
    ===================================================================== */
-const SEED_CL511 = {
-  codigo:"CL511-01-A", nombre:"TOP-050752 Baika T5S 6L TK", cliente:"TOMRA", clienteFinal:"Baika",
-  pm:"Paulo Paredes", fechaKickoff:"2026-09-30",
-  tareas:[["Kick-Off Meeting", "Definición de layout", "2026-09-30", "2026-09-30"], ["OV Layout Definition", "Definición de layout", "2026-09-28", "2026-10-19"], ["HYTROL FBC - Detailed Engineering", "Diseño y suministro de equipos", "2026-10-12", "2026-10-26"], ["HYTROL FBC All Others - Manufacturing", "Diseño y suministro de equipos", "2026-10-26", "2026-12-21"], ["HYTROL FBC All Others - Shipping", "Diseño y suministro de equipos", "2026-12-21", "2027-03-01"], ["HYTROL FBC MRT - Manufacturing", "Diseño y suministro de equipos", "2026-10-26", "2027-01-18"], ["HYTROL FBC MRT - Shipping", "Diseño y suministro de equipos", "2027-01-18", "2027-03-29"], ["SS Conveyors Cintas de Embalaje - Detailed Engineering", "Diseño y suministro de equipos", "2026-10-12", "2026-10-26"], ["SS Conveyors Cintas de Embalaje - Manufacturing", "Diseño y suministro de equipos", "2026-10-26", "2026-12-28"], ["SS Conveyors Cintas de Embalaje - Shipping", "Diseño y suministro de equipos", "2026-12-28", "2027-03-01"], ["SS Conveyors All Others - Detailed Engineering", "Diseño y suministro de equipos", "2026-10-26", "2026-11-16"], ["SS Conveyors All Others - Manufacturing", "Diseño y suministro de equipos", "2026-11-16", "2027-01-18"], ["SS Conveyors All Others- Shipping", "Diseño y suministro de equipos", "2027-01-18", "2027-03-22"], ["SPS Platforms - Detailed Engineering", "Diseño y suministro de equipos", "2026-10-12", "2026-11-02"], ["SPS Platforms - Manufacturing", "Diseño y suministro de equipos", "2026-11-02", "2026-12-21"], ["SPS Platforms - Shipping", "Diseño y suministro de equipos", "2026-12-21", "2027-02-22"], ["PRAMINSA Paletizadores - Detailed Engineering", "Diseño y suministro de equipos", "2026-10-12", "2026-10-26"], ["PRAMINSA Paletizadores - Design & Manufacturing", "Diseño y suministro de equipos", "2026-10-26", "2027-03-15"], ["PRAMINSA Paletizadores - Shipping", "Diseño y suministro de equipos", "2027-03-15", "2027-05-10"], ["ELECTRICAL - Listado Componentes", "Diseño y suministro de equipos", "2026-10-19", "2026-11-02"], ["ELECTRICAL - Purchasing", "Diseño y suministro de equipos", "2026-11-02", "2026-12-28"], ["ELECTRICAL - Shipping", "Diseño y suministro de equipos", "2026-12-28", "2027-03-01"], ["ELECTRICAL - Armado MCC Calibrador", "Diseño y suministro de equipos", "2027-03-01", "2027-03-22"], ["ELECTRICAL - Armado MCC Material Handling", "Diseño y suministro de equipos", "2027-03-08", "2027-03-29"], ["TOMRA T5S", "Instalación en sitio", "2027-02-01", "2027-03-29"], ["ALUTIPO Montaje Eléctrico Calibrador", "Instalación en sitio", "2027-02-15", "2027-03-29"], ["ALUTIPO Entrega Tablero Eléctricos Calibrador", "Instalación en sitio", "2027-03-22", "2027-03-22"], ["ALUTIPO Montaje Mecánico Pasarelas", "Instalación en sitio", "2027-02-22", "2027-03-22"], ["ALUTIPO Montaje Mecánico Rieles+Conveyors", "Instalación en sitio", "2027-03-01", "2027-04-05"], ["ALUTIPO Montaje Eléctrico Material Handling", "Instalación en sitio", "2027-03-15", "2027-04-19"], ["ALUTIPO Entrega Tablero Eléctricos Material Handling", "Instalación en sitio", "2027-03-29", "2027-03-29"], ["ALUTIPO Montaje Paletizadores", "Instalación en sitio", "2027-05-10", "2027-05-17"], ["Comissioining Paletizadores", "Instalación en sitio", "2027-05-17", "2027-05-24"], ["ALUTIPO Automatización y Control Material Handling", "Instalación en sitio", "2027-04-12", "2027-04-19"], ["Comissioining Material Handling", "Instalación en sitio", "2027-04-19", "2027-04-26"], ["START OF PROCESS - PALETIZADO MANUAL", "Instalación en sitio", "2027-04-26", "2027-04-26"]],
-  hitos:[
-    ["Llegada ALUTIPO SPS","2027-02-15"],["Llegada primer embarque HYTROL, ALUTIPO SS Conveyors","2027-02-22"],
-    ["Llegada materiales eléctricos China","2027-02-22"],["Inicio montaje mecánico","2027-02-15"],
-    ["Inicio montaje eléctrico / entrega MCC","2027-03-15"],["Inicio de trabajos de programación y control","2027-04-05"],
-    ["Inicio de pruebas en vacío (con TOMRA)","2027-04-12"],["Inicio proceso con fruta (fecha de entrega)","2027-04-19"],
-    ["Objetivo interno: aceptación de línea y facturación","2027-05-10"]
-  ]
-};
-function proyectoCL511Existe() { return DB.proyectos.some(p => p.codigo === SEED_CL511.codigo); }
-function cargarProyectoCL511() {
-  if (!esAdministrador() && DB.role !== "Jefe de Proyecto" && DB.role !== "Gerencia") { toast("Tu rol no puede crear proyectos.", "danger"); return; }
-  if (proyectoCL511Existe()) { toast("CL511-01-A ya está cargado.", "warn"); return; }
-  const S = SEED_CL511;
-  const r = crearProyecto({ codigo:S.codigo, nombre:S.nombre, cliente:S.cliente, clienteFinal:S.clienteFinal, pm:S.pm,
-    tipo:"electrico", prioridad:"Alta", criticidad:"Alta", fechaKickoff:S.fechaKickoff });
-  if (!r) return;
-  const p = proy(r.id);
-  let n = 0;
-  const add = (nombre, fase, ini, fin, hito, resp) => { n++; p.planificacion.push({ id:n, nombre, fase, responsable:resp||"", inicio:ini, fin, avance:0, hito:!!hito, predecesores:[] }); };
-  S.tareas.forEach(t => add(t[0], t[1], t[2], t[3], t[2]===t[3]));
-  S.hitos.forEach(h => add("🚩 " + h[0], "Fechas críticas", h[1], h[1], true));
-  p.planificacion = normalizarPlanificacion(p.planificacion);
-  registrarHistorial({proyecto:p.codigo, accion:"Crear", detalle:`Cargadas ${n} tareas del Planner y fechas críticas del Kick-off`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"});
+function exNorm(s){ return String(s==null?"":s).replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu,"").normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/\s+/g," ").trim().toLowerCase(); }
+function exTxt(v){ return v==null?"":String(v).replace(/\s+/g," ").trim(); }
+function exArr(x){ return Array.isArray(x) ? x : (x && typeof x==="object" ? Object.values(x) : []); }
+function exNum(v){ if(typeof v==="number") return v; const n=parseFloat(String(v==null?"":v).replace(/[^0-9.\-]/g,"")); return isNaN(n)?0:n; }
+function exFechaISO(v){
+  if(v==null||v==="") return "";
+  if(typeof v==="number"){ return (v>20000&&v<80000) ? new Date(Math.round((v-25569)*86400000)).toISOString().slice(0,10) : ""; }
+  if(v instanceof Date) return isNaN(v) ? "" : v.toISOString().slice(0,10);
+  const s=String(v).trim(); if(!s||s==="-") return "";
+  return fechaISOSegura(s);
+}
+function exAnoCorregido(iso, ref){
+  if(iso && ref && iso < ref){ const n=(+iso.slice(0,4)+1)+iso.slice(4); if(n >= ref) return n; }
+  return iso;
+}
+function exFmt(iso){ return iso ? iso.split("-").reverse().join("-") : "—"; }
+function exBuscar(aoa, re){
+  for(let r=0;r<aoa.length;r++){ const f=aoa[r]||[]; for(let c=0;c<f.length;c++){ if(re.test(exNorm(f[c]))) return [r,c]; } }
+  return null;
+}
+function exDerecha(aoa, re, hasta){
+  const p=exBuscar(aoa,re); if(!p) return ""; const f=aoa[p[0]];
+  for(let c=p[1]+1;c<f.length && (hasta==null||c<hasta);c++){ if(exTxt(f[c])!=="") return f[c]; }
+  return "";
+}
+const EX_SEC = ["descipcion del alcance","descripcion del alcance","incluye","no incluye","compras en exterior","compras locales","requerimientos de compras","checklist aspectos criticos","acuerdos","fechas criticas","descripcion del proyecto","informacion general del proyecto","responsables"];
+function exRegion(aoa, nombres){
+  let r0=-1;
+  for(let r=0;r<aoa.length;r++){ if(nombres.includes(exNorm((aoa[r]||[])[1]))){ r0=r; break; } }
+  if(r0<0) return null;
+  let r1=aoa.length;
+  for(let r=r0+1;r<aoa.length;r++){ const t=exNorm((aoa[r]||[])[1]); if(t && EX_SEC.includes(t)){ r1=r; break; } }
+  return [r0,r1];
+}
+function exLista(aoa, nombres, col){
+  const rg=exRegion(aoa,nombres); if(!rg) return [];
+  const out=[]; for(let r=rg[0];r<rg[1];r++){ const t=exTxt((aoa[r]||[])[col==null?4:col]); if(t) out.push(t); }
+  return out;
+}
+function exParseKickoff(aoa){
+  const k={};
+  k.fechaDocumento = exFechaISO(exDerecha(aoa,/^fecha$/));
+  k.cliente = exTxt(exDerecha(aoa,/^cliente$/));
+  k.nombre = exTxt(exDerecha(aoa,/^nombre de proyecto$/));
+  k.tipoProyecto = exTxt(exDerecha(aoa,/^tipo de proyecto$/));
+  k.ubicacion = exTxt(exDerecha(aoa,/^ubicacion$/));
+  const pe=exBuscar(aoa,/^fecha de entrega$/); k.fechaEntrega = pe ? exFechaISO((aoa[pe[0]+1]||[])[pe[1]]) : "";
+  const pt=exBuscar(aoa,/^total neto/); const colTot = pt ? pt[1] : null;
+  k.usdTotal = pt ? exNum((aoa[pt[0]+1]||[])[pt[1]]) : 0;
+  const pc=exBuscar(aoa,/^cotizacion #$/); k.cotizaciones=[];
+  if(pc){ const f=aoa[pc[0]]; for(let c=pc[1]+1;c<f.length && (colTot==null||c<colTot);c++){ if(exTxt(f[c])) k.cotizaciones.push(exTxt(f[c])); } }
+  const pm=exBuscar(aoa,/^monto neto \(usd\)$/); k.montos=[];
+  if(pm){ const f=aoa[pm[0]]; for(let c=pm[1]+1;c<f.length && (colTot==null||c<colTot);c++){ if(exTxt(f[c])!=="") k.montos.push(exNum(f[c])); } }
+  k.usdCL = k.montos[0] || 0; k.usdUY = k.montos[1] || 0;
+  if(!k.usdTotal) k.usdTotal = k.usdCL + k.usdUY;
+  // Responsables y contraparte
+  k.responsables=[]; k.contraparte="";
+  const rr=exRegion(aoa,["responsables"]);
+  if(rr){ for(let r=rr[0]+1;r<rr[1];r++){ const cel=(aoa[r]||[]).map(exTxt).filter(Boolean); if(cel.length>=2){ k.responsables.push({rol:cel[0], nombre:cel[1]}); if(cel[2] && !k.contraparte) k.contraparte=cel[2]; } } }
+  const rolPM=k.responsables.find(x=>/project manager/i.test(x.rol)); k.pm = rolPM ? rolPM.nombre : "";
+  k.alcance = exLista(aoa,["descipcion del alcance","descripcion del alcance"]);
+  k.incluye = exLista(aoa,["incluye"]);
+  k.noIncluye = exLista(aoa,["no incluye"]);
+  k.comprasExterior = exLista(aoa,["compras en exterior"]);
+  k.comprasLocales = exLista(aoa,["compras locales"]);
+  // Checklist de aspectos críticos
+  k.checklist=[]; const rc=exRegion(aoa,["checklist aspectos criticos"]);
+  if(rc){ let grupo="";
+    for(let r=rc[0]+1;r<rc[1];r++){ const f=aoa[r]||[]; const b=exTxt(f[1]), c=exTxt(f[2]); const si=exTxt(f[8])!=="", no=exTxt(f[9])!=="", com=exTxt(f[10]);
+      if(!b && !c) continue;
+      if(b && !c && !si && !no && !com){ grupo=b; continue; }
+      k.checklist.push({ grupo: c ? grupo : "", item: b||c, si, no, comentario: com }); } }
+  // Acuerdos
+  k.acuerdos=[]; const ra=exRegion(aoa,["acuerdos"]);
+  if(ra){ let ic=-1, iresp=-1, h=-1;
+    for(let r=ra[0]+1;r<ra[1];r++){ const f=aoa[r]||[]; if(exNorm(f[1])==="id"){ h=r; f.forEach((v,c)=>{ const t=exNorm(v); if(/^descripcion/.test(t)) ic=c; if(/^responsable/.test(t)) iresp=c; }); break; } }
+    if(h>=0) for(let r=h+1;r<ra[1];r++){ const f=aoa[r]||[]; const d=exTxt(f[ic]); if(d) k.acuerdos.push({ id:exTxt(f[1]), desc:d, resp:exTxt(f[iresp]), hecho:false }); } }
+  // Fechas críticas
+  k.fechasCriticas=[]; const rf=exRegion(aoa,["fechas criticas"]);
+  if(rf){ let ic=-1, ifec=-1, h=-1;
+    for(let r=rf[0]+1;r<rf[1];r++){ const f=aoa[r]||[]; if(exNorm(f[1])==="id"){ h=r; f.forEach((v,c)=>{ const t=exNorm(v); if(/^descripcion/.test(t)) ic=c; if(/^fecha/.test(t)) ifec=c; }); break; } }
+    if(h>=0) for(let r=h+1;r<rf[1];r++){ const f=aoa[r]||[]; const d=exTxt(f[ic]); const fe=exFechaISO(f[ifec]); if(d && fe) k.fechasCriticas.push({ desc:d, fechaExcel:fe }); } }
+  return k;
+}
+function exParseCPM(aoa){
+  const out={ objetivo:"", items:[] };
+  const po=exBuscar(aoa,/^objetivo del documento$/); if(po){ out.objetivo = exTxt((aoa[po[0]+1]||[]).find(v=>exTxt(v)!=="")); }
+  let h=-1, col={};
+  for(let r=0;r<aoa.length;r++){ const f=aoa[r]||[]; const ns=f.map(exNorm); if(ns.includes("fase") && ns.includes("actividad")){ h=r; ns.forEach((t,c)=>{ if(t==="id") col.id=c; if(t==="fase") col.fase=c; if(t==="actividad") col.act=c; if(t==="area") col.area=c; if(t==="responsable") col.resp=c; if(t==="check") col.chk=c; }); break; } }
+  if(h<0) return out;
+  for(let r=h+1;r<aoa.length;r++){ const f=aoa[r]||[]; const act=exTxt(f[col.act]); if(!act) continue;
+    const chk=exNorm(f[col.chk]);
+    out.items.push({ ref:exTxt(f[col.id]), fase:exTxt(f[col.fase]), actividad:act, area:exTxt(f[col.area]), responsable:exTxt(f[col.resp]), hecho: ["x","si","ok","true","1","✓"].includes(chk) }); }
+  return out;
+}
+function exParsePlanner(aoa){
+  const out={ tareas:[], sinFechas:[] };
+  let h=-1, col={};
+  for(let r=0;r<aoa.length;r++){ const ns=(aoa[r]||[]).map(exNorm); if(ns.includes("task") && ns.includes("start") && ns.includes("end")){ h=r; ns.forEach((t,c)=>{ if(t==="task"&&col.t==null) col.t=c; if(t==="owner") col.o=c; if(t==="progress") col.p=c; if(t==="start"&&col.s==null) col.s=c; if(t==="end"&&col.e==null) col.e=c; }); break; } }
+  if(h<0) return out;
+  let fase="General";
+  for(let r=h+1;r<aoa.length;r++){ const f=aoa[r]||[]; const nombre=exTxt(f[col.t]); if(!nombre) continue;
+    const ini=exFechaISO(f[col.s]), fin=exFechaISO(f[col.e]); const prog=f[col.p];
+    if(!ini && !fin){ if(prog===""||prog==null){ fase=nombre; } else out.sinFechas.push({ nombre, fase }); continue; }
+    let av=exNum(prog); if(av<=1) av=av*100;
+    out.tareas.push({ nombre, fase, responsable: col.o!=null ? exTxt(f[col.o]) : "", inicio:ini||fin, fin:fin||ini, avance:Math.round(av) }); }
+  return out;
+}
+function exParseFollowUp(aoa){
+  const out={ items:[], grupos:[], totales:{}, tcExcel:0 };
+  let h=-1, col={};
+  for(let r=0;r<aoa.length;r++){ const ns=(aoa[r]||[]).map(exNorm); if(ns.includes("item") && ns.includes("description") && ns.includes("supplier")){ h=r; ns.forEach((t,c)=>{ col[t]=c; }); break; } }
+  const pc=exBuscar(aoa,/^clp$/); if(pc){ const f=aoa[pc[0]]; for(let c=pc[1]+1;c<f.length;c++){ if(typeof f[c]==="number"){ out.tcExcel=f[c]; break; } } }
+  const g=(re,off)=>{ const p=exBuscar(aoa,re); return p ? exNum((aoa[p[0]+(off||1)]||[])[p[1]]) : 0; };
+  out.totales = { costoUSD:g(/^cost$/), ventaUSD:g(/^sales price$/), margenPct:g(/^margin$/), margenUSD: (()=>{ const p=exBuscar(aoa,/^margin$/); return p ? exNum((aoa[p[0]+1]||[])[p[1]+1]) : 0; })() };
+  if(h<0) return out;
+  const v=(f,k)=>f[col[k]];
+  let grupo="";
+  for(let r=h+1;r<aoa.length;r++){ const f=aoa[r]||[]; const desc=exTxt(v(f,"description")); if(!desc) continue;
+    const comp=exTxt(v(f,"company"));
+    if(!comp){ grupo=desc; out.grupos.push({ nombre:desc, costoUSD:exNum(v(f,"cost (usd)")), ventaUSD:exNum(v(f,"sales price (usd)")) }); continue; }
+    out.items.push({ grupo, item:exTxt(v(f,"item")), qty:exNum(v(f,"qty")), desc, empresa:comp, codigo:exTxt(v(f,"project code")), proveedor:exTxt(v(f,"supplier")), origen:exTxt(v(f,"origin")), estado:exTxt(v(f,"status")), contenedores:exTxt(v(f,"qty of containers")), etaPlanExcel:exFechaISO(v(f,"eta (planned)")), costoUSD:exNum(v(f,"cost (usd)")), ventaUSD:exNum(v(f,"sales price (usd)")) }); }
+  return out;
+}
+function exParseProyecto(hojas, nombreArchivo){
+  const get=(re)=>{ const k=Object.keys(hojas).find(n=>re.test(exNorm(n))); return k ? hojas[k] : null; };
+  const aK=get(/^kick/), aC=get(/^cpm/), aP=get(/^planner/), aF=get(/^follow/), aX=get(/^punch/);
+  if(!aK) throw new Error("No encontré la hoja «Kick-off». ¿Es el documento madre Project Delivery?");
+  const R={ kickoff:exParseKickoff(aK), cpm: aC?exParseCPM(aC):{objetivo:"",items:[]}, planner: aP?exParsePlanner(aP):{tareas:[],sinFechas:[]}, followUp: aF?exParseFollowUp(aF):{items:[],grupos:[],totales:{},tcExcel:0}, punchFilas:0 };
+  if(aX){ const hh=aX.findIndex(f=>(f||[]).map(exNorm).includes("item name")); if(hh>=0) R.punchFilas = aX.slice(hh+1).filter(f=>exTxt((f||[])[2])!=="").length; }
+  const k=R.kickoff;
+  const m=String(nombreArchivo||"").match(/CL\d{3}-\d{2}(?:-[A-Z])?/);
+  R.codigo = m ? m[0] : ((k.cotizaciones[0]||"").replace(/-Q(?=-|$)/,"") || "SIN-CODIGO");
+  R.nombre = k.nombre || R.codigo;
+  // Fechas con año corregido (el Excel trae años 2026 en fechas que son 2027)
+  const ref = k.fechaDocumento || (R.planner.tareas[0]||{}).inicio || "";
+  k.fechasCriticas.forEach(f=>{ f.fecha = exAnoCorregido(f.fechaExcel, ref); f.corregida = f.fecha!==f.fechaExcel; });
+  R.followUp.items.forEach(i=>{ i.etaPlan = exAnoCorregido(i.etaPlanExcel, ref); i.etaCorregida = i.etaPlan!==i.etaPlanExcel; });
+  R.observaciones = exObservaciones(R);
+  return R;
+}
+function exObservaciones(R){
+  const o=[], k=R.kickoff, F=R.followUp;
+  const fc=k.fechasCriticas.filter(f=>f.corregida);
+  if(fc.length) o.push({ nivel:"warn", texto:`${fc.length} fecha(s) crítica(s) del Kick-off venían con año anterior al documento y se cargaron con +1 año: ` + fc.map(f=>`«${f.desc}» ${exFmt(f.fechaExcel)} → ${exFmt(f.fecha)}`).join("; ") + ". Confírmalo con Project Management." });
+  const ec=F.items.filter(i=>i.etaCorregida);
+  if(ec.length) o.push({ nivel:"warn", texto:`${ec.length} ETA planificada(s) del Follow Up tenían año anterior al documento y se cargaron con +1 año (ej.: ${ec.slice(0,3).map(i=>`${i.desc} ${exFmt(i.etaPlanExcel)} → ${exFmt(i.etaPlan)}`).join("; ")}).` });
+  if(k.usdTotal && F.totales.ventaUSD && Math.abs(k.usdTotal-F.totales.ventaUSD)/k.usdTotal > 0.005)
+    o.push({ nivel:"warn", texto:`El Total neto del Kick-off (USD ${Math.round(k.usdTotal).toLocaleString("es-CL")}) no coincide con el precio de venta del Follow Up (USD ${Math.round(F.totales.ventaUSD).toLocaleString("es-CL")}): diferencia de USD ${Math.round(Math.abs(F.totales.ventaUSD-k.usdTotal)).toLocaleString("es-CL")}.` });
+  if(R.planner.sinFechas.length) o.push({ nivel:"warn", texto:`${R.planner.sinFechas.length} fila(s) del Planner no tienen fechas y no entran a la Gantt: ` + R.planner.sinFechas.map(t=>t.nombre).join(", ") + "." });
+  const fin = R.planner.tareas.reduce((m,t)=>t.fin>m?t.fin:m,"");
+  if(k.fechaEntrega && fin && fin > k.fechaEntrega) o.push({ nivel:"warn", texto:`La fecha de entrega del Kick-off (${exFmt(k.fechaEntrega)}) es anterior al término del Planner (${exFmt(fin)}).` });
+  const ids={}; R.cpm.items.forEach(i=>{ if(i.ref) ids[i.ref]=(ids[i.ref]||0)+1; });
+  const dup=Object.keys(ids).filter(x=>ids[x]>1);
+  if(dup.length) o.push({ nivel:"info", texto:`El CPM repite el número de actividad ${dup.join(", ")}; en la app se numeran de corrido.` });
+  if(R.planner.tareas.length && R.planner.tareas.every(t=>!t.responsable)) o.push({ nivel:"info", texto:"El Planner no trae responsables por tarea (columna OWNER vacía)." });
+  const sinResp=k.acuerdos.filter(a=>!a.resp).length; if(sinResp) o.push({ nivel:"info", texto:`${sinResp} acuerdo(s) sin responsable.` });
+  if(!R.punchFilas) o.push({ nivel:"info", texto:"La hoja Punch List del Excel está vacía (se usa el Punch List de la app)." });
+  return o;
+}
+
+/* ---- Interfaz de importación ---- */
+let _impProy = null;
+function puedeImportarProyecto(){ return esAdministrador() || DB.role==="Jefe de Proyecto" || DB.role==="Gerencia"; }
+function modalImportarProyecto(){
+  if(!puedeImportarProyecto()){ toast(`Tu rol (${DB.role}) no puede crear proyectos.`, "danger"); return; }
+  _impProy=null;
+  openModal(`
+    <div class="modal-head"><h3>Importar proyecto desde Excel</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <p class="hint">Sube el documento madre <b>Project Delivery</b> (hojas Kick-off, CPM, Planner y Follow Up). Verás un resumen antes de crear nada. Si el código ya existe, se actualizan los datos del Excel conservando avances y checks.</p>
+      <input type="file" id="impProyFile" accept=".xlsx,.xlsm" onchange="previsualizarImportProyecto(this)">
+      <div id="impProyPreview" style="margin-top:12px;"></div>
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" id="impProyBtn" disabled onclick="confirmarImportProyecto()">Crear / actualizar proyecto</button></div>
+  `, 680);
+}
+async function previsualizarImportProyecto(input){
+  const file=input.files[0], box=document.getElementById('impProyPreview'), btn=document.getElementById('impProyBtn');
+  btn.disabled=true; if(!file){ box.innerHTML=""; return; }
+  box.innerHTML='<div class="hint">Leyendo el Excel…</div>';
+  if(!(await asegurarXLSX())){ box.innerHTML='<div class="hint" style="color:var(--danger)">No se pudo cargar el lector de Excel. Revisa tu conexión.</div>'; return; }
+  const reader=new FileReader();
+  reader.onload=(e)=>{
+    try{
+      const wb=XLSX.read(e.target.result,{type:'array'}); const hojas={};
+      wb.SheetNames.forEach(n=>{ const ws=wb.Sheets[n]; if(ws['!ref']){ const rg=XLSX.utils.decode_range(ws['!ref']); rg.e.c=Math.min(rg.e.c,40); rg.e.r=Math.min(rg.e.r,400); ws['!ref']=XLSX.utils.encode_range(rg); } hojas[n]=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:""}); });
+      _impProy=exParseProyecto(hojas,file.name); _impProy.archivo=file.name;
+      box.innerHTML=htmlPreviewImportProyecto(_impProy); btn.disabled=false;
+    }catch(err){ box.innerHTML=`<div class="hint" style="color:var(--danger)">${escaparHtml(err.message||String(err))}</div>`; }
+  };
+  reader.readAsArrayBuffer(file);
+}
+function impProyBaseUSD(){ const R=_impProy; const b=(document.getElementById('impBase')||{}).value; return b==="cl" ? R.kickoff.usdCL : R.kickoff.usdTotal; }
+function impProyActualizarCLP(){ const tc=parseFloat(String((document.getElementById('impTC')||{}).value).replace(",", ".")); const el=document.getElementById('impCLP'); if(el) el.textContent = tc>0 ? money(impProyBaseUSD()*tc) : "—"; }
+function htmlPreviewImportProyecto(R){
+  const k=R.kickoff, existe=DB.proyectos.some(p=>p.codigo===R.codigo);
+  const obs=R.observaciones.map(x=>`<li style="margin-bottom:4px;">${x.nivel==='warn'?'⚠️':'ℹ️'} ${escaparHtml(x.texto)}</li>`).join("");
+  return `
+    ${existe?`<div class="alert-chip" style="margin-bottom:10px;">Ya existe un proyecto con este código: se actualizarán sus datos del Excel (avances y checks se conservan).</div>`:''}
+    <div class="grid-2" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <label class="small muted">Código<input type="text" id="impCodigo" value="${escaparHtml(R.codigo)}"></label>
+      <label class="small muted">Nombre<input type="text" id="impNombre" value="${escaparHtml(R.nombre)}"></label>
+      <div><div class="small muted">Cliente</div><b>${escaparHtml(k.cliente||"—")}</b></div>
+      <div><div class="small muted">PM · Entrega</div><b>${escaparHtml(k.pm||"—")} · ${exFmt(k.fechaEntrega)}</b></div>
+    </div>
+    <div class="card" style="margin:12px 0;padding:12px;">
+      <div class="small muted" style="margin-bottom:6px;">Monto en USD y conversión a pesos</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;">
+        <label class="small muted">Monto a convertir
+          <select id="impBase" onchange="impProyActualizarCLP()">
+            <option value="total">Total neto: USD ${Math.round(k.usdTotal).toLocaleString('es-CL')} (CL + UY)</option>
+            <option value="cl">Solo ${escaparHtml(k.cotizaciones[0]||'Chile')}: USD ${Math.round(k.usdCL).toLocaleString('es-CL')}</option>
+          </select></label>
+        <label class="small muted">Tipo de cambio (CLP por USD)<input type="text" id="impTC" value="${R.followUp.tcExcel||''}" placeholder="Ej: 950" oninput="impProyActualizarCLP()"></label>
+        <label class="small muted">Fecha del tipo de cambio<input type="date" id="impTCFecha" value="${hoyISO()}"></label>
+        <div><div class="small muted">Presupuesto en pesos</div><b id="impCLP" style="font-size:16px;">—</b></div>
+      </div>
+      <p class="hint" style="margin-top:6px;">${R.followUp.tcExcel?`El Excel usa ${R.followUp.tcExcel} CLP/USD en el Follow Up (referencia de planificación). `:''}Escribe el dólar observado de la fecha de carga; queda registrado y se puede actualizar después.</p>
+    </div>
+    <div class="small" style="margin-bottom:8px;">Se cargarán: <b>${R.planner.tareas.length}</b> tareas del Planner · <b>${k.fechasCriticas.length}</b> fechas críticas · <b>${R.cpm.items.length}</b> actividades CPM · <b>${k.acuerdos.length}</b> acuerdos · <b>${k.checklist.length}</b> puntos de checklist · <b>${R.followUp.items.length}</b> ítems de compras al exterior.</div>
+    ${obs?`<div class="small"><b>Observaciones detectadas</b><ul style="margin:6px 0 0 18px;padding:0;">${obs}</ul></div>`:''}
+  `;
+}
+function confirmarImportProyecto(){
+  const R=_impProy; if(!R) return;
+  if(!puedeImportarProyecto()){ toast("Tu rol no puede crear proyectos.", "danger"); return; }
+  const codigo=(document.getElementById('impCodigo').value||"").trim(), nombre=(document.getElementById('impNombre').value||"").trim();
+  const tc=parseFloat(String(document.getElementById('impTC').value).replace(",", ".")), fechaTC=document.getElementById('impTCFecha').value||hoyISO();
+  if(!codigo||!nombre){ toast("Código y nombre son obligatorios.", "danger"); return; }
+  if(!(tc>0)){ toast("Ingresa el tipo de cambio (CLP por USD) para convertir el monto.", "danger"); return; }
+  const base=document.getElementById('impBase').value;
+  aplicarImportProyecto(R, { codigo, nombre, tc, fechaTC, base });
+  closeModal();
+}
+function aplicarImportProyecto(R, o){
+  const k=R.kickoff, F=R.followUp;
+  const usd = o.base==="cl" ? k.usdCL : k.usdTotal, clp = Math.round(usd*o.tc);
+  let p = DB.proyectos.find(x=>x.codigo===o.codigo), nuevo=false;
+  if(!p){
+    const r=crearProyecto({ codigo:o.codigo, nombre:o.nombre, cliente:k.cliente, clienteFinal:"", pm:k.pm||DB.usuario, tipo:"electrico", prioridad:"Alta", criticidad:"Alta", fechaKickoff:(R.planner.tareas.find(t=>/kick/i.test(t.nombre))||{}).inicio || k.fechaDocumento || hoyISO(), presupuesto:clp });
+    if(!r) return; p=proy(r.id); nuevo=true;
+  } else { p.nombre=o.nombre; p.cliente=k.cliente||p.cliente; if(k.pm) p.pm=k.pm; p.presupuestoTotal=clp; }
+  // Conservar avances / checks de una carga anterior
+  const avPrev={}; (p.planificacion||[]).forEach(t=>{ avPrev[exNorm(t.nombre)]=t.avance; });
+  const chkPrev={}; exArr(p.cpm&&p.cpm.items).forEach(i=>{ chkPrev[exNorm(i.fase+"|"+i.actividad)]=i; });
+  const acPrev={}; exArr(p.kickoff&&p.kickoff.acuerdos).forEach(a=>{ acPrev[exNorm(a.desc)]=a; });
+  // Gantt: reemplaza lo que vino del Excel (o del botón anterior), conserva el resto
+  const FASES_EXCEL=new Set(R.planner.tareas.map(t=>t.fase).concat(["Fechas críticas"]));
+  p.planificacion=(p.planificacion||[]).filter(t=> !(t.origenExcel || (FASES_EXCEL.has(t.fase) && !t.origenPunchId && !t.origenFinSemana && !t.origenFinSemanaItem)));
+  let nid=p.planificacion.reduce((m,t)=>Math.max(m,t.id||0),0);
+  const add=(nombre,fase,resp,ini,fin,av,hito)=>{ nid++; p.planificacion.push({ id:nid, nombre, fase, responsable:resp||"", inicio:ini, fin, avance:avPrev[exNorm(nombre)]!=null?avPrev[exNorm(nombre)]:av, hito:!!hito, predecesores:[], origenExcel:true }); };
+  R.planner.tareas.forEach(t=>add(t.nombre,t.fase,t.responsable,t.inicio,t.fin,t.avance,t.inicio===t.fin));
+  k.fechasCriticas.forEach(f=>add("🚩 "+f.desc,"Fechas críticas","",f.fecha,f.fecha,0,true));
+  p.planificacion=normalizarPlanificacion(p.planificacion);
+  // Datos explícitos
+  p.fechaEntrega=k.fechaEntrega||"";
+  p.montos={ usdBase:o.base, usdUsado:usd, usdVentaCL:k.usdCL, usdVentaUY:k.usdUY, usdVentaTotal:k.usdTotal, tipoCambio:o.tc, fechaTipoCambio:o.fechaTC, clp:clp,
+             usdCostoFollowUp:F.totales.costoUSD||0, usdVentaFollowUp:F.totales.ventaUSD||0, margenPct:F.totales.margenPct||0, margenUSD:F.totales.margenUSD||0, tcExcel:F.tcExcel||0 };
+  const hist=exArr(p.historialTC); hist.push({ fecha:o.fechaTC, tipoCambio:o.tc, clp:clp, usuario:DB.usuario, motivo:"Carga desde Excel" }); p.historialTC=hist;
+  p.kickoff={ fechaDocumento:k.fechaDocumento, tipoProyecto:k.tipoProyecto, ubicacion:k.ubicacion, cotizaciones:k.cotizaciones, contraparte:k.contraparte, responsables:k.responsables,
+    alcance:k.alcance, incluye:k.incluye, noIncluye:k.noIncluye, comprasExterior:k.comprasExterior, comprasLocales:k.comprasLocales, checklist:k.checklist,
+    acuerdos:k.acuerdos.map(a=>({ ...a, hecho: acPrev[exNorm(a.desc)] ? !!acPrev[exNorm(a.desc)].hecho : false })),
+    fechasCriticas:k.fechasCriticas.map(f=>({ desc:f.desc, fecha:f.fecha, fechaExcel:f.fechaExcel, corregida:!!f.corregida })) };
+  p.cpm={ objetivo:R.cpm.objetivo, items:R.cpm.items.map((i,n)=>{ const prev=chkPrev[exNorm(i.fase+"|"+i.actividad)]; return { id:n+1, ref:i.ref, fase:i.fase, actividad:i.actividad, area:i.area, responsable:i.responsable, hecho: prev ? !!prev.hecho : !!i.hecho, fechaHecho: prev ? (prev.fechaHecho||"") : "" }; }) };
+  p.seguimientoExterior={ items:F.items.map(i=>({ grupo:i.grupo, item:i.item, qty:i.qty, desc:i.desc, empresa:i.empresa, codigo:i.codigo, proveedor:i.proveedor, origen:i.origen, estado:i.estado, contenedores:i.contenedores, etaPlan:i.etaPlan, etaPlanExcel:i.etaPlanExcel, etaCorregida:!!i.etaCorregida, costoUSD:i.costoUSD, ventaUSD:i.ventaUSD })), grupos:F.grupos };
+  p.observacionesCarga=R.observaciones;
+  p.archivoOrigen={ nombre:R.archivo||"", fecha:hoyISO(), usuario:DB.usuario };
+  DB.proyectoActivo=p.id;
+  registrarHistorial({proyecto:p.codigo, accion:nuevo?"Crear":"Modificar", detalle:`Proyecto ${nuevo?'importado':'actualizado'} desde Excel (${R.archivo||''}): ${R.planner.tareas.length} tareas, ${R.cpm.items.length} actividades CPM, USD ${Math.round(usd).toLocaleString('es-CL')} × ${o.tc} (${o.fechaTC}) = ${money(clp)}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"});
   guardarEstado();
-  goTo('planificacion');
+  toast(nuevo?"Proyecto creado desde el Excel.":"Proyecto actualizado desde el Excel.", "ok");
+  goTo('kickoff');
+}
+function exNormalizarProyecto(p){
+  if(p.cpm){ p.cpm.items=exArr(p.cpm.items); } 
+  if(p.kickoff){ ["cotizaciones","responsables","alcance","incluye","noIncluye","comprasExterior","comprasLocales","checklist","acuerdos","fechasCriticas"].forEach(c=>{ p.kickoff[c]=exArr(p.kickoff[c]); }); }
+  if(p.seguimientoExterior){ p.seguimientoExterior.items=exArr(p.seguimientoExterior.items); p.seguimientoExterior.grupos=exArr(p.seguimientoExterior.grupos); }
+  p.observacionesCarga=exArr(p.observacionesCarga); p.historialTC=exArr(p.historialTC);
+}
+
+/* ---- Página «Kick-off y CPM» ---- */
+let kickTab="resumen", kickFiltroResp="";
+function puedeEditarKickoff(){ return puedeEditarPlanificacion() || puedeGestionarProtocolos(); }
+function kickToggleCPM(id){ const p=proy(); const i=p.cpm.items.find(x=>x.id===id); if(!i||!puedeEditarKickoff()) return; i.hecho=!i.hecho; i.fechaHecho=i.hecho?hoyISO():""; guardarEstado(); renderAll(); }
+function kickToggleAcuerdo(n){ const p=proy(); const a=p.kickoff.acuerdos[n]; if(!a||!puedeEditarKickoff()) return; a.hecho=!a.hecho; guardarEstado(); renderAll(); }
+function modalTipoCambio(){
+  const p=proy(); if(!p.montos) return;
+  if(!puedeImportarProyecto()){ toast("Solo Administrador, Jefe de Proyecto o Gerencia pueden cambiar el tipo de cambio.", "danger"); return; }
+  openModal(`
+    <div class="modal-head"><h3>Actualizar tipo de cambio</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <p class="hint">Monto base: USD ${Math.round(p.montos.usdUsado).toLocaleString('es-CL')}. Se recalcula el presupuesto en pesos y queda el historial.</p>
+      <label class="small muted">Tipo de cambio (CLP por USD)<input type="text" id="tcNuevo" value="${p.montos.tipoCambio}"></label>
+      <label class="small muted">Fecha<input type="date" id="tcFecha" value="${hoyISO()}"></label>
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="guardarTipoCambio()">Guardar</button></div>`);
+}
+function guardarTipoCambio(){
+  const p=proy(); const tc=parseFloat(String(document.getElementById('tcNuevo').value).replace(",", ".")); const f=document.getElementById('tcFecha').value||hoyISO();
+  if(!(tc>0)){ toast("Tipo de cambio inválido.", "danger"); return; }
+  const clp=Math.round(p.montos.usdUsado*tc);
+  p.montos.tipoCambio=tc; p.montos.fechaTipoCambio=f; p.montos.clp=clp; p.presupuestoTotal=clp;
+  p.historialTC=exArr(p.historialTC); p.historialTC.push({ fecha:f, tipoCambio:tc, clp, usuario:DB.usuario, motivo:"Actualización manual" });
+  registrarHistorial({proyecto:p.codigo, accion:"Modificar", detalle:`Tipo de cambio ${tc} (${f}): presupuesto ${money(clp)}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"});
+  guardarEstado(); closeModal(); renderAll();
+}
+function renderKickoff(){
+  if(!proyectosDelArea().length) return `<div class="page-head"><div><h1>Kick-off y CPM</h1></div></div><div class="empty-state card">Aún no hay proyectos.</div>`;
+  const p=proy(); exNormalizarProyecto(p);
+  const head=`<div class="page-head"><div><h1>Kick-off y CPM</h1><div class="page-desc">${escaparHtml(p.codigo)} · ${escaparHtml(p.nombre)}</div></div><div class="flex-gap">${puedeImportarProyecto()?`<button class="btn" onclick="modalImportarProyecto()">📥 Importar / actualizar desde Excel</button>`:''}</div></div>`;
+  if(!p.kickoff && !p.cpm) return head+`<div class="empty-state card">Este proyecto no se creó desde el documento madre. Usa «Importar / actualizar desde Excel» con el código del proyecto para cargar Kick-off, CPM y compras al exterior.</div>`;
+  const K=p.kickoff||{}, M=p.montos, C=p.cpm||{items:[]};
+  const hechas=C.items.filter(i=>i.hecho).length, pctC=C.items.length?Math.round(hechas*100/C.items.length):0;
+  const tabs=[["resumen","Resumen"],["cpm",`CPM (${hechas}/${C.items.length})`],["acuerdos","Acuerdos"],["fechas","Fechas críticas"],["exterior","Compras al exterior"],["obs",`Observaciones (${(p.observacionesCarga||[]).length})`]];
+  const nav=`<div class="mp-chips" style="margin-bottom:12px;">${tabs.map(t=>`<button class="mp-chip ${kickTab===t[0]?'on':''}" onclick="kickTab='${t[0]}'; renderAll();">${t[1]}</button>`).join("")}</div>`;
+  const lista=(tit,arr)=> arr&&arr.length ? `<div class="card" style="padding:12px;margin-bottom:10px;"><b>${tit}</b><ul style="margin:6px 0 0 18px;padding:0;">${arr.map(x=>`<li class="small">${escaparHtml(x)}</li>`).join("")}</ul></div>` : "";
+  let cuerpo="";
+  if(kickTab==="resumen"){
+    const montos = M ? `<div class="card" style="padding:14px;margin-bottom:12px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;"><b>Monto y conversión a pesos</b>${puedeImportarProyecto()?`<button class="btn btn-sm" onclick="modalTipoCambio()">Actualizar tipo de cambio</button>`:''}</div>
+      <div class="tbl-wrap"><table class="tbl" style="margin-top:8px;"><tbody>
+        <tr><td>Total neto Kick-off (CL + UY)</td><td style="text-align:right">${money(M.usdVentaTotal,'USD')}</td></tr>
+        <tr><td>&nbsp;&nbsp;de ello ${escaparHtml((K.cotizaciones||[])[0]||'Chile')}</td><td style="text-align:right">${money(M.usdVentaCL,'USD')}</td></tr>
+        <tr><td>&nbsp;&nbsp;de ello ${escaparHtml((K.cotizaciones||[])[1]||'Uruguay')}</td><td style="text-align:right">${money(M.usdVentaUY,'USD')}</td></tr>
+        <tr><td><b>Monto convertido (${M.usdBase==='cl'?'solo Chile':'total neto'})</b></td><td style="text-align:right"><b>${money(M.usdUsado,'USD')}</b></td></tr>
+        <tr><td>Tipo de cambio aplicado (${exFmt(M.fechaTipoCambio)})</td><td style="text-align:right">${M.tipoCambio} CLP/USD</td></tr>
+        <tr><td><b>Presupuesto en pesos</b></td><td style="text-align:right"><b>${money(M.clp)}</b></td></tr>
+        <tr><td>Follow Up: costo · venta · margen</td><td style="text-align:right">${money(M.usdCostoFollowUp,'USD')} · ${money(M.usdVentaFollowUp,'USD')} · ${Math.round((M.margenPct||0)*100)}%</td></tr>
+      </tbody></table></div>
+      ${exArr(p.historialTC).length>1?`<div class="small muted" style="margin-top:6px;">Historial: ${exArr(p.historialTC).map(h=>`${exFmt(h.fecha)}: ${h.tipoCambio}`).join(" → ")}</div>`:''}
+    </div>` : "";
+    cuerpo = montos + `<div class="card" style="padding:14px;margin-bottom:12px;"><div class="grid-2" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div><div class="small muted">Cliente</div><b>${escaparHtml(p.cliente)}</b></div><div><div class="small muted">Tipo</div><b>${escaparHtml(K.tipoProyecto||'—')}</b></div>
+      <div><div class="small muted">Ubicación</div><b>${escaparHtml(K.ubicacion||'—')}</b></div><div><div class="small muted">Fecha de entrega</div><b>${exFmt(p.fechaEntrega)}</b></div>
+      <div><div class="small muted">Cotizaciones</div><b>${escaparHtml((K.cotizaciones||[]).join(' · ')||'—')}</b></div><div><div class="small muted">Contraparte cliente</div><b>${escaparHtml(K.contraparte||'—')}</b></div>
+    </div>
+    <div class="small muted" style="margin-top:10px;">Responsables</div>
+    <div class="small">${(K.responsables||[]).map(r=>`${escaparHtml(r.rol)}: <b>${escaparHtml(r.nombre)}</b>`).join(" · ")}</div></div>`
+    + lista("Alcance",K.alcance) + lista("Incluye",K.incluye) + lista("No incluye",K.noIncluye) + lista("Compras en exterior",K.comprasExterior) + lista("Compras locales",K.comprasLocales)
+    + ((K.checklist||[]).length ? `<div class="card" style="padding:12px;"><b>Checklist de aspectos críticos</b><div class="tbl-wrap"><table class="tbl" style="margin-top:6px;"><thead><tr><th>Punto</th><th>Sí</th><th>No</th><th>Comentario</th></tr></thead><tbody>${K.checklist.map(c=>`<tr><td>${c.grupo?escaparHtml(c.grupo)+' › ':''}${escaparHtml(c.item)}</td><td>${c.si?'✔':''}</td><td>${c.no?'✔':''}</td><td>${escaparHtml(c.comentario||'')}</td></tr>`).join("")}</tbody></table></div></div>` : "")
+    + (p.archivoOrigen?`<p class="small muted" style="margin-top:8px;">Origen: ${escaparHtml(p.archivoOrigen.nombre)} · cargado ${exFmt(p.archivoOrigen.fecha)} por ${escaparHtml(p.archivoOrigen.usuario)}</p>`:'');
+  } else if(kickTab==="cpm"){
+    const resps=[...new Set(C.items.map(i=>i.responsable).filter(Boolean))].sort();
+    const items=C.items.filter(i=>!kickFiltroResp || i.responsable===kickFiltroResp);
+    const fases=[...new Set(items.map(i=>i.fase))];
+    const edit=puedeEditarKickoff();
+    cuerpo = (C.objetivo?`<p class="hint">${escaparHtml(C.objetivo)}</p>`:'')
+      + `<div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;"><div class="progressbar" style="flex:1"><span style="width:${pctC}%"></span></div><b>${pctC}%</b>
+         <select onchange="kickFiltroResp=this.value; renderAll();"><option value="">Todos los responsables</option>${resps.map(r=>`<option value="${escaparHtml(r)}" ${r===kickFiltroResp?'selected':''}>${escaparHtml(r)}</option>`).join("")}</select></div>`
+      + fases.map(f=>{ const fi=items.filter(i=>i.fase===f); const h=fi.filter(i=>i.hecho).length;
+          return `<div class="card" style="padding:12px;margin-bottom:10px;"><b>${escaparHtml(f)}</b> <span class="small muted">${h}/${fi.length}</span>
+          <div class="tbl-wrap"><table class="tbl" style="margin-top:6px;"><tbody>${fi.map(i=>`<tr><td style="width:34px"><input type="checkbox" ${i.hecho?'checked':''} ${edit?'':'disabled'} onchange="kickToggleCPM(${i.id})"></td><td>${escaparHtml(i.actividad)}${i.hecho&&i.fechaHecho?` <span class="small muted">· ${exFmt(i.fechaHecho)}</span>`:''}</td><td class="small muted">${escaparHtml(i.area)}</td><td class="small">${escaparHtml(i.responsable)}</td></tr>`).join("")}</tbody></table></div></div>`; }).join("");
+  } else if(kickTab==="acuerdos"){
+    const edit=puedeEditarKickoff();
+    cuerpo = (K.acuerdos||[]).length ? `<div class="card" style="padding:12px;"><table class="tbl"><thead><tr><th></th><th>#</th><th>Acuerdo</th><th>Responsable</th></tr></thead><tbody>${K.acuerdos.map((a,n)=>`<tr><td style="width:34px"><input type="checkbox" ${a.hecho?'checked':''} ${edit?'':'disabled'} onchange="kickToggleAcuerdo(${n})"></td><td>${escaparHtml(a.id)}</td><td>${escaparHtml(a.desc)}</td><td>${escaparHtml(a.resp||'—')}</td></tr>`).join("")}</tbody></table></div>` : '<div class="empty-state card">Sin acuerdos.</div>';
+  } else if(kickTab==="fechas"){
+    cuerpo = (K.fechasCriticas||[]).length ? `<div class="card" style="padding:12px;"><table class="tbl"><thead><tr><th>Hito</th><th>Fecha</th><th>Nota</th></tr></thead><tbody>${K.fechasCriticas.slice().sort((a,b)=>a.fecha.localeCompare(b.fecha)).map(f=>`<tr><td>${escaparHtml(f.desc)}</td><td>${exFmt(f.fecha)}</td><td class="small muted">${f.corregida?`⚠️ el Excel decía ${exFmt(f.fechaExcel)}`:''}</td></tr>`).join("")}</tbody></table></div>` : '<div class="empty-state card">Sin fechas críticas.</div>';
+  } else if(kickTab==="exterior"){
+    const S=p.seguimientoExterior||{items:[],grupos:[]};
+    cuerpo = S.items.length ? `<div class="card" style="padding:12px;"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Grupo</th><th>Descripción</th><th>Proveedor</th><th>Origen</th><th>Estado</th><th>ETA plan.</th><th style="text-align:right">Costo USD</th><th style="text-align:right">Venta USD</th></tr></thead><tbody>${S.items.map(i=>`<tr><td class="small muted">${escaparHtml(i.grupo||'')}</td><td>${escaparHtml(i.desc)}<div class="small muted">${escaparHtml(i.codigo)}</div></td><td>${escaparHtml(i.proveedor)}</td><td>${escaparHtml(i.origen)}</td><td>${escaparHtml(i.estado)}</td><td>${exFmt(i.etaPlan)}${i.etaCorregida?' ⚠️':''}</td><td style="text-align:right">${Math.round(i.costoUSD).toLocaleString('es-CL')}</td><td style="text-align:right">${Math.round(i.ventaUSD).toLocaleString('es-CL')}</td></tr>`).join("")}</tbody></table></div></div>` : '<div class="empty-state card">Sin ítems de Follow Up.</div>';
+  } else {
+    const o=p.observacionesCarga||[];
+    cuerpo = o.length ? `<div class="card" style="padding:14px;"><p class="hint">Detectadas al comparar las hojas del Excel entre sí. Corrígelas en el Excel y vuelve a importar, o ajústalas en la app.</p><ul style="margin:0 0 0 18px;padding:0;">${o.map(x=>`<li style="margin-bottom:6px;">${x.nivel==='warn'?'⚠️':'ℹ️'} ${escaparHtml(x.texto)}</li>`).join("")}</ul></div>` : '<div class="empty-state card">Sin observaciones.</div>';
+  }
+  return head+nav+cuerpo;
 }
 
 function crearProyecto(datos) {
@@ -10224,6 +10566,7 @@ function NAV_ACTUAL() {
       {id:"dashboard", label:"Dashboard", icon:iconGrid()},
       {id:"proyecto360", label:"Proyecto 360°", icon:iconLayers()},
       {id:"planificacion", label:"Planificación (Gantt)", icon:iconGantt()},
+      {id:"kickoff", label:"Kick-off y CPM", icon:iconClipboard()},
       {id:"finSemana", label:"Metas fin de semana", icon:iconTarget()},
       {id:"compras", label:"Compras", icon:iconCart()},
       {id:"comprasDirectas", label:"Compras Directas", icon:iconBolt()},
@@ -10433,7 +10776,7 @@ function renderAll() {
   const renderers = {
     dashboard: renderDashboard, miPanel: renderMiPanel, panelEquipo: renderPanelEquipo, bodegaGeneral: renderBodegaGeneral, personal: renderPersonal, proyecto360: renderProyecto360, planificacion: renderPlanificacion, compras: renderCompras,
     presupuesto: renderPresupuesto, bodega: renderBodega, reporteMateriales: renderReporteMateriales, comprasDirectas: renderComprasDirectas, punch: renderPunch, requerimientos: renderRequerimientos, galeria: renderGaleria, cuadroCarga: renderCuadroCarga,
-    recepciones: renderRecepciones, resumenOC: renderResumenOC, panol: renderPanol, acuerdos: renderAcuerdos, informesAdmin: renderInformesAdmin, protocolos: renderProtocolos, finSemana: renderFinSemana,
+    recepciones: renderRecepciones, resumenOC: renderResumenOC, panol: renderPanol, acuerdos: renderAcuerdos, informesAdmin: renderInformesAdmin, protocolos: renderProtocolos, finSemana: renderFinSemana, kickoff: renderKickoff,
     fabricacion: renderFabricacion,
     reaperturas: renderReaperturas, copiloto: renderCopiloto, auditoria: renderAuditoria, actividad: renderActividad, respaldos: renderRespaldos,
   };

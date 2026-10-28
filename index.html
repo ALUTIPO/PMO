@@ -502,7 +502,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.6.3";
+const APP_VERSION = "3.6.4";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -3209,6 +3209,9 @@ function renderDashboard() {
       <div class="page-desc">${esFab ? 'Perfilería de aluminio — carritos logísticos, pasarelas, barandas, escaleras y otros equipos de taller.' : 'Instalaciones eléctricas — avance ponderado, semáforo por desviación y alertas de compras críticas.'} Solo se muestra información de esta área.</div>
     </div>
     <div class="flex-gap">
+      ${(!esFab && !proyectoCL511Existe() && (esAdministrador() || DB.role==="Jefe de Proyecto" || DB.role==="Gerencia")) ? `
+        <button class="btn btn-primary" onclick="cargarProyectoCL511()" title="Crea el proyecto con las tareas del Planner y las fechas críticas del Kick-off">➕ Cargar CL511-01-A (TOMRA Baika)</button>
+      ` : ''}
       ${(!esFab && (esAdministrador() || ROLES_VER_ACTIVIDAD.includes(DB.role))) ? `
         <button class="btn" onclick="exportarReporteKPIsPDF()" title="Descargar reporte de KPIs en PDF, para la reunión">📄 Reporte PDF</button>
         <button class="btn" onclick="exportarReporteKPIsExcel()" title="Descargar reporte de KPIs en Excel">📊 Reporte Excel</button>
@@ -9142,6 +9145,42 @@ function modalEditarProyecto(pid) {
         editarProyecto('${pid}', d); closeModal(); renderAll();">Guardar cambios</button>
     </div>
   `);
+}
+
+
+/* =====================================================================
+   CARGA DE PROYECTO DESDE DOCUMENTO MADRE: CL511-01-A (TOMRA Baika T5S)
+   Se crea con un botón (no automático) y solo si no existe ya.
+   ===================================================================== */
+const SEED_CL511 = {
+  codigo:"CL511-01-A", nombre:"TOP-050752 Baika T5S 6L TK", cliente:"TOMRA", clienteFinal:"Baika",
+  pm:"Paulo Paredes", fechaKickoff:"2026-09-30",
+  tareas:[["Kick-Off Meeting", "Definición de layout", "2026-09-30", "2026-09-30"], ["OV Layout Definition", "Definición de layout", "2026-09-28", "2026-10-19"], ["HYTROL FBC - Detailed Engineering", "Diseño y suministro de equipos", "2026-10-12", "2026-10-26"], ["HYTROL FBC All Others - Manufacturing", "Diseño y suministro de equipos", "2026-10-26", "2026-12-21"], ["HYTROL FBC All Others - Shipping", "Diseño y suministro de equipos", "2026-12-21", "2027-03-01"], ["HYTROL FBC MRT - Manufacturing", "Diseño y suministro de equipos", "2026-10-26", "2027-01-18"], ["HYTROL FBC MRT - Shipping", "Diseño y suministro de equipos", "2027-01-18", "2027-03-29"], ["SS Conveyors Cintas de Embalaje - Detailed Engineering", "Diseño y suministro de equipos", "2026-10-12", "2026-10-26"], ["SS Conveyors Cintas de Embalaje - Manufacturing", "Diseño y suministro de equipos", "2026-10-26", "2026-12-28"], ["SS Conveyors Cintas de Embalaje - Shipping", "Diseño y suministro de equipos", "2026-12-28", "2027-03-01"], ["SS Conveyors All Others - Detailed Engineering", "Diseño y suministro de equipos", "2026-10-26", "2026-11-16"], ["SS Conveyors All Others - Manufacturing", "Diseño y suministro de equipos", "2026-11-16", "2027-01-18"], ["SS Conveyors All Others- Shipping", "Diseño y suministro de equipos", "2027-01-18", "2027-03-22"], ["SPS Platforms - Detailed Engineering", "Diseño y suministro de equipos", "2026-10-12", "2026-11-02"], ["SPS Platforms - Manufacturing", "Diseño y suministro de equipos", "2026-11-02", "2026-12-21"], ["SPS Platforms - Shipping", "Diseño y suministro de equipos", "2026-12-21", "2027-02-22"], ["PRAMINSA Paletizadores - Detailed Engineering", "Diseño y suministro de equipos", "2026-10-12", "2026-10-26"], ["PRAMINSA Paletizadores - Design & Manufacturing", "Diseño y suministro de equipos", "2026-10-26", "2027-03-15"], ["PRAMINSA Paletizadores - Shipping", "Diseño y suministro de equipos", "2027-03-15", "2027-05-10"], ["ELECTRICAL - Listado Componentes", "Diseño y suministro de equipos", "2026-10-19", "2026-11-02"], ["ELECTRICAL - Purchasing", "Diseño y suministro de equipos", "2026-11-02", "2026-12-28"], ["ELECTRICAL - Shipping", "Diseño y suministro de equipos", "2026-12-28", "2027-03-01"], ["ELECTRICAL - Armado MCC Calibrador", "Diseño y suministro de equipos", "2027-03-01", "2027-03-22"], ["ELECTRICAL - Armado MCC Material Handling", "Diseño y suministro de equipos", "2027-03-08", "2027-03-29"], ["TOMRA T5S", "Instalación en sitio", "2027-02-01", "2027-03-29"], ["ALUTIPO Montaje Eléctrico Calibrador", "Instalación en sitio", "2027-02-15", "2027-03-29"], ["ALUTIPO Entrega Tablero Eléctricos Calibrador", "Instalación en sitio", "2027-03-22", "2027-03-22"], ["ALUTIPO Montaje Mecánico Pasarelas", "Instalación en sitio", "2027-02-22", "2027-03-22"], ["ALUTIPO Montaje Mecánico Rieles+Conveyors", "Instalación en sitio", "2027-03-01", "2027-04-05"], ["ALUTIPO Montaje Eléctrico Material Handling", "Instalación en sitio", "2027-03-15", "2027-04-19"], ["ALUTIPO Entrega Tablero Eléctricos Material Handling", "Instalación en sitio", "2027-03-29", "2027-03-29"], ["ALUTIPO Montaje Paletizadores", "Instalación en sitio", "2027-05-10", "2027-05-17"], ["Comissioining Paletizadores", "Instalación en sitio", "2027-05-17", "2027-05-24"], ["ALUTIPO Automatización y Control Material Handling", "Instalación en sitio", "2027-04-12", "2027-04-19"], ["Comissioining Material Handling", "Instalación en sitio", "2027-04-19", "2027-04-26"], ["START OF PROCESS - PALETIZADO MANUAL", "Instalación en sitio", "2027-04-26", "2027-04-26"]],
+  hitos:[
+    ["Llegada ALUTIPO SPS","2027-02-15"],["Llegada primer embarque HYTROL, ALUTIPO SS Conveyors","2027-02-22"],
+    ["Llegada materiales eléctricos China","2027-02-22"],["Inicio montaje mecánico","2027-02-15"],
+    ["Inicio montaje eléctrico / entrega MCC","2027-03-15"],["Inicio de trabajos de programación y control","2027-04-05"],
+    ["Inicio de pruebas en vacío (con TOMRA)","2027-04-12"],["Inicio proceso con fruta (fecha de entrega)","2027-04-19"],
+    ["Objetivo interno: aceptación de línea y facturación","2027-05-10"]
+  ]
+};
+function proyectoCL511Existe() { return DB.proyectos.some(p => p.codigo === SEED_CL511.codigo); }
+function cargarProyectoCL511() {
+  if (!esAdministrador() && DB.role !== "Jefe de Proyecto" && DB.role !== "Gerencia") { toast("Tu rol no puede crear proyectos.", "danger"); return; }
+  if (proyectoCL511Existe()) { toast("CL511-01-A ya está cargado.", "warn"); return; }
+  const S = SEED_CL511;
+  const r = crearProyecto({ codigo:S.codigo, nombre:S.nombre, cliente:S.cliente, clienteFinal:S.clienteFinal, pm:S.pm,
+    tipo:"electrico", prioridad:"Alta", criticidad:"Alta", fechaKickoff:S.fechaKickoff });
+  if (!r) return;
+  const p = proy(r.id);
+  let n = 0;
+  const add = (nombre, fase, ini, fin, hito, resp) => { n++; p.planificacion.push({ id:n, nombre, fase, responsable:resp||"", inicio:ini, fin, avance:0, hito:!!hito, predecesores:[] }); };
+  S.tareas.forEach(t => add(t[0], t[1], t[2], t[3], t[2]===t[3]));
+  S.hitos.forEach(h => add("🚩 " + h[0], "Fechas críticas", h[1], h[1], true));
+  p.planificacion = normalizarPlanificacion(p.planificacion);
+  registrarHistorial({proyecto:p.codigo, accion:"Crear", detalle:`Cargadas ${n} tareas del Planner y fechas críticas del Kick-off`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"});
+  guardarEstado();
+  goTo('planificacion');
 }
 
 function crearProyecto(datos) {

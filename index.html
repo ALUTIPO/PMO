@@ -502,7 +502,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.6.5";
+const APP_VERSION = "3.6.6";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -9435,7 +9435,89 @@ function exNormalizarProyecto(p){
   if(p.cpm){ p.cpm.items=exArr(p.cpm.items); } 
   if(p.kickoff){ ["cotizaciones","responsables","alcance","incluye","noIncluye","comprasExterior","comprasLocales","checklist","acuerdos","fechasCriticas"].forEach(c=>{ p.kickoff[c]=exArr(p.kickoff[c]); }); }
   if(p.seguimientoExterior){ p.seguimientoExterior.items=exArr(p.seguimientoExterior.items); p.seguimientoExterior.grupos=exArr(p.seguimientoExterior.grupos); }
-  p.observacionesCarga=exArr(p.observacionesCarga); p.historialTC=exArr(p.historialTC);
+  p.observacionesCarga=exArr(p.observacionesCarga); p.historialTC=exArr(p.historialTC); p.ordenes=exArr(p.ordenes);
+}
+
+/* ---- Órdenes del proyecto desde la Project List (V3.6.6) ---- */
+function exAreaOrden(nombre){
+  const n=exNorm(nombre);
+  if(/material handling/.test(n)) return "Material Handling (Rieles)";
+  if(/main line/.test(n)) return "Main Line (Calibrador e Infeed Tomra)";
+  if(/infeed/.test(n)) return "Infeed (modificaciones)";
+  if(/electrical/.test(n)) return "Eléctrica";
+  if(/transport|accommodation/.test(n)) return "Traslado y alojamiento";
+  if(/mechanical/.test(n)) return "Montaje mecánico";
+  return "Otras";
+}
+function exParseProjectList(aoa, prefijo){
+  let h=-1, col={};
+  for(let r=0;r<aoa.length && r<10;r++){ const ns=(aoa[r]||[]).map(exNorm); if(ns.includes("codigo de proyecto")){ h=r; ns.forEach((t,c)=>{ if(t) col[t]=c; }); break; } }
+  if(h<0) throw new Error("No encontré la hoja «Proyectos» con la columna CODIGO DE PROYECTO. ¿Es la Project List de Alutipo Chile?");
+  const g=(f,k)=>f[col[k]];
+  const out=[];
+  for(let r=h+1;r<aoa.length;r++){ const f=aoa[r]||[]; const cod=exTxt(g(f,"codigo de proyecto"));
+    if(!cod || !cod.startsWith(prefijo)) continue;
+    const nombre=exTxt(g(f,"nombre de proyecto")); const usd=exNum(g(f,"total neto (usd)")), tc=exNum(g(f,"tipo de cambio"));
+    const saldoRaw=g(f,"saldo (clp)");
+    out.push({ codigo:cod, nombre, estado:exTxt(g(f,"status")), area:exAreaOrden(nombre), electrica:/electrical/i.test(nombre),
+      usd, tc, clpIVA:exNum(g(f,"total iva incl. (clp)")), anticipo:exNum(g(f,"anticipo (clp)")), saldo: /paid/i.test(exTxt(saldoRaw)) ? 0 : exNum(saldoRaw), pagado:/paid/i.test(exTxt(saldoRaw)),
+      po:exTxt(g(f,"po cliente")), entrega:exFechaISO(g(f,"fecha de entrega")) }); }
+  return out;
+}
+let _impOrd=null;
+function modalImportarOrdenes(){
+  const p=proy(); if(!puedeImportarProyecto()){ toast("Solo Administrador, Jefe de Proyecto o Gerencia.", "danger"); return; }
+  _impOrd=null;
+  openModal(`
+    <div class="modal-head"><h3>Órdenes desde la Project List</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <p class="hint">Sube el Excel <b>Project List / Sales</b>. Se leen las órdenes del proyecto <b>${escaparHtml(p.codigo.split('-')[0])}</b> y eliges cuáles forman el presupuesto del área eléctrica. Se usa el tipo de cambio de cada orden.</p>
+      <input type="file" id="impOrdFile" accept=".xlsx,.xlsm" onchange="previsualizarOrdenes(this)">
+      <div id="impOrdPreview" style="margin-top:12px;"></div>
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" id="impOrdBtn" disabled onclick="confirmarOrdenes()">Aplicar al proyecto</button></div>`, 760);
+}
+async function previsualizarOrdenes(input){
+  const file=input.files[0], box=document.getElementById('impOrdPreview'), btn=document.getElementById('impOrdBtn'); btn.disabled=true;
+  if(!file){ box.innerHTML=""; return; }
+  box.innerHTML='<div class="hint">Leyendo el Excel (puede tardar unos segundos)…</div>';
+  if(!(await asegurarXLSX())){ box.innerHTML='<div class="hint" style="color:var(--danger)">No se pudo cargar el lector de Excel.</div>'; return; }
+  const reader=new FileReader();
+  reader.onload=(e)=>{
+    try{
+      const wb=XLSX.read(e.target.result,{type:'array',sheets:['Proyectos']}); const ws=wb.Sheets['Proyectos'];
+      if(!ws) throw new Error("El archivo no tiene la hoja «Proyectos».");
+      if(ws['!ref']){ const rg=XLSX.utils.decode_range(ws['!ref']); rg.e.c=Math.min(rg.e.c,30); ws['!ref']=XLSX.utils.encode_range(rg); }
+      const aoa=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:""});
+      const prefijo=proy().codigo.split("-")[0]+"-";
+      _impOrd=exParseProjectList(aoa,prefijo).map(o=>({...o, incluida:o.electrica && o.estado!=="CANCELLED"}));
+      if(!_impOrd.length) throw new Error("No hay órdenes con código "+prefijo+"… en la Project List.");
+      box.innerHTML=htmlOrdenes(); btn.disabled=false;
+    }catch(err){ box.innerHTML=`<div class="hint" style="color:var(--danger)">${escaparHtml(err.message||String(err))}</div>`; }
+  };
+  reader.readAsArrayBuffer(file);
+}
+function htmlOrdenes(){
+  const L=_impOrd, inc=L.filter(o=>o.incluida), sumUSD=inc.reduce((a,o)=>a+o.usd,0), sumCLP=inc.reduce((a,o)=>a+Math.round(o.usd*o.tc),0);
+  const conMonto=L.filter(o=>o.estado!=="CANCELLED"&&o.usd>0), totLista=conMonto.reduce((a,o)=>a+o.usd,0);
+  return `<div class="tbl-wrap"><table class="tbl"><thead><tr><th></th><th>Código</th><th>Orden</th><th>Estado</th><th style="text-align:right">USD neto</th><th>TC</th><th style="text-align:right">CLP neto</th></tr></thead><tbody>
+    ${L.map((o,i)=>`<tr style="${o.estado==='CANCELLED'?'opacity:.5':''}"><td><input type="checkbox" ${o.incluida?'checked':''} ${o.usd>0&&o.estado!=='CANCELLED'?'':'disabled'} onchange="_impOrd[${i}].incluida=this.checked; document.getElementById('impOrdPreview').innerHTML=htmlOrdenes();"></td>
+      <td>${escaparHtml(o.codigo)}</td><td>${escaparHtml(o.nombre.replace(/^TOP-050752 Baika T5S 6L TK - /,''))}<div class="small muted">${escaparHtml(o.area)}</div></td><td class="small">${escaparHtml(o.estado)}</td>
+      <td style="text-align:right">${o.usd?Math.round(o.usd).toLocaleString('es-CL'):'—'}</td><td>${o.tc||'—'}</td><td style="text-align:right">${o.usd?money(Math.round(o.usd*o.tc)):'—'}</td></tr>`).join("")}
+  </tbody></table></div>
+  <div class="card" style="margin-top:10px;padding:12px;"><div style="display:flex;justify-content:space-between;"><b>Presupuesto del área eléctrica (órdenes marcadas)</b><b>USD ${Math.round(sumUSD).toLocaleString('es-CL')} · ${money(sumCLP)}</b></div>
+  <div class="small muted" style="margin-top:4px;">La Project List suma USD ${Math.round(totLista).toLocaleString('es-CL')} con monto asignado (sin canceladas); el resto de las órdenes aún no tiene monto cargado.</div></div>`;
+}
+function confirmarOrdenes(){
+  const p=proy(); if(!_impOrd) return; const inc=_impOrd.filter(o=>o.incluida);
+  if(!inc.length){ toast("Marca al menos una orden.", "danger"); return; }
+  const usd=inc.reduce((a,o)=>a+o.usd,0), clp=inc.reduce((a,o)=>a+Math.round(o.usd*o.tc),0), tcProm=Math.round(clp/usd*100)/100;
+  p.ordenes=_impOrd.map(o=>({ codigo:o.codigo, nombre:o.nombre, estado:o.estado, area:o.area, usd:o.usd, tc:o.tc, clpNeto:Math.round(o.usd*o.tc), clpIVA:o.clpIVA, anticipo:o.anticipo, saldo:o.saldo, pagado:o.pagado, po:o.po, entrega:o.entrega, incluida:!!o.incluida }));
+  p.montos=p.montos||{}; Object.assign(p.montos,{ usdBase:"ordenes", usdUsado:usd, tipoCambio:tcProm, fechaTipoCambio:hoyISO(), clp:clp });
+  p.presupuestoTotal=clp;
+  const h=exArr(p.historialTC); h.push({ fecha:hoyISO(), tipoCambio:tcProm, clp, usuario:DB.usuario, motivo:"Órdenes desde Project List ("+inc.map(o=>o.codigo).join(", ")+")" }); p.historialTC=h;
+  registrarHistorial({proyecto:p.codigo, accion:"Modificar", detalle:`Presupuesto eléctrico desde Project List: ${inc.map(o=>o.codigo).join(", ")} = USD ${Math.round(usd).toLocaleString('es-CL')} → ${money(clp)}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"});
+  guardarEstado(); closeModal(); kickTab="resumen"; renderAll();
 }
 
 /* ---- Página «Kick-off y CPM» ---- */
@@ -9458,6 +9540,7 @@ function modalTipoCambio(){
 function guardarTipoCambio(){
   const p=proy(); const tc=parseFloat(String(document.getElementById('tcNuevo').value).replace(",", ".")); const f=document.getElementById('tcFecha').value||hoyISO();
   if(!(tc>0)){ toast("Tipo de cambio inválido.", "danger"); return; }
+  p.ordenes=exArr(p.ordenes); p.ordenes.forEach(o=>{ if(o.incluida){ o.tc=tc; o.clpNeto=Math.round(o.usd*tc); } });
   const clp=Math.round(p.montos.usdUsado*tc);
   p.montos.tipoCambio=tc; p.montos.fechaTipoCambio=f; p.montos.clp=clp; p.presupuestoTotal=clp;
   p.historialTC=exArr(p.historialTC); p.historialTC.push({ fecha:f, tipoCambio:tc, clp, usuario:DB.usuario, motivo:"Actualización manual" });
@@ -9467,7 +9550,7 @@ function guardarTipoCambio(){
 function renderKickoff(){
   if(!proyectosDelArea().length) return `<div class="page-head"><div><h1>Kick-off y CPM</h1></div></div><div class="empty-state card">Aún no hay proyectos.</div>`;
   const p=proy(); exNormalizarProyecto(p);
-  const head=`<div class="page-head"><div><h1>Kick-off y CPM</h1><div class="page-desc">${escaparHtml(p.codigo)} · ${escaparHtml(p.nombre)}</div></div><div class="flex-gap">${puedeImportarProyecto()?`<button class="btn" onclick="modalImportarProyecto()">📥 Importar / actualizar desde Excel</button>`:''}</div></div>`;
+  const head=`<div class="page-head"><div><h1>Kick-off y CPM</h1><div class="page-desc">${escaparHtml(p.codigo)} · ${escaparHtml(p.nombre)}</div></div><div class="flex-gap">${puedeImportarProyecto()?`<button class="btn" onclick="modalImportarOrdenes()">💲 Órdenes (Project List)</button><button class="btn" onclick="modalImportarProyecto()">📥 Importar / actualizar desde Excel</button>`:''}</div></div>`;
   if(!p.kickoff && !p.cpm) return head+`<div class="empty-state card">Este proyecto no se creó desde el documento madre. Usa «Importar / actualizar desde Excel» con el código del proyecto para cargar Kick-off, CPM y compras al exterior.</div>`;
   const K=p.kickoff||{}, M=p.montos, C=p.cpm||{items:[]};
   const hechas=C.items.filter(i=>i.hecho).length, pctC=C.items.length?Math.round(hechas*100/C.items.length):0;
@@ -9476,20 +9559,24 @@ function renderKickoff(){
   const lista=(tit,arr)=> arr&&arr.length ? `<div class="card" style="padding:12px;margin-bottom:10px;"><b>${tit}</b><ul style="margin:6px 0 0 18px;padding:0;">${arr.map(x=>`<li class="small">${escaparHtml(x)}</li>`).join("")}</ul></div>` : "";
   let cuerpo="";
   if(kickTab==="resumen"){
+        const ordenes = exArr(p.ordenes).length ? `<div class="card" style="padding:14px;margin-bottom:12px;"><b>Órdenes del proyecto (Project List)</b>
+      <div class="tbl-wrap"><table class="tbl" style="margin-top:8px;"><thead><tr><th>Código</th><th>Orden</th><th>Estado</th><th style="text-align:right">USD neto</th><th>TC</th><th style="text-align:right">CLP neto</th></tr></thead><tbody>
+      ${p.ordenes.map(o=>`<tr style="${o.incluida?'font-weight:600':'opacity:.55'}"><td>${o.incluida?'✔ ':''}${escaparHtml(o.codigo)}</td><td>${escaparHtml(o.nombre.replace(/^TOP-050752 Baika T5S 6L TK - /,''))}<div class="small muted">${escaparHtml(o.area)}</div></td><td class="small">${escaparHtml(o.estado)}</td><td style="text-align:right">${o.usd?Math.round(o.usd).toLocaleString('es-CL'):'—'}</td><td>${o.tc||'—'}</td><td style="text-align:right">${o.usd?money(o.clpNeto):'—'}</td></tr>`).join("")}
+      </tbody></table></div><p class="hint" style="margin-top:6px;">✔ = órdenes que forman el presupuesto del área eléctrica.</p></div>` : "";
     const montos = M ? `<div class="card" style="padding:14px;margin-bottom:12px;">
       <div style="display:flex;justify-content:space-between;align-items:center;"><b>Monto y conversión a pesos</b>${puedeImportarProyecto()?`<button class="btn btn-sm" onclick="modalTipoCambio()">Actualizar tipo de cambio</button>`:''}</div>
       <div class="tbl-wrap"><table class="tbl" style="margin-top:8px;"><tbody>
         <tr><td>Total neto Kick-off (CL + UY)</td><td style="text-align:right">${money(M.usdVentaTotal,'USD')}</td></tr>
         <tr><td>&nbsp;&nbsp;de ello ${escaparHtml((K.cotizaciones||[])[0]||'Chile')}</td><td style="text-align:right">${money(M.usdVentaCL,'USD')}</td></tr>
         <tr><td>&nbsp;&nbsp;de ello ${escaparHtml((K.cotizaciones||[])[1]||'Uruguay')}</td><td style="text-align:right">${money(M.usdVentaUY,'USD')}</td></tr>
-        <tr><td><b>Monto convertido (${M.usdBase==='cl'?'solo Chile':'total neto'})</b></td><td style="text-align:right"><b>${money(M.usdUsado,'USD')}</b></td></tr>
+        <tr><td><b>Monto convertido (${M.usdBase==='ordenes'?'órdenes eléctricas marcadas':M.usdBase==='cl'?'solo Chile':'total neto'})</b></td><td style="text-align:right"><b>${money(M.usdUsado,'USD')}</b></td></tr>
         <tr><td>Tipo de cambio aplicado (${exFmt(M.fechaTipoCambio)})</td><td style="text-align:right">${M.tipoCambio} CLP/USD</td></tr>
         <tr><td><b>Presupuesto en pesos</b></td><td style="text-align:right"><b>${money(M.clp)}</b></td></tr>
         <tr><td>Follow Up: costo · venta · margen</td><td style="text-align:right">${money(M.usdCostoFollowUp,'USD')} · ${money(M.usdVentaFollowUp,'USD')} · ${Math.round((M.margenPct||0)*100)}%</td></tr>
       </tbody></table></div>
       ${exArr(p.historialTC).length>1?`<div class="small muted" style="margin-top:6px;">Historial: ${exArr(p.historialTC).map(h=>`${exFmt(h.fecha)}: ${h.tipoCambio}`).join(" → ")}</div>`:''}
     </div>` : "";
-    cuerpo = montos + `<div class="card" style="padding:14px;margin-bottom:12px;"><div class="grid-2" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+    cuerpo = ordenes + montos + `<div class="card" style="padding:14px;margin-bottom:12px;"><div class="grid-2" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
       <div><div class="small muted">Cliente</div><b>${escaparHtml(p.cliente)}</b></div><div><div class="small muted">Tipo</div><b>${escaparHtml(K.tipoProyecto||'—')}</b></div>
       <div><div class="small muted">Ubicación</div><b>${escaparHtml(K.ubicacion||'—')}</b></div><div><div class="small muted">Fecha de entrega</div><b>${exFmt(p.fechaEntrega)}</b></div>
       <div><div class="small muted">Cotizaciones</div><b>${escaparHtml((K.cotizaciones||[]).join(' · ')||'—')}</b></div><div><div class="small muted">Contraparte cliente</div><b>${escaparHtml(K.contraparte||'—')}</b></div>

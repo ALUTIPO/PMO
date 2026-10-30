@@ -502,7 +502,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.6.7";
+const APP_VERSION = "3.6.8";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -6341,6 +6341,208 @@ function svgDonutEstados(counts) {
   </svg>`;
 }
 
+/* =====================================================================
+   DISTRIBUCIÓN SEMANAL DE PERSONAL (V3.6.8)
+   Carga la tabla proyecto × disciplina (mecánicos / eléctricos /
+   automatización) como asignaciones con fechas y camioneta, avisa de
+   cruces (misma persona en dos proyectos el mismo día, camioneta
+   sobrepasada) y deja listos los mensajes de WhatsApp por persona.
+   Cada fila se puede corregir antes de cargar. Cargar de nuevo la misma
+   semana reemplaza lo anterior (no duplica).
+   ===================================================================== */
+// [proyecto, disciplina, persona, díaIni(0=lun), díaFin, texto días, alojamiento, horas extra, camioneta, nota, cantidad]
+const DIST_PLANTILLA = { lunes:"2026-11-02", filas:[
+  ["Greenvic","Mecánicos","Arturo",1,4,"Martes a viernes","sin","sin","Camioneta partner nueva","",1],
+  ["Greenvic","Mecánicos","Sergio",0,4,"Lunes a viernes","sin","sin","Camioneta partner nueva","",1],
+  ["Greenvic","Eléctricos","Cristian",0,4,"Lunes a viernes","","segun","Camioneta dockers","",1],
+  ["Greenvic","Eléctricos","Marcos",0,4,"Lunes a viernes","","segun","Camioneta dockers","",1],
+  ["Greenvic","Eléctricos","Externo Sergio Vergara",0,4,"Lunes a viernes","","segun","","Cuadrilla de Sergio Vergara; Sergio se moviliza en su camioneta",4],
+  ["Greenvic","Automatización","Fabian",0,4,"Lunes a viernes","sin","sin","Camioneta Ram","",1],
+  ["Alutipo","Mecánicos","Juan",0,4,"Lunes a viernes","sin","sin","","",1],
+  ["Alutipo","Mecánicos","Elías",0,4,"Lunes a viernes","sin","sin","","",1],
+  ["Alutipo","Mecánicos","Francisco",0,0,"Lunes","","sin","","",1],
+  ["Alutipo","Mecánicos","Martin",0,0,"Lunes","","sin","","",1],
+  ["Copefrut","Mecánicos","Francisco",1,3,"Martes a jueves","","sin","Camioneta Nissan","",1],
+  ["Copefrut","Mecánicos","Martin",1,3,"Martes a jueves","","sin","Camioneta Nissan","",1],
+  ["Propal","Mecánicos","Arturo",0,0,"Lunes (por el día)","","sin","Camioneta partner nueva","",1],
+  ["Propal","Automatización","Francisco",0,0,"Lunes (por el día)","","sin","","",1],
+  ["Komatsu","Mecánicos","Francisco",4,4,"Viernes (por el día)","","sin","Camioneta Nissan","",1],
+  ["Komatsu","Mecánicos","Elías",4,4,"Viernes (por el día)","","sin","Camioneta Nissan","",1],
+  ["Komatsu","Mecánicos","Martin",4,4,"Viernes (por el día)","","sin","Camioneta Nissan","",1],
+  ["Komatsu","Mecánicos","Arturo",4,4,"Viernes (por el día)","","sin","Camioneta Nissan","",1],
+  ["Komatsu","Eléctricos","Marcos",4,4,"Viernes (por el día)","","sin","","",1],
+]};
+let _dist = null;
+function distSumarDias(iso, n){ const d=new Date(iso+"T12:00:00Z"); d.setUTCDate(d.getUTCDate()+n); return d.toISOString().slice(0,10); }
+function distLunesSiguiente(){ const d=new Date(hoyISO()+"T12:00:00Z"); const dow=d.getUTCDay(); const add=((8-dow)%7)||7; d.setUTCDate(d.getUTCDate()+add); return d.toISOString().slice(0,10); }
+const DIST_DIAS=["domingo","lunes","martes","miércoles","jueves","viernes","sábado"], DIST_MESES=["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
+function distDiaTxt(iso){ const d=new Date(iso+"T12:00:00Z"); return DIST_DIAS[d.getUTCDay()]+" "+d.getUTCDate()+" "+DIST_MESES[d.getUTCMonth()]; }
+function distPrimerNombre(n){ return exNorm(n).split(" ")[0]; }
+function distBuscarPersona(nombre, disc){
+  const n=distPrimerNombre(nombre); const c=DB.personal.filter(p=>distPrimerNombre(p.nombre)===n);
+  if(c.length===1) return c[0].id;
+  if(c.length>1){ const pref=disc==="Mecánicos"?"fabricacion":"electrico"; const m=c.filter(p=>p.area===pref||p.area==="ambas"); return m.length===1?m[0].id:""; }
+  return "__new";
+}
+function distBuscarProyecto(nombre){
+  const n=exNorm(nombre); const c=DB.proyectos.filter(p=>exNorm(p.codigo+" "+p.nombre+" "+p.cliente).includes(n));
+  return c.length===1 ? c[0].id : (c.length>1 ? "" : "__new");
+}
+function distBuscarVehiculo(nombre){
+  if(!nombre) return "";
+  const t=exNorm(nombre).replace(/camioneta/g,"").trim(); const c=DB.vehiculos.filter(v=>exNorm(v.nombre).includes(t));
+  return c.length===1 ? c[0].id : (c.length>1 ? c[0].id : "__new");
+}
+function modalDistribucionSemana(){
+  if(!puedeGestionarAsignaciones()){ toast(`Tu rol (${DB.role}) no puede crear asignaciones de personal.`, "danger"); return; }
+  const filas=[]; let ext=0;
+  DIST_PLANTILLA.filas.forEach(f=>{
+    const cant=f[10]||1;
+    for(let k=0;k<cant;k++){
+      let persona=f[2], sel;
+      if(cant>1){ ext++; persona=f[2]+" "+(k+1); const ex=DB.personal.filter(p=>p.tipo==="Externo")[k]; sel=ex?ex.id:"__new"; }
+      else sel=distBuscarPersona(f[2], f[1]);
+      filas.push({ proy:f[0], disc:f[1], persona, d0:f[3], d1:f[4], diasTxt:f[5], aloj:f[6], extras:f[7], vehTxt:f[8], nota:f[9], personaSel:sel, proySel:distBuscarProyecto(f[0]), vehSel:distBuscarVehiculo(f[8]) });
+    }
+  });
+  _dist={ lunes: DIST_PLANTILLA.lunes < hoyISO() ? distLunesSiguiente() : DIST_PLANTILLA.lunes, filas };
+  openModal(`<div class="modal-head"><h3>Distribución de la semana</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body"><div id="distBox"></div></div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="cargarDistribucion()">Cargar asignaciones</button></div>`, 1100);
+  distRender();
+}
+function distClavePersona(f){ return f.personaSel==="__new" ? "new:"+exNorm(f.persona)+"|"+f.disc : f.personaSel; }
+function distClaveVeh(f){ return f.vehSel==="__new" ? "new:"+exNorm(f.vehTxt) : f.vehSel; }
+function distFechas(f){ return [distSumarDias(_dist.lunes,f.d0), distSumarDias(_dist.lunes,f.d1)]; }
+function distConflictos(){
+  const out={}, F=_dist.filas, add=(i,t)=>{ (out[i]=out[i]||[]).push(t); };
+  F.forEach((f,i)=>{
+    const [a,b]=distFechas(f), kp=distClavePersona(f); if(!kp) return;
+    F.forEach((g,j)=>{ if(j<=i||distClavePersona(g)!==kp) return; const [c,d]=distFechas(g);
+      if(rangosSeSuperponen(a,b,c,d)){ const t=`${f.persona}: se cruza ${f.proy} con ${g.proy} (${DIST_DIAS[new Date(Math.max(+new Date(a),+new Date(c))+43200000).getUTCDay()]})`; add(i,t); add(j,t); } });
+    if(f.personaSel && f.personaSel!=="__new"){
+      DB.asignaciones.filter(x=>x.personaId===f.personaSel && x.origenDistribucion!==_dist.lunes && rangosSeSuperponen(a,b,x.fechaInicio,x.fechaFin)).forEach(x=>add(i,`${f.persona}: ya tiene asignación en ${(proy(x.proyectoId)||{}).codigo||'otro proyecto'} esos días`)); }
+  });
+  // camionetas por día
+  const porDia={};
+  F.forEach((f,i)=>{ const kv=distClaveVeh(f); if(!kv) return; const [a,b]=distFechas(f); for(let n=f.d0;n<=f.d1;n++){ const k=kv+"|"+distSumarDias(_dist.lunes,n); (porDia[k]=porDia[k]||[]).push(i); } });
+  Object.keys(porDia).forEach(k=>{ const [kv,dia]=k.split("|"); const veh=DB.vehiculos.find(v=>v.id===kv); const cap=veh?veh.capacidad:4;
+    const extra=veh?DB.asignaciones.filter(x=>x.vehiculoId===kv && x.origenDistribucion!==_dist.lunes && x.fechaInicio<=dia && dia<=x.fechaFin).length:0;
+    if(porDia[k].length+extra>cap) porDia[k].forEach(i=>add(i,`Camioneta ${veh?veh.nombre:F[i].vehTxt} con ${porDia[k].length+extra}/${cap} pasajeros el ${distDiaTxt(dia)}`)); });
+  return out;
+}
+function distSet(i,campo,v){ _dist.filas[i][campo]=v; distRender(); }
+function distRender(){
+  const F=_dist.filas, conf=distConflictos(), nConf=Object.keys(conf).length;
+  const optPer=(f)=>`<option value="">— elegir —</option>${f.personaSel==="__new"||true?`<option value="__new" ${f.personaSel==="__new"?'selected':''}>➕ Crear «${escaparHtml(f.persona)}»</option>`:''}${DB.personal.map(p=>`<option value="${p.id}" ${f.personaSel===p.id?'selected':''}>${escaparHtml(p.nombre)} (${escaparHtml(p.cargo)})</option>`).join("")}`;
+  const optPro=(f)=>`<option value="">— elegir —</option><option value="__new" ${f.proySel==="__new"?'selected':''}>➕ Crear «${escaparHtml(f.proy)}»</option>${DB.proyectos.map(p=>`<option value="${p.id}" ${f.proySel===p.id?'selected':''}>${escaparHtml(p.codigo)} · ${escaparHtml(p.nombre.slice(0,28))}</option>`).join("")}`;
+  const optVeh=(f)=>`<option value="">${f.vehTxt?'Sin camioneta de empresa':'—'}</option>${f.vehTxt?`<option value="__new" ${f.vehSel==="__new"?'selected':''}>➕ Crear «${escaparHtml(f.vehTxt)}»</option>`:''}${DB.vehiculos.map(v=>`<option value="${v.id}" ${f.vehSel===v.id?'selected':''}>${escaparHtml(v.nombre)} (${v.capacidad})</option>`).join("")}`;
+  const sel="font-size:12px;padding:5px;border-radius:6px;border:1px solid var(--line);background:var(--card);max-width:190px;";
+  document.getElementById('distBox').innerHTML=`
+    <div style="display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-bottom:10px;">
+      <label class="small muted">Semana que parte el lunes<input type="date" value="${_dist.lunes}" onchange="_dist.lunes=this.value; distRender();"></label>
+      <div class="small">${F.length} asignaciones · ${nConf?`<b style="color:var(--danger)">⚠ ${nConf} fila(s) con cruces</b>`:'<b style="color:var(--ok,green)">sin cruces</b>'}</div>
+    </div>
+    <p class="hint">Revisa cada fila: lo que no calza con la dotación, proyectos o camionetas existentes se puede elegir en la lista o crear. Los cruces se cargan igual, pero quedan avisados.</p>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Proyecto</th><th>Disciplina</th><th>Persona</th><th>Días</th><th>Camioneta</th><th>Condiciones</th><th></th></tr></thead><tbody>
+    ${F.map((f,i)=>`<tr style="${conf[i]?'background:rgba(220,60,60,.07)':''}">
+      <td><select style="${sel}" onchange="distSet(${i},'proySel',this.value)">${optPro(f)}</select></td>
+      <td class="small">${escaparHtml(f.disc)}</td>
+      <td><select style="${sel}" onchange="distSet(${i},'personaSel',this.value)">${optPer(f)}</select></td>
+      <td class="small">${escaparHtml(f.diasTxt)}<div class="muted">${distDiaTxt(distFechas(f)[0])}${f.d1>f.d0?' → '+distDiaTxt(distFechas(f)[1]):''}</div></td>
+      <td><select style="${sel}" onchange="distSet(${i},'vehSel',this.value)">${optVeh(f)}</select></td>
+      <td class="small muted">${f.aloj==='sin'?'Sin alojamiento · ':''}${f.extras==='sin'?'Sin horas extra':'Horas extra según avance y previo aviso'}${f.nota?`<div>${escaparHtml(f.nota)}</div>`:''}</td>
+      <td class="small" style="color:var(--danger)">${(conf[i]||[]).filter((t,k,a)=>a.indexOf(t)===k).map(t=>'⚠ '+escaparHtml(t)).join("<br>")}</td></tr>`).join("")}
+    </tbody></table></div>`;
+}
+function cargarDistribucion(){
+  if(!_dist) return;
+  if(!puedeGestionarAsignaciones()){ toast("Tu rol no puede crear asignaciones.", "danger"); return; }
+  const F=_dist.filas;
+  if(F.some(f=>!f.personaSel||!f.proySel)){ toast("Hay filas sin persona o sin proyecto elegido.", "danger"); return; }
+  const lunes=_dist.lunes, activo=DB.proyectoActivo;
+  const antes=DB.asignaciones.length; DB.asignaciones=DB.asignaciones.filter(a=>a.origenDistribucion!==lunes);
+  const reemplazadas=antes-DB.asignaciones.length;
+  // proyectos nuevos
+  const proyMap={};
+  F.forEach(f=>{ if(f.proySel!=="__new"){ proyMap[f.proy+"|"+f.proySel]=f.proySel; return; }
+    if(proyMap[f.proy]) return;
+    const filasP=F.filter(x=>x.proy===f.proy&&x.proySel==="__new"); const soloMec=filasP.every(x=>x.disc==="Mecánicos");
+    const r=crearProyecto({ codigo:"SIN-CODIGO", nombre:f.proy, cliente:"—", tipo: soloMec?"fabricacion":"electrico", prioridad:"Media", criticidad:"Media" });
+    proyMap[f.proy]=r?r.id:""; });
+  DB.proyectoActivo=activo;
+  // personas nuevas
+  const perMap={};
+  F.forEach(f=>{ if(f.personaSel!=="__new") return; const k=distClavePersona(f); if(perMap[k]) return;
+    const ext=/^externo/i.test(f.persona);
+    const id="PERS-"+Math.random().toString(36).slice(2,8).toUpperCase();
+    DB.personal.push({ id, nombre:f.persona, cargo: ext?"Externo":(f.disc==="Mecánicos"?"Mecánico":f.disc==="Automatización"?"Automatista":"Técnico de Terreno"), telefono:"", tipo: ext?"Externo":"Interno", area: f.disc==="Mecánicos"?"fabricacion":"electrico", notas:"Creado al cargar la distribución semanal — completa teléfono y cargo." });
+    perMap[k]=id; });
+  // camionetas nuevas
+  const vehMap={};
+  F.forEach(f=>{ if(f.vehSel!=="__new") return; const k=distClaveVeh(f); if(vehMap[k]) return;
+    const id="VEH-"+Math.random().toString(36).slice(2,6).toUpperCase();
+    DB.vehiculos.push({ id, nombre:f.vehTxt, patente:"", capacidad:4, notas:"Creada al cargar la distribución — confirma la capacidad." }); vehMap[k]=id; });
+  let n=0, omitidas=0;
+  F.forEach(f=>{
+    const pid = f.proySel==="__new" ? proyMap[f.proy] : f.proySel; if(!pid){ omitidas++; return; }
+    const per = f.personaSel==="__new" ? perMap[distClavePersona(f)] : f.personaSel;
+    const veh = f.vehSel==="__new" ? vehMap[distClaveVeh(f)] : f.vehSel;
+    const [a,b]=distFechas(f);
+    const dias = (f.d0===0&&f.d1===4) ? "Lunes a viernes" : f.diasTxt;
+    const notas=[f.disc, f.aloj==='sin'?'sin alojamiento':'', f.extras==='sin'?'sin horas extra':'horas extra según avance y previo aviso', f.nota].filter(Boolean).join(" · ");
+    DB.asignaciones.push({ id:"ASIG-"+Math.random().toString(36).slice(2,8).toUpperCase(), personaId:per, proyectoId:pid, dias, fechaInicio:a, fechaFin:b, notas, enTerreno:true, vehiculoId:veh||"",
+      origenDistribucion:lunes, disciplina:f.disc, sinAlojamiento:f.aloj==='sin', horasExtra:f.extras==='sin'?'no':'segun_avance', msgEnviado:false }); n++; });
+  registrarHistorial({proyecto:"—", accion:"Crear", detalle:`Distribución de personal semana del ${lunes}: ${n} asignaciones${reemplazadas?` (reemplaza ${reemplazadas} de la misma semana)`:''}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
+  guardarEstado(); closeModal();
+  toast(`${n} asignaciones cargadas${omitidas?` (${omitidas} omitidas)`:''}.`, "ok");
+  renderAll(); modalMensajesDistribucion(lunes);
+}
+/* ---- Mensajes de WhatsApp por persona ---- */
+function distSemanaReciente(){ return DB.asignaciones.filter(a=>a.origenDistribucion).map(a=>a.origenDistribucion).sort().pop() || ""; }
+function distMensajePersona(lunes, personaId){
+  const per=DB.personal.find(p=>p.id===personaId); const mis=DB.asignaciones.filter(a=>a.origenDistribucion===lunes && a.personaId===personaId).sort((a,b)=>a.fechaInicio.localeCompare(b.fechaInicio));
+  const viernes=distSumarDias(lunes,4); const nombre=(per?per.nombre:"").split(" ")[0];
+  let t=`*Distribución semana ${distDiaTxt(lunes)} al ${distDiaTxt(viernes)}*\n\nHola ${nombre} 👋 esta semana quedas así:\n`;
+  mis.forEach(a=>{ const p=proy(a.proyectoId); const veh=a.vehiculoId?DB.vehiculos.find(v=>v.id===a.vehiculoId):null;
+    const comp=DB.asignaciones.filter(x=>x.origenDistribucion===lunes && x.proyectoId===a.proyectoId && x.disciplina===a.disciplina && x.personaId!==personaId && rangosSeSuperponen(x.fechaInicio,x.fechaFin,a.fechaInicio,a.fechaFin)).map(x=>{ const q=DB.personal.find(z=>z.id===x.personaId)||{nombre:""}; return q.tipo==="Externo" ? "cuadrilla externa" : q.nombre.split(" ")[0]; }).filter(Boolean);
+    t+=`\n📍 *${p?(p.codigo&&p.codigo!=="SIN-CODIGO"?p.codigo+" · ":"")+p.nombre:'Proyecto'}*\n🗓 ${/por el día/.test(a.dias)?distDiaTxt(a.fechaInicio)+' (por el día)':a.dias+' ('+distDiaTxt(a.fechaInicio)+(a.fechaFin!==a.fechaInicio?' al '+distDiaTxt(a.fechaFin):'')+')'}\n🛠 ${a.disciplina||''}\n`;
+    t+= veh ? `🚚 ${veh.nombre}\n` : `🚚 Sin camioneta de empresa\n`;
+    t+= a.sinAlojamiento ? `🏨 Sin alojamiento\n` : '';
+    t+= a.horasExtra==='no' ? `⏱ Sin horas extra\n` : `⏱ Horas extra según avance y con previo aviso\n`;
+    if(comp.length) t+=`👥 Con: ${[...new Set(comp)].join(", ")}\n`; });
+  t+=`\nCualquier cambio te aviso. Gracias 🙌`;
+  return t;
+}
+function modalMensajesDistribucion(lunes){
+  lunes = lunes || distSemanaReciente(); if(!lunes){ toast("Aún no hay una distribución cargada.", "danger"); return; }
+  const ids=[...new Set(DB.asignaciones.filter(a=>a.origenDistribucion===lunes).map(a=>a.personaId))];
+  const personas=ids.map(id=>DB.personal.find(p=>p.id===id)).filter(Boolean);
+  const internos=personas.filter(p=>p.tipo!=="Externo"), externos=personas.filter(p=>p.tipo==="Externo");
+  const sinTel=internos.filter(p=>!fsTelefonoWA(p.telefono)).length, enviados=internos.filter(p=>DB.asignaciones.filter(a=>a.origenDistribucion===lunes&&a.personaId===p.id).every(a=>a.msgEnviado)).length;
+  openModal(`<div class="modal-head"><h3>Mensajes de la semana del ${distDiaTxt(lunes)}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="card" style="padding:10px;margin-bottom:10px;"><b>${sinTel?`⚠ Faltan ${sinTel} teléfono(s)`:'✅ Lista para enviar'}</b> · ${enviados}/${internos.length} enviados${externos.length?` · ${externos.length} externos se avisan por su jefe de cuadrilla`:''}</div>
+      ${internos.map(p=>{ const tel=fsTelefonoWA(p.telefono); const env=DB.asignaciones.filter(a=>a.origenDistribucion===lunes&&a.personaId===p.id).every(a=>a.msgEnviado);
+        return `<div class="card" style="padding:10px;margin-bottom:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <div style="flex:1;min-width:160px;"><b>${escaparHtml(p.nombre)}</b> ${env?'<span class="badge b-verde"><span class="dot"></span>Enviado</span>':''}<div class="small muted">${escaparHtml(p.cargo)}${tel?' · +'+tel:''}</div></div>
+          ${tel?`<button class="btn btn-primary btn-sm" onclick="distEnviarWA('${lunes}','${p.id}')">💬 WhatsApp</button>`:`<input type="text" id="dtel_${p.id}" placeholder="Teléfono (9 1234 5678)" style="width:150px"><button class="btn btn-sm" onclick="distGuardarTel('${lunes}','${p.id}')">Guardar</button>`}
+          <button class="btn btn-sm" onclick="distCopiar('${lunes}','${p.id}')">Copiar</button></div>`; }).join("")}
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="distCopiarGeneral('${lunes}')">Copiar resumen general</button><button class="btn" onclick="closeModal()">Cerrar</button></div>`, 700);
+}
+function distEnviarWA(lunes,id){ const per=DB.personal.find(p=>p.id===id); const tel=fsTelefonoWA(per&&per.telefono); if(!tel) return;
+  window.open("https://wa.me/"+tel+"?text="+encodeURIComponent(distMensajePersona(lunes,id)),"_blank");
+  DB.asignaciones.forEach(a=>{ if(a.origenDistribucion===lunes&&a.personaId===id) a.msgEnviado=true; }); guardarEstado(); modalMensajesDistribucion(lunes); }
+function distGuardarTel(lunes,id){ const per=DB.personal.find(p=>p.id===id); const v=(document.getElementById('dtel_'+id)||{}).value||""; if(!fsTelefonoWA(v)){ toast("Teléfono inválido.", "danger"); return; } per.telefono=v.trim(); guardarEstado(); modalMensajesDistribucion(lunes); }
+function distCopiar(lunes,id){ const t=distMensajePersona(lunes,id); (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(()=>toast("Mensaje copiado.","ok")).catch(()=>toast("No se pudo copiar.","danger")); }
+function distCopiarGeneral(lunes){
+  const A=DB.asignaciones.filter(a=>a.origenDistribucion===lunes); const proys=[...new Set(A.map(a=>a.proyectoId))];
+  let t=`*Distribución semana ${distDiaTxt(lunes)} al ${distDiaTxt(distSumarDias(lunes,4))}*\n`;
+  proys.forEach(pid=>{ const p=proy(pid); t+=`\n📍 *${p?p.nombre:''}*\n`; [...new Set(A.filter(a=>a.proyectoId===pid).map(a=>a.disciplina))].forEach(d=>{
+    t+=`  _${d}_: `+A.filter(a=>a.proyectoId===pid&&a.disciplina===d).map(a=>`${(DB.personal.find(x=>x.id===a.personaId)||{nombre:'?'}).nombre} (${a.dias})`).join(", ")+"\n"; }); });
+  (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(()=>toast("Resumen copiado.","ok")).catch(()=>toast("No se pudo copiar.","danger")); }
+
 function renderPersonal() {
   const puedeRoster = puedeGestionarPersonalRoster();
   const puedeAsig = puedeGestionarAsignaciones();
@@ -6384,6 +6586,8 @@ function renderPersonal() {
       ${DB.proyectos.map(p => `<option value="${p.id}" ${filtroAsignacionProyecto===p.id?'selected':''}>${p.codigo} — ${p.nombre}</option>`).join('')}
     </select>
     ${puedeAsig ? `<button class="btn btn-primary btn-sm" onclick="modalAsignacionForm()">+ Nueva asignación</button>` : ''}
+    ${puedeAsig ? `<button class="btn btn-sm" onclick="modalDistribucionSemana()">📋 Cargar distribución de la semana</button>` : ''}
+    ${(puedeAsig && distSemanaReciente()) ? `<button class="btn btn-sm" onclick="modalMensajesDistribucion()">💬 Mensajes de la semana</button>` : ''}
   </div>
   <div class="table-wrap">
     <table>

@@ -502,7 +502,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.6.8";
+const APP_VERSION = "3.6.9";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -6413,7 +6413,11 @@ function modalDistribucionSemana(){
 }
 function distClavePersona(f){ return f.personaSel==="__new" ? "new:"+exNorm(f.persona)+"|"+f.disc : f.personaSel; }
 function distClaveVeh(f){ return f.vehSel==="__new" ? "new:"+exNorm(f.vehTxt) : f.vehSel; }
-function distFechas(f){ return [distSumarDias(_dist.lunes,f.d0), distSumarDias(_dist.lunes,f.d1)]; }
+function distFechas(f){ return (f.ini&&f.fin) ? [f.ini,f.fin] : [distSumarDias(_dist.lunes,f.d0), distSumarDias(_dist.lunes,f.d1)]; }
+function distDiasEntre(a,b){ return Math.round((new Date(b+"T12:00:00Z")-new Date(a+"T12:00:00Z"))/86400000); }
+function distSetFecha(i,campo,v){ const f=_dist.filas[i]; const [a,b]=distFechas(f); f.ini=campo==='ini'?v:a; f.fin=campo==='fin'?v:b; if(f.fin<f.ini){ if(campo==='ini') f.fin=f.ini; else f.ini=f.fin; } distRender(); }
+function distQuitarFila(i){ _dist.filas.splice(i,1); distRender(); }
+function distCambiarLunes(v){ if(!v) return; const delta=distDiasEntre(_dist.lunes,v); _dist.filas.forEach(f=>{ if(f.ini){ f.ini=distSumarDias(f.ini,delta); f.fin=distSumarDias(f.fin,delta); } }); _dist.lunes=v; distRender(); }
 function distConflictos(){
   const out={}, F=_dist.filas, add=(i,t)=>{ (out[i]=out[i]||[]).push(t); };
   F.forEach((f,i)=>{
@@ -6425,7 +6429,7 @@ function distConflictos(){
   });
   // camionetas por día
   const porDia={};
-  F.forEach((f,i)=>{ const kv=distClaveVeh(f); if(!kv) return; const [a,b]=distFechas(f); for(let n=f.d0;n<=f.d1;n++){ const k=kv+"|"+distSumarDias(_dist.lunes,n); (porDia[k]=porDia[k]||[]).push(i); } });
+  F.forEach((f,i)=>{ const kv=distClaveVeh(f); if(!kv) return; const [a,b]=distFechas(f); const nd=distDiasEntre(a,b); for(let n=0;n<=nd && n<60;n++){ const k=kv+"|"+distSumarDias(a,n); (porDia[k]=porDia[k]||[]).push(i); } });
   Object.keys(porDia).forEach(k=>{ const [kv,dia]=k.split("|"); const veh=DB.vehiculos.find(v=>v.id===kv); const cap=veh?veh.capacidad:4;
     const extra=veh?DB.asignaciones.filter(x=>x.vehiculoId===kv && x.origenDistribucion!==_dist.lunes && x.fechaInicio<=dia && dia<=x.fechaFin).length:0;
     if(porDia[k].length+extra>cap) porDia[k].forEach(i=>add(i,`Camioneta ${veh?veh.nombre:F[i].vehTxt} con ${porDia[k].length+extra}/${cap} pasajeros el ${distDiaTxt(dia)}`)); });
@@ -6440,25 +6444,26 @@ function distRender(){
   const sel="font-size:12px;padding:5px;border-radius:6px;border:1px solid var(--line);background:var(--card);max-width:190px;";
   document.getElementById('distBox').innerHTML=`
     <div style="display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-bottom:10px;">
-      <label class="small muted">Semana que parte el lunes<input type="date" value="${_dist.lunes}" onchange="_dist.lunes=this.value; distRender();"></label>
+      <label class="small muted">Semana que parte el lunes<input type="date" value="${_dist.lunes}" onchange="distCambiarLunes(this.value)"></label>
       <div class="small">${F.length} asignaciones · ${nConf?`<b style="color:var(--danger)">⚠ ${nConf} fila(s) con cruces</b>`:'<b style="color:var(--ok,green)">sin cruces</b>'}</div>
     </div>
     <p class="hint">Revisa cada fila: lo que no calza con la dotación, proyectos o camionetas existentes se puede elegir en la lista o crear. Los cruces se cargan igual, pero quedan avisados.</p>
-    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Proyecto</th><th>Disciplina</th><th>Persona</th><th>Días</th><th>Camioneta</th><th>Condiciones</th><th></th></tr></thead><tbody>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Proyecto</th><th>Disciplina</th><th>Persona</th><th>Días</th><th>Camioneta</th><th>Condiciones</th><th></th><th></th></tr></thead><tbody>
     ${F.map((f,i)=>`<tr style="${conf[i]?'background:rgba(220,60,60,.07)':''}">
       <td><select style="${sel}" onchange="distSet(${i},'proySel',this.value)">${optPro(f)}</select></td>
       <td class="small">${escaparHtml(f.disc)}</td>
       <td><select style="${sel}" onchange="distSet(${i},'personaSel',this.value)">${optPer(f)}</select></td>
-      <td class="small">${escaparHtml(f.diasTxt)}<div class="muted">${distDiaTxt(distFechas(f)[0])}${f.d1>f.d0?' → '+distDiaTxt(distFechas(f)[1]):''}</div></td>
+      <td class="small"><div style="display:flex;flex-direction:column;gap:3px;"><input type="date" style="font-size:12px;padding:3px;width:128px" value="${distFechas(f)[0]}" onchange="distSetFecha(${i},'ini',this.value)"><input type="date" style="font-size:12px;padding:3px;width:128px" value="${distFechas(f)[1]}" onchange="distSetFecha(${i},'fin',this.value)"></div><div class="muted">${escaparHtml(f.diasTxt)}</div></td>
       <td><select style="${sel}" onchange="distSet(${i},'vehSel',this.value)">${optVeh(f)}</select></td>
       <td class="small muted">${f.aloj==='sin'?'Sin alojamiento · ':''}${f.extras==='sin'?'Sin horas extra':'Horas extra según avance y previo aviso'}${f.nota?`<div>${escaparHtml(f.nota)}</div>`:''}</td>
-      <td class="small" style="color:var(--danger)">${(conf[i]||[]).filter((t,k,a)=>a.indexOf(t)===k).map(t=>'⚠ '+escaparHtml(t)).join("<br>")}</td></tr>`).join("")}
+      <td class="small" style="color:var(--danger)">${(conf[i]||[]).filter((t,k,a)=>a.indexOf(t)===k).map(t=>'⚠ '+escaparHtml(t)).join("<br>")}</td><td><button class="btn btn-sm" title="Quitar esta fila" onclick="distQuitarFila(${i})">🗑</button></td></tr>`).join("")}
     </tbody></table></div>`;
 }
 function cargarDistribucion(){
   if(!_dist) return;
   if(!puedeGestionarAsignaciones()){ toast("Tu rol no puede crear asignaciones.", "danger"); return; }
   const F=_dist.filas;
+  if(!F.length){ toast("No quedan filas para cargar.", "danger"); return; }
   if(F.some(f=>!f.personaSel||!f.proySel)){ toast("Hay filas sin persona o sin proyecto elegido.", "danger"); return; }
   const lunes=_dist.lunes, activo=DB.proyectoActivo;
   const antes=DB.asignaciones.length; DB.asignaciones=DB.asignaciones.filter(a=>a.origenDistribucion!==lunes);
@@ -6489,7 +6494,8 @@ function cargarDistribucion(){
     const per = f.personaSel==="__new" ? perMap[distClavePersona(f)] : f.personaSel;
     const veh = f.vehSel==="__new" ? vehMap[distClaveVeh(f)] : f.vehSel;
     const [a,b]=distFechas(f);
-    const dias = (f.d0===0&&f.d1===4) ? "Lunes a viernes" : f.diasTxt;
+    const cambiada=!!(f.ini&&f.fin)&&(f.ini!==distSumarDias(lunes,f.d0)||f.fin!==distSumarDias(lunes,f.d1));
+    const dias = cambiada ? (a===b ? distDiaTxt(a) : distDiaTxt(a)+" al "+distDiaTxt(b)) : ((f.d0===0&&f.d1===4) ? "Lunes a viernes" : f.diasTxt);
     const notas=[f.disc, f.aloj==='sin'?'sin alojamiento':'', f.extras==='sin'?'sin horas extra':'horas extra según avance y previo aviso', f.nota].filter(Boolean).join(" · ");
     DB.asignaciones.push({ id:"ASIG-"+Math.random().toString(36).slice(2,8).toUpperCase(), personaId:per, proyectoId:pid, dias, fechaInicio:a, fechaFin:b, notas, enTerreno:true, vehiculoId:veh||"",
       origenDistribucion:lunes, disciplina:f.disc, sinAlojamiento:f.aloj==='sin', horasExtra:f.extras==='sin'?'no':'segun_avance', msgEnviado:false }); n++; });

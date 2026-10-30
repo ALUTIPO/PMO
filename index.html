@@ -502,7 +502,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.6.9";
+const APP_VERSION = "3.7.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -1155,6 +1155,7 @@ const DB = {
   asignaciones: [],
   vehiculos: [],
   asignacionesVehiculos: [],
+  programaTaller: [],
   usuario: "Usuario",
   solicitudesPanol: [],
   updatedAt: null,
@@ -1180,6 +1181,7 @@ function aplicarEstadoRemoto(data) {
   DB.vehiculos = data.vehiculos && data.vehiculos.length ? data.vehiculos : (DB.vehiculos.length ? DB.vehiculos : cloneVehiculosSeed());
   DB.vehiculos.forEach(v => { if (v.capacidad===undefined) v.capacidad = 4; });
   DB.asignacionesVehiculos = data.asignacionesVehiculos || [];
+  DB.programaTaller = data.programaTaller || []; tpPlanes();
   DB.bodegaGeneral = data.bodegaGeneral || [];
   DB.solicitudesPanol = data.solicitudesPanol || [];
   // Firebase no guarda arrays vacíos: se normalizan al cargar.
@@ -1204,6 +1206,7 @@ function construirPayloadEstado() {
     asignaciones: DB.asignaciones,
     vehiculos: DB.vehiculos,
     asignacionesVehiculos: DB.asignacionesVehiculos,
+    programaTaller: DB.programaTaller || [],
     bodegaGeneral: DB.bodegaGeneral,
     solicitudesPanol: DB.solicitudesPanol,
     acuerdos: DB.acuerdos || [],
@@ -10854,6 +10857,229 @@ function renderFinSemana() {
   ${cuerpo}`;
 }
 
+/* =====================================================================
+   PROGRAMA DE TALLER — armado de tableros (V3.7.0)
+   Se programa la semana en la app (qué tablero, qué tarea, quién, qué
+   días, cuántas horas, qué debe quedar listo), se revisa la carga por
+   persona y recién ahí se envía por WhatsApp. Lo que tiene proyecto queda
+   registrado también en la Gantt (fase «Taller»).
+   Datos en DB.programaTaller (viaja en /state como el resto).
+   ===================================================================== */
+const TP_ROLES = ["Jefe de Taller","Jefe de Proyecto","Jefe de Producción","Jefe de Servicios Eléctricos","Gerencia"];
+function puedeGestionarTaller(){ return esAdministrador() || TP_ROLES.includes(DB.role); }
+const TP_HORAS_DIA = 9;
+const TP_ARMADO = [
+  ["Revisión de planos y lista de materiales",2],["Corte y mecanizado de placa / puerta",6],["Montaje de riel, canaletas y equipos",8],
+  ["Cableado de potencia",12],["Cableado de control",10],["Borneras, etiquetado y marcación",6],["Revisión interna y pruebas FAT",4],["Embalaje y despacho",3]
+];
+let tpPlanId = "";
+function tpPlanes(){
+  DB.programaTaller = exArr(DB.programaTaller);
+  DB.programaTaller.forEach(pl=>{ pl.items=exArr(pl.items); pl.enviados=exArr(pl.enviados); pl.items.forEach(it=>{ it.responsables=exArr(it.responsables); }); });
+  return DB.programaTaller;
+}
+function tpPlan(id){ return tpPlanes().find(x=>x.id===id); }
+function tpNombres(it){ return it.responsables.map(id=>{ const p=DB.personal.find(x=>x.id===id); return p?p.nombre:"(eliminado)"; }); }
+function tpDias(ini,fin){
+  const out=[]; const n=Math.min(Math.max(diasEntre(ini,fin),0),60);
+  for(let i=0;i<=n;i++) out.push(sumarDias(ini,i));
+  const habiles=out.filter(d=>{ const w=new Date(d+"T12:00:00Z").getUTCDay(); return w>=1&&w<=5; });
+  return habiles.length?habiles:out;
+}
+function tpCarga(plan){
+  const dias=[0,1,2,3,4,5].map(i=>sumarDias(plan.lunes,i)), carga={};
+  plan.items.forEach(it=>{ if(!it.ini||!it.fin) return; const ds=tpDias(it.ini,it.fin), h=(Number(it.horas)||0)/ds.length;
+    it.responsables.forEach(pid=>{ carga[pid]=carga[pid]||{}; ds.forEach(d=>{ carga[pid][d]=(carga[pid][d]||0)+h; }); }); });
+  return { dias, carga };
+}
+function tpSobrecargas(plan){
+  const {carga}=tpCarga(plan), out=[];
+  Object.keys(carga).forEach(pid=>Object.keys(carga[pid]).forEach(d=>{ if(carga[pid][d]>TP_HORAS_DIA+0.01) out.push({pid,d,h:carga[pid][d]}); }));
+  return out;
+}
+function tpSincronizarGantt(plan){
+  DB.proyectos.forEach(p=>{ p.planificacion=(p.planificacion||[]).filter(t=>t.origenTaller!==plan.id); });
+  plan.items.forEach(it=>{ const p=it.proyectoId?proy(it.proyectoId):null; if(!p||!it.ini||!it.fin) return;
+    const nextId=p.planificacion.reduce((m,t)=>Math.max(m,Number(t.id)||0),0)+1;
+    p.planificacion.push({ id:nextId, origenTaller:plan.id, origenTallerItem:it.id, nombre:"🛠 "+(it.tablero?it.tablero+": ":"")+it.tarea, fase:"Taller",
+      responsable:tpNombres(it).join(", ")||"Sin asignar", inicio:it.ini, fin:it.fin, avance:Number(it.avance)||0, hito:false, predecesores:[], meta:it.meta||"" }); });
+}
+function tpGuardar(plan,nota){
+  tpSincronizarGantt(plan);
+  registrarHistorial({proyecto:"Taller", accion:"Modificar", detalle:`Programa de taller (semana ${plan.lunes}): ${nota}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
+  guardarEstado(); renderAll();
+}
+function tpPuede(){ if(!puedeGestionarTaller()){ toast(`Tu rol (${DB.role}) no puede programar el taller.`, "danger"); return false; } return true; }
+/* ---- Semanas ---- */
+function tpModalSemana(){
+  if(!tpPuede()) return;
+  const prev=tpPlanes().slice().sort((a,b)=>b.lunes.localeCompare(a.lunes))[0];
+  const pend=prev?prev.items.filter(i=>i.estado!=="listo").length:0;
+  openModal(`<div class="modal-head"><h3>Nueva semana de taller</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body"><label class="small muted">Semana que parte el lunes<input type="date" id="tpLunes" value="${distLunesSiguiente()}"></label>
+    ${pend?`<label class="small flex-gap" style="margin-top:10px;"><input type="checkbox" id="tpTraspasar" checked> Traspasar los ${pend} trabajo(s) pendiente(s) de la semana del ${distDiaTxt(prev.lunes)}</label>`:''}</div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="tpCrearSemana()">Crear semana</button></div>`);
+}
+function tpCrearSemana(){
+  if(!tpPuede()) return;
+  const lunes=document.getElementById('tpLunes').value; if(!lunes){ toast("Elige la fecha.", "danger"); return; }
+  if(tpPlanes().some(p=>p.lunes===lunes)){ toast("Ya existe una semana con ese lunes.", "danger"); return; }
+  const plan={ id:"TP-"+Math.random().toString(36).slice(2,8).toUpperCase(), lunes, estado:"borrador", enviados:[], items:[], creadoPor:DB.usuario };
+  const chk=document.getElementById('tpTraspasar');
+  if(chk&&chk.checked){ const prev=tpPlanes().slice().sort((a,b)=>b.lunes.localeCompare(a.lunes))[0]; const delta=diasEntre(prev.lunes,lunes); let n=0;
+    prev.items.filter(i=>i.estado!=="listo").forEach(i=>{ n++; plan.items.push({ ...i, id:n, responsables:i.responsables.slice(), ini:sumarDias(i.ini,delta), fin:sumarDias(i.fin,delta), nota:((i.nota?i.nota+" · ":"")+"Viene de la semana anterior") }); }); }
+  DB.programaTaller.push(plan); tpPlanId=plan.id; closeModal(); tpGuardar(plan,"semana creada");
+}
+function tpEliminarSemana(id){
+  if(!tpPuede()) return; const plan=tpPlan(id); if(!plan||!confirm("¿Eliminar esta semana completa del programa de taller?")) return;
+  DB.proyectos.forEach(p=>{ p.planificacion=(p.planificacion||[]).filter(t=>t.origenTaller!==id); });
+  DB.programaTaller=DB.programaTaller.filter(x=>x.id!==id); tpPlanId="";
+  registrarHistorial({proyecto:"Taller", accion:"Eliminar", detalle:`Semana de taller ${plan.lunes} eliminada`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"}); guardarEstado(); renderAll();
+}
+/* ---- Tareas ---- */
+function tpHtmlResp(sel){
+  const orden=DB.personal.slice().sort((a,b)=>(/taller/i.test(b.cargo)?1:0)-(/taller/i.test(a.cargo)?1:0));
+  return `<div style="display:flex;flex-wrap:wrap;gap:6px 14px;">${orden.map(p=>`<label class="small flex-gap"><input type="checkbox" class="tpResp" value="${p.id}" ${sel.includes(p.id)?'checked':''}> ${escaparHtml(p.nombre)}</label>`).join("")}</div>`;
+}
+function tpLeerResp(){ return Array.from(document.querySelectorAll('.tpResp:checked')).map(x=>x.value); }
+function tpOptProy(sel){ return `<option value="">(sin proyecto / interno)</option>${DB.proyectos.map(p=>`<option value="${p.id}" ${sel===p.id?'selected':''}>${escaparHtml(p.codigo)} · ${escaparHtml(p.nombre.slice(0,40))}</option>`).join("")}`; }
+function tpModalItem(planId,itemId){
+  if(!tpPuede()) return; const plan=tpPlan(planId); const it=itemId?plan.items.find(x=>x.id===itemId):null;
+  openModal(`<div class="modal-head"><h3>${it?'Editar trabajo':'Nuevo trabajo de taller'}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body" style="display:grid;gap:10px;">
+      <label class="small muted">Proyecto<select id="tpProy">${tpOptProy(it?it.proyectoId:"")}</select></label>
+      <label class="small muted">Tablero / equipo<input type="text" id="tpTablero" value="${escaparHtml(it?it.tablero:"")}" placeholder="Ej: MCC Calibrador"></label>
+      <label class="small muted">Tarea<input type="text" id="tpTarea" list="tpTareas" value="${escaparHtml(it?it.tarea:"")}" placeholder="Ej: Cableado de potencia"><datalist id="tpTareas">${TP_ARMADO.map(t=>`<option value="${escaparHtml(t[0])}">`).join("")}</datalist></label>
+      <div><div class="small muted">Responsables</div>${tpHtmlResp(it?it.responsables:[])}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+        <label class="small muted">Inicio<input type="date" id="tpIni" value="${it?it.ini:plan.lunes}"></label>
+        <label class="small muted">Fin<input type="date" id="tpFin" value="${it?it.fin:sumarDias(plan.lunes,4)}"></label>
+        <label class="small muted">Horas estimadas<input type="number" id="tpHoras" min="0" step="0.5" value="${it?it.horas:8}"></label></div>
+      <label class="small muted">Qué debe quedar listo (meta clara)<input type="text" id="tpMeta" value="${escaparHtml(it?it.meta:"")}" placeholder="Ej: Potencia cableada y revisada, lista para control"></label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <label class="small muted">Prioridad<select id="tpPrio"><option value="normal" ${!it||it.prioridad!=='urgente'?'selected':''}>Normal</option><option value="urgente" ${it&&it.prioridad==='urgente'?'selected':''}>🔴 Urgente</option></select></label>
+        <label class="small muted">Nota<input type="text" id="tpNota" value="${escaparHtml(it?it.nota:"")}"></label></div>
+    </div>
+    <div class="modal-foot">${it?`<button class="btn btn-danger" onclick="tpQuitarItem('${planId}',${it.id})">Quitar</button>`:''}<button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="tpGuardarItem('${planId}',${it?it.id:0})">Guardar</button></div>`, 640);
+}
+function tpGuardarItem(planId,itemId){
+  if(!tpPuede()) return; const plan=tpPlan(planId);
+  const d={ proyectoId:document.getElementById('tpProy').value, tablero:document.getElementById('tpTablero').value.trim(), tarea:document.getElementById('tpTarea').value.trim(), responsables:tpLeerResp(),
+    ini:document.getElementById('tpIni').value, fin:document.getElementById('tpFin').value, horas:Number(document.getElementById('tpHoras').value)||0, meta:document.getElementById('tpMeta').value.trim(),
+    prioridad:document.getElementById('tpPrio').value, nota:document.getElementById('tpNota').value.trim() };
+  if(!d.tarea){ toast("Escribe la tarea.", "danger"); return; }
+  if(!d.ini||!d.fin||d.fin<d.ini){ toast("Revisa las fechas de inicio y fin.", "danger"); return; }
+  if(itemId){ Object.assign(plan.items.find(x=>x.id===itemId),d); }
+  else { const id=plan.items.reduce((m,x)=>Math.max(m,x.id),0)+1; plan.items.push({ id, estado:"pendiente", avance:0, ...d }); }
+  closeModal(); tpGuardar(plan,(itemId?"editado: ":"agregado: ")+d.tarea);
+}
+function tpQuitarItem(planId,itemId){ if(!tpPuede()) return; const plan=tpPlan(planId); const it=plan.items.find(x=>x.id===itemId); plan.items=plan.items.filter(x=>x.id!==itemId); closeModal(); tpGuardar(plan,"quitado: "+(it?it.tarea:"")); }
+function tpSetEstado(planId,itemId,estado){
+  if(!tpPuede()) return; const plan=tpPlan(planId); const it=plan.items.find(x=>x.id===itemId); if(!it) return;
+  it.estado=estado; it.avance = estado==="listo"?100 : estado==="pendiente"?0 : (it.avance>0&&it.avance<100?it.avance:50);
+  tpGuardar(plan,`${it.tarea} → ${estado}`);
+}
+/* ---- Armado completo de un tablero ---- */
+function tpModalArmado(planId){
+  if(!tpPuede()) return; const plan=tpPlan(planId);
+  openModal(`<div class="modal-head"><h3>Programar armado de un tablero</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body" style="display:grid;gap:10px;">
+      <label class="small muted">Proyecto<select id="tpProy">${tpOptProy("")}</select></label>
+      <label class="small muted">Tablero<input type="text" id="tpTablero" placeholder="Ej: MCC Calibrador"></label>
+      <div><div class="small muted">Responsables</div>${tpHtmlResp([])}</div>
+      <label class="small muted">Parte el<input type="date" id="tpIni" value="${plan.lunes}"></label>
+      <div class="small muted">Etapas (desmarca las que no apliquen y ajusta las horas; cada 8 h = 1 día)</div>
+      ${TP_ARMADO.map((t,i)=>`<div class="flex-gap"><input type="checkbox" class="tpEt" data-i="${i}" checked><span class="small" style="flex:1">${escaparHtml(t[0])}</span><input type="number" id="tpH${i}" value="${t[1]}" min="0" step="0.5" style="width:70px"> h</div>`).join("")}
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="tpCrearArmado('${planId}')">Agregar etapas</button></div>`, 640);
+}
+function tpSiguienteHabil(f){ let d=f; for(let i=0;i<7;i++){ const w=new Date(d+"T12:00:00Z").getUTCDay(); if(w>=1&&w<=5) return d; d=sumarDias(d,1); } return d; }
+function tpCrearArmado(planId){
+  if(!tpPuede()) return; const plan=tpPlan(planId);
+  const tablero=document.getElementById('tpTablero').value.trim(); if(!tablero){ toast("Escribe el nombre del tablero.", "danger"); return; }
+  const proyectoId=document.getElementById('tpProy').value, resp=tpLeerResp(); let cursor=tpSiguienteHabil(document.getElementById('tpIni').value||plan.lunes), n=0;
+  Array.from(document.querySelectorAll('.tpEt:checked')).forEach(c=>{ const i=+c.dataset.i, h=Number(document.getElementById('tpH'+i).value)||0, dias=Math.max(1,Math.ceil(h/8));
+    let fin=cursor; for(let k=1;k<dias;k++) fin=tpSiguienteHabil(sumarDias(fin,1));
+    const id=plan.items.reduce((m,x)=>Math.max(m,x.id),0)+1;
+    plan.items.push({ id, proyectoId, tablero, tarea:TP_ARMADO[i][0], responsables:resp.slice(), ini:cursor, fin, horas:h, meta:"", prioridad:"normal", nota:"", estado:"pendiente", avance:0 }); n++;
+    cursor=tpSiguienteHabil(sumarDias(fin,1)); });
+  closeModal(); tpGuardar(plan,`armado de ${tablero}: ${n} etapas`);
+}
+/* ---- Mensajes ---- */
+function tpLineaItem(it){
+  const p=it.proyectoId?proy(it.proyectoId):null;
+  return `• *${it.tablero?it.tablero+" – ":""}${it.tarea}*${p?` (${p.codigo})`:''}${it.prioridad==='urgente'?' 🔴 URGENTE':''}\n   📅 ${it.ini===it.fin?distDiaTxt(it.ini):distDiaTxt(it.ini)+' → '+distDiaTxt(it.fin)} · ⏱ ${it.horas} h${it.meta?`\n   🎯 ${it.meta}`:''}${it.nota?`\n   📝 ${it.nota}`:''}`;
+}
+function tpMensajePersona(plan,per){
+  const mios=plan.items.filter(i=>i.responsables.includes(per.id)).sort((a,b)=>a.ini.localeCompare(b.ini));
+  return `*Programa de taller – semana ${distDiaTxt(plan.lunes)} al ${distDiaTxt(sumarDias(plan.lunes,4))}*\n\nHola ${per.nombre.split(" ")[0]}, esta semana te toca:\n\n${mios.map(tpLineaItem).join("\n\n")}\n\nSi algo te frena (material, plano, herramienta) avísame apenas lo veas. Al terminar cada trabajo, confírmame ✅.`;
+}
+function tpMensajeGrupo(plan){
+  return `*Programa de taller – semana ${distDiaTxt(plan.lunes)} al ${distDiaTxt(sumarDias(plan.lunes,4))}*\n\n`+plan.items.slice().sort((a,b)=>a.ini.localeCompare(b.ini)).map(i=>`${tpLineaItem(i)}\n   👷 ${tpNombres(i).join(", ")||"sin asignar"}`).join("\n\n");
+}
+function tpValidarEnvio(plan){
+  if(!plan.items.length) return "La semana no tiene trabajos.";
+  const sr=plan.items.filter(i=>!i.responsables.length).length; if(sr) return `Faltan responsables en ${sr} trabajo(s).`;
+  return "";
+}
+function tpModalEnviar(planId){
+  const plan=tpPlan(planId); if(!plan) return; const err=tpValidarEnvio(plan); if(err){ toast(err,"danger"); return; }
+  const ids=[...new Set(plan.items.flatMap(i=>i.responsables))], personas=ids.map(id=>DB.personal.find(p=>p.id===id)).filter(Boolean);
+  const sob=tpSobrecargas(plan);
+  openModal(`<div class="modal-head"><h3>Enviar programa por WhatsApp</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      ${sob.length?`<div class="mp-alerta" style="margin-bottom:10px;">⚠ Hay ${sob.length} día(s) con más de ${TP_HORAS_DIA} h asignadas a una persona. Puedes enviar igual, pero conviene ajustarlo antes.</div>`:''}
+      <div class="hint" style="margin-bottom:10px;">Se abre WhatsApp con el mensaje escrito; tú pulsas Enviar. Cada persona recibe solo lo suyo.</div>
+      ${personas.map(per=>{ const n=plan.items.filter(i=>i.responsables.includes(per.id)).length, tel=fsTelefonoWA(per.telefono), env=plan.enviados.includes(per.id);
+        return `<div class="flex-between" style="padding:8px 0;border-top:1px solid var(--line-soft);gap:8px;flex-wrap:wrap;"><div><b>${escaparHtml(per.nombre)}</b> <span class="muted small">· ${n} trabajo(s)</span> ${env?'<span class="badge b-verde"><span class="dot"></span>Enviado</span>':''}${tel?'':'<div class="hint" style="color:var(--danger)">Sin teléfono: se abrirá WhatsApp para elegir el contacto.</div>'}</div>
+          <div class="flex-gap"><button class="btn btn-sm" onclick="tpCopiar('${planId}','${per.id}')">Copiar</button><button class="btn btn-sm btn-primary" onclick="tpEnviarWA('${planId}','${per.id}')">📲 WhatsApp</button></div></div>`; }).join("")}
+      <div class="flex-between" style="padding:10px 0 0;border-top:1px solid var(--line);margin-top:6px;gap:8px;"><div><b>Mensaje para el grupo</b><div class="hint">Todos los trabajos con sus responsables.</div></div>
+        <div class="flex-gap"><button class="btn btn-sm" onclick="tpCopiar('${planId}','grupo')">Copiar</button><button class="btn btn-sm btn-primary" onclick="tpEnviarWA('${planId}','grupo')">📲 Abrir</button></div></div>
+    </div><div class="modal-foot"><button class="btn" onclick="closeModal()">Cerrar</button></div>`, 680);
+}
+function tpTexto(planId,quien){ const plan=tpPlan(planId); if(quien==="grupo") return tpMensajeGrupo(plan); const per=DB.personal.find(p=>p.id===quien); return tpMensajePersona(plan,per); }
+function tpCopiar(planId,quien){ (navigator.clipboard?navigator.clipboard.writeText(tpTexto(planId,quien)):Promise.reject()).then(()=>toast("Mensaje copiado.","ok")).catch(()=>toast("No se pudo copiar.","danger")); }
+function tpEnviarWA(planId,quien){
+  const plan=tpPlan(planId); const per=quien==="grupo"?null:DB.personal.find(p=>p.id===quien); const tel=per?fsTelefonoWA(per.telefono):"";
+  window.open("https://wa.me/"+tel+"?text="+encodeURIComponent(tpTexto(planId,quien)),"_blank");
+  if(per && !plan.enviados.includes(per.id)) plan.enviados.push(per.id);
+  plan.estado="enviado"; guardarEstado(); tpModalEnviar(planId);
+}
+/* ---- Página ---- */
+function renderTallerPrograma(){
+  const planes=tpPlanes().slice().sort((a,b)=>b.lunes.localeCompare(a.lunes)), gest=puedeGestionarTaller();
+  if(!planes.find(x=>x.id===tpPlanId)) tpPlanId=planes.length?planes[0].id:"";
+  const plan=planes.find(x=>x.id===tpPlanId);
+  const head=`<div class="page-head"><div><h1>Programa de taller</h1><div class="page-desc">Armado de tableros: programa la semana, revisa la carga de cada persona y envíalo por WhatsApp. Lo que tiene proyecto queda también en su Gantt.</div></div>
+    <div class="flex-gap">${gest?`<button class="btn btn-primary" onclick="tpModalSemana()">+ Nueva semana</button>`:''}</div></div>`;
+  const chips=planes.length>1?`<div class="mp-chips">${planes.map(x=>`<button class="mp-chip ${x.id===tpPlanId?'on':''}" onclick="tpPlanId='${x.id}'; renderAll();">${distDiaTxt(x.lunes)}${x.estado==='enviado'?' ✓':''}</button>`).join("")}</div>`:'';
+  if(!plan) return head+`<div class="empty-state card">Aún no hay semanas programadas.${gest?' Crea la primera con «+ Nueva semana».':''}</div>`;
+  const items=plan.items.slice().sort((a,b)=>a.ini.localeCompare(b.ini)||(a.tablero||"").localeCompare(b.tablero||""));
+  const horas=items.reduce((a,i)=>a+(Number(i.horas)||0),0), listos=items.filter(i=>i.estado==="listo").length;
+  const {dias,carga}=tpCarga(plan), pids=Object.keys(carga), sob=tpSobrecargas(plan);
+  const grid=pids.length?`<div class="card" style="padding:12px;margin:12px 0;"><b>Carga por persona (horas por día)</b> <span class="small muted">· rojo = más de ${TP_HORAS_DIA} h</span>
+    <div class="tbl-wrap"><table class="tbl" style="margin-top:6px;"><thead><tr><th>Persona</th>${dias.map(d=>`<th style="text-align:center">${distDiaTxt(d).slice(0,3)} ${new Date(d+"T12:00:00Z").getUTCDate()}</th>`).join("")}<th style="text-align:center">Total</th></tr></thead><tbody>
+    ${pids.map(pid=>{ const per=DB.personal.find(x=>x.id===pid); const tot=Object.values(carga[pid]).reduce((a,b)=>a+b,0);
+      return `<tr><td class="small"><b>${escaparHtml(per?per.nombre:"?")}</b></td>${dias.map(d=>{ const h=carga[pid][d]||0; return `<td style="text-align:center;${h>TP_HORAS_DIA+0.01?'background:rgba(220,60,60,.18);font-weight:700':''}">${h?Math.round(h*10)/10:'·'}</td>`; }).join("")}<td style="text-align:center"><b>${Math.round(tot*10)/10}</b></td></tr>`; }).join("")}
+    </tbody></table></div></div>`:'';
+  const badgeEst={pendiente:'<span class="badge b-gris"><span class="dot"></span>Pendiente</span>',en_curso:'<span class="badge b-amarillo"><span class="dot"></span>En curso</span>',listo:'<span class="badge b-verde"><span class="dot"></span>Listo</span>',bloqueado:'<span class="badge b-rojo"><span class="dot"></span>Bloqueado</span>'};
+  const tabla=`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Tablero / tarea</th><th>Responsables</th><th>Fechas</th><th style="text-align:right">Horas</th><th>Estado</th>${gest?'<th></th>':''}</tr></thead><tbody>
+    ${items.length?items.map(it=>{ const p=it.proyectoId?proy(it.proyectoId):null; const sinR=!it.responsables.length;
+      return `<tr><td><b>${escaparHtml(it.tablero||"—")}</b>${it.prioridad==='urgente'?' <span class="badge b-rojo"><span class="dot"></span>Urgente</span>':''}<div class="small">${escaparHtml(it.tarea)}</div><div class="small muted">${p?escaparHtml(p.codigo):'sin proyecto'}${it.meta?' · 🎯 '+escaparHtml(it.meta):''}${it.nota?' · 📝 '+escaparHtml(it.nota):''}</div></td>
+      <td class="small" style="${sinR?'color:var(--danger)':''}">${sinR?'⚠ sin asignar':escaparHtml(tpNombres(it).join(", "))}</td>
+      <td class="small">${distDiaTxt(it.ini)}${it.fin!==it.ini?'<br>→ '+distDiaTxt(it.fin):''}</td><td style="text-align:right">${it.horas}</td>
+      <td>${gest?`<select style="font-size:12px;padding:4px;border-radius:6px;border:1px solid var(--line);background:var(--card)" onchange="tpSetEstado('${plan.id}',${it.id},this.value)">${["pendiente","en_curso","listo","bloqueado"].map(e=>`<option value="${e}" ${it.estado===e?'selected':''}>${e.replace('_',' ')}</option>`).join("")}</select>`:badgeEst[it.estado]||''}</td>
+      ${gest?`<td><button class="btn btn-sm" onclick="tpModalItem('${plan.id}',${it.id})">Editar</button></td>`:''}</tr>`; }).join(""):`<tr><td colspan="${gest?6:5}"><div class="empty-state">Sin trabajos todavía.</div></td></tr>`}
+    </tbody></table></div>`;
+  return head+chips+`
+    <div class="card" style="padding:12px;margin-top:10px;display:flex;gap:18px;align-items:center;flex-wrap:wrap;">
+      <div><div class="small muted">Semana</div><b>${distDiaTxt(plan.lunes)} → ${distDiaTxt(sumarDias(plan.lunes,4))}</b> ${plan.estado==='enviado'?'<span class="badge b-verde"><span class="dot"></span>Enviado</span>':'<span class="badge b-gris"><span class="dot"></span>Borrador</span>'}</div>
+      <div><div class="small muted">Trabajos</div><b>${listos}/${items.length} listos</b></div><div><div class="small muted">Horas programadas</div><b>${Math.round(horas*10)/10} h</b></div>
+      ${sob.length?`<div style="color:var(--danger)"><b>⚠ ${sob.length} día(s) sobrecargado(s)</b></div>`:''}
+      <div class="flex-gap" style="margin-left:auto;flex-wrap:wrap;">${gest?`<button class="btn btn-sm" onclick="tpModalArmado('${plan.id}')">🧰 Armado de tablero</button><button class="btn btn-sm" onclick="tpModalItem('${plan.id}')">+ Trabajo</button><button class="btn btn-sm btn-primary" onclick="tpModalEnviar('${plan.id}')">📲 Enviar por WhatsApp</button><button class="btn btn-sm" onclick="tpEliminarSemana('${plan.id}')" title="Eliminar semana">🗑</button>`:''}</div>
+    </div>${grid}${tabla}`;
+}
+
 // ================================================================
 // 8. SHELL Y NAVEGACIÓN
 // ================================================================
@@ -10868,6 +11094,7 @@ function NAV_ACTUAL() {
       {id:"acuerdos", label:"Acuerdos comerciales", icon:iconBox(), roles: ROLES_COMPRAS},
       {id:"informesAdmin", label:"Informes a Administración", icon:iconBox(), roles: ROLES_COMPRAS},
       {id:"protocolos", label:"Protocolos FAT / SAT", icon:iconCheck()},
+      {id:"tallerPrograma", label:"Programa de taller", icon:iconClipboard()},
       {id:"bodegaGeneral", label:"Bodega General", icon:iconBox()},
       {id:"personal", label:"Personal", icon:iconUsers()},
     ]},
@@ -11087,7 +11314,7 @@ function renderAll() {
   const renderers = {
     dashboard: renderDashboard, miPanel: renderMiPanel, panelEquipo: renderPanelEquipo, bodegaGeneral: renderBodegaGeneral, personal: renderPersonal, proyecto360: renderProyecto360, planificacion: renderPlanificacion, compras: renderCompras,
     presupuesto: renderPresupuesto, bodega: renderBodega, reporteMateriales: renderReporteMateriales, comprasDirectas: renderComprasDirectas, punch: renderPunch, requerimientos: renderRequerimientos, galeria: renderGaleria, cuadroCarga: renderCuadroCarga,
-    recepciones: renderRecepciones, resumenOC: renderResumenOC, panol: renderPanol, acuerdos: renderAcuerdos, informesAdmin: renderInformesAdmin, protocolos: renderProtocolos, finSemana: renderFinSemana, kickoff: renderKickoff,
+    recepciones: renderRecepciones, resumenOC: renderResumenOC, panol: renderPanol, acuerdos: renderAcuerdos, informesAdmin: renderInformesAdmin, protocolos: renderProtocolos, finSemana: renderFinSemana, kickoff: renderKickoff, tallerPrograma: renderTallerPrograma,
     fabricacion: renderFabricacion,
     reaperturas: renderReaperturas, copiloto: renderCopiloto, auditoria: renderAuditoria, actividad: renderActividad, respaldos: renderRespaldos,
   };

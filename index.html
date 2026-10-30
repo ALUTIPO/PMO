@@ -502,7 +502,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.7.0";
+const APP_VERSION = "3.7.1";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -10886,11 +10886,16 @@ function tpDias(ini,fin){
   const habiles=out.filter(d=>{ const w=new Date(d+"T12:00:00Z").getUTCDay(); return w>=1&&w<=5; });
   return habiles.length?habiles:out;
 }
+function tpLunesDe(f){ const w=new Date(f+"T12:00:00Z").getUTCDay(); return sumarDias(f, w===0?-6:1-w); }
 function tpCarga(plan){
-  const dias=[0,1,2,3,4,5].map(i=>sumarDias(plan.lunes,i)), carga={};
+  const ini=plan.items.reduce((m,i)=>i.ini&&i.ini<m?i.ini:m,plan.lunes), fin=plan.items.reduce((m,i)=>i.fin&&i.fin>m?i.fin:m,sumarDias(plan.lunes,5));
+  const carga={};
   plan.items.forEach(it=>{ if(!it.ini||!it.fin) return; const ds=tpDias(it.ini,it.fin), h=(Number(it.horas)||0)/ds.length;
     it.responsables.forEach(pid=>{ carga[pid]=carga[pid]||{}; ds.forEach(d=>{ carga[pid][d]=(carga[pid][d]||0)+h; }); }); });
-  return { dias, carga };
+  const semanal = diasEntre(ini,fin) > 7; const columnas=[];
+  if(!semanal){ for(let i=0;i<6;i++){ const d=sumarDias(plan.lunes,i); columnas.push({ label:distDiaTxt(d).slice(0,3)+" "+new Date(d+"T12:00:00Z").getUTCDate(), dias:[d] }); } }
+  else { let l=tpLunesDe(ini); for(let i=0;i<30 && l<=fin;i++){ const ds=[0,1,2,3,4,5,6].map(k=>sumarDias(l,k)); columnas.push({ label:"Sem "+distDiaTxt(l).split(" ").slice(1).join(" "), dias:ds }); l=sumarDias(l,7); } }
+  return { columnas, carga, semanal };
 }
 function tpSobrecargas(plan){
   const {carga}=tpCarga(plan), out=[];
@@ -10904,6 +10909,78 @@ function tpSincronizarGantt(plan){
     p.planificacion.push({ id:nextId, origenTaller:plan.id, origenTallerItem:it.id, nombre:"🛠 "+(it.tablero?it.tablero+": ":"")+it.tarea, fase:"Taller",
       responsable:tpNombres(it).join(", ")||"Sin asignar", inicio:it.ini, fin:it.fin, avance:Number(it.avance)||0, hito:false, predecesores:[], meta:it.meta||"" }); });
 }
+
+/* ---- Tableros (grupos), duplicación y colapso ---- */
+let tpGrupoKeys = [], tpAbiertos = {}, tpTodoAbierto = null;
+function tpKey(it){ return (it.proyectoId||"")+"||"+(it.tablero||""); }
+function tpGrupos(plan){
+  const m={}, orden=[];
+  plan.items.slice().sort((a,b)=>a.ini.localeCompare(b.ini)).forEach(it=>{ const k=tpKey(it); if(!m[k]){ m[k]=[]; orden.push(k); } m[k].push(it); });
+  return orden.map(k=>({ key:k, items:m[k] }));
+}
+function tpItemsGrupo(plan,key){ return plan.items.filter(i=>tpKey(i)===key); }
+function tpEstaAbierto(plan,key,nGrupos){ const k=plan.id+"|"+key; if(tpAbiertos[k]!==undefined) return tpAbiertos[k]; return nGrupos<=1; }
+function tpToggle(gi){ const plan=tpPlan(tpPlanId), g=tpGrupoKeys[gi]; if(g==null) return; const k=plan.id+"|"+g; tpAbiertos[k]=!tpEstaAbierto(plan,g,tpGrupoKeys.length); renderAll(); }
+function tpExpandirTodo(abrir){ const plan=tpPlan(tpPlanId); tpGrupoKeys.forEach(k=>{ tpAbiertos[plan.id+"|"+k]=abrir; }); renderAll(); }
+function tpEsHabil(f){ const w=new Date(f+"T12:00:00Z").getUTCDay(); return w>=1&&w<=5; }
+function tpHabilesEntre(a,b){ let n=0, d=tpSiguienteHabil(a); const fin=tpSiguienteHabil(b); for(let i=0;i<400 && d<fin;i++){ d=tpSiguienteHabil(sumarDias(d,1)); n++; } return n; }
+function tpSumarHabiles(f,n){ let d=tpSiguienteHabil(f); for(let i=0;i<n;i++) d=tpSiguienteHabil(sumarDias(d,1)); return d; }
+function tpNombresCopias(plan,base,cant){
+  const m=String(base).match(/^(.*?)(\d+)\s*$/); const pref=m?m[1]:base+" ", ini=m?parseInt(m[2],10):1;
+  const usados=new Set(plan.items.map(i=>(i.tablero||"").toLowerCase())); const out=[]; let n=ini;
+  while(out.length<cant && n<ini+500){ n++; const nom=pref+n; if(!usados.has(nom.toLowerCase())){ usados.add(nom.toLowerCase()); out.push(nom); } }
+  return out;
+}
+/* Copia el bloque de tareas de un tablero `cant` veces. modo "seguidos": una copia empieza
+   al terminar la anterior (mismas personas); "paralelo": mismas fechas (reasigna después). */
+function tpDuplicarGrupo(plan,key,cant,modo){
+  const orig=tpItemsGrupo(plan,key); if(!orig.length) return [];
+  const base=orig[0].tablero||"Tablero"; const nombres=tpNombresCopias(plan,base,cant);
+  const ini0=orig.reduce((m,i)=>i.ini<m?i.ini:m,orig[0].ini), fin0=orig.reduce((m,i)=>i.fin>m?i.fin:m,orig[0].fin);
+  const span=tpHabilesEntre(ini0,fin0)+1; let id=plan.items.reduce((m,x)=>Math.max(m,x.id),0);
+  nombres.forEach((nombre,c)=>{
+    const inicioCopia = modo==="paralelo" ? ini0 : tpSumarHabiles(ini0, span*(c+1));
+    orig.forEach(o=>{ id++; const offI=tpHabilesEntre(ini0,o.ini), offF=tpHabilesEntre(ini0,o.fin);
+      plan.items.push({ ...o, id, tablero:nombre, responsables:o.responsables.slice(), ini:tpSumarHabiles(inicioCopia,offI), fin:tpSumarHabiles(inicioCopia,offF), estado:"pendiente", avance:0, nota:o.nota }); });
+  });
+  return nombres;
+}
+function tpModalDuplicar(gi){
+  if(!tpPuede()) return; const plan=tpPlan(tpPlanId), key=tpGrupoKeys[gi]; const orig=tpItemsGrupo(plan,key); if(!orig.length) return;
+  const base=orig[0].tablero||"Tablero";
+  openModal(`<div class="modal-head"><h3>Duplicar tablero «${escaparHtml(base)}»</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body" style="display:grid;gap:10px;">
+      <label class="small muted">Copias a crear (además del original)<input type="number" id="tpCopias" min="1" max="20" value="3" oninput="tpPrevCopias(${gi})"></label>
+      <div class="hint" id="tpPrevNombres"></div>
+      <label class="small muted">Cómo programarlas
+        <select id="tpModoCopia"><option value="seguidos">Una después de otra (mismas personas)</option><option value="paralelo">En paralelo, mismas fechas (luego cambias responsables)</option></select></label>
+      <p class="hint">Se copian las ${orig.length} tareas con sus horas, metas y responsables. Las copias parten como pendientes.</p>
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="tpConfirmarDuplicar(${gi})">Duplicar</button></div>`, 520);
+  tpPrevCopias(gi);
+}
+function tpPrevCopias(gi){ const plan=tpPlan(tpPlanId), orig=tpItemsGrupo(plan,tpGrupoKeys[gi]); const n=Math.max(1,Math.min(20,parseInt(document.getElementById('tpCopias').value,10)||1)); const nom=tpNombresCopias(plan,orig[0].tablero||"Tablero",n); document.getElementById('tpPrevNombres').textContent="Quedarán: "+(orig[0].tablero||"Tablero")+", "+nom.join(", "); }
+function tpConfirmarDuplicar(gi){
+  if(!tpPuede()) return; const plan=tpPlan(tpPlanId), key=tpGrupoKeys[gi]; const n=Math.max(1,Math.min(20,parseInt(document.getElementById('tpCopias').value,10)||1));
+  const nombres=tpDuplicarGrupo(plan,key,n,document.getElementById('tpModoCopia').value);
+  closeModal(); tpGuardar(plan,"tablero duplicado: "+nombres.join(", "));
+}
+function tpModalRespGrupo(gi){
+  if(!tpPuede()) return; const plan=tpPlan(tpPlanId), key=tpGrupoKeys[gi]; const it=tpItemsGrupo(plan,key); const sel=[...new Set(it.flatMap(i=>i.responsables))];
+  openModal(`<div class="modal-head"><h3>Responsables de «${escaparHtml(it[0].tablero||'—')}»</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body"><p class="hint">Se aplican a las ${it.length} tareas del tablero.</p>${tpHtmlResp(sel)}</div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="tpAplicarRespGrupo(${gi})">Aplicar a todas</button></div>`, 560);
+}
+function tpAplicarRespGrupo(gi){
+  if(!tpPuede()) return; const plan=tpPlan(tpPlanId), key=tpGrupoKeys[gi]; const r=tpLeerResp(); tpItemsGrupo(plan,key).forEach(i=>{ i.responsables=r.slice(); });
+  closeModal(); tpGuardar(plan,"responsables del tablero actualizados");
+}
+function tpQuitarGrupo(gi){
+  if(!tpPuede()) return; const plan=tpPlan(tpPlanId), key=tpGrupoKeys[gi]; const it=tpItemsGrupo(plan,key);
+  if(!it.length||!confirm(`¿Quitar el tablero «${it[0].tablero||'—'}» con sus ${it.length} tareas?`)) return;
+  plan.items=plan.items.filter(i=>tpKey(i)!==key); tpGuardar(plan,"tablero quitado: "+(it[0].tablero||""));
+}
+
 function tpGuardar(plan,nota){
   tpSincronizarGantt(plan);
   registrarHistorial({proyecto:"Taller", accion:"Modificar", detalle:`Programa de taller (semana ${plan.lunes}): ${nota}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
@@ -10943,14 +11020,15 @@ function tpHtmlResp(sel){
 }
 function tpLeerResp(){ return Array.from(document.querySelectorAll('.tpResp:checked')).map(x=>x.value); }
 function tpOptProy(sel){ return `<option value="">(sin proyecto / interno)</option>${DB.proyectos.map(p=>`<option value="${p.id}" ${sel===p.id?'selected':''}>${escaparHtml(p.codigo)} · ${escaparHtml(p.nombre.slice(0,40))}</option>`).join("")}`; }
-function tpModalItem(planId,itemId){
+function tpModalItem(planId,itemId,gi){
   if(!tpPuede()) return; const plan=tpPlan(planId); const it=itemId?plan.items.find(x=>x.id===itemId):null;
+  const pre=(!it&&gi!=null&&tpGrupoKeys[gi]!=null)?tpGrupoKeys[gi].split("||"):null; const preResp=pre?[...new Set(tpItemsGrupo(plan,tpGrupoKeys[gi]).flatMap(i=>i.responsables))]:[];
   openModal(`<div class="modal-head"><h3>${it?'Editar trabajo':'Nuevo trabajo de taller'}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
     <div class="modal-body" style="display:grid;gap:10px;">
-      <label class="small muted">Proyecto<select id="tpProy">${tpOptProy(it?it.proyectoId:"")}</select></label>
-      <label class="small muted">Tablero / equipo<input type="text" id="tpTablero" value="${escaparHtml(it?it.tablero:"")}" placeholder="Ej: MCC Calibrador"></label>
+      <label class="small muted">Proyecto<select id="tpProy">${tpOptProy(it?it.proyectoId:(pre?pre[0]:""))}</select></label>
+      <label class="small muted">Tablero / equipo<input type="text" id="tpTablero" value="${escaparHtml(it?it.tablero:(pre?pre[1]:""))}" placeholder="Ej: MCC Calibrador"></label>
       <label class="small muted">Tarea<input type="text" id="tpTarea" list="tpTareas" value="${escaparHtml(it?it.tarea:"")}" placeholder="Ej: Cableado de potencia"><datalist id="tpTareas">${TP_ARMADO.map(t=>`<option value="${escaparHtml(t[0])}">`).join("")}</datalist></label>
-      <div><div class="small muted">Responsables</div>${tpHtmlResp(it?it.responsables:[])}</div>
+      <div><div class="small muted">Responsables</div>${tpHtmlResp(it?it.responsables:preResp)}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
         <label class="small muted">Inicio<input type="date" id="tpIni" value="${it?it.ini:plan.lunes}"></label>
         <label class="small muted">Fin<input type="date" id="tpFin" value="${it?it.fin:sumarDias(plan.lunes,4)}"></label>
@@ -10988,6 +11066,9 @@ function tpModalArmado(planId){
       <label class="small muted">Tablero<input type="text" id="tpTablero" placeholder="Ej: MCC Calibrador"></label>
       <div><div class="small muted">Responsables</div>${tpHtmlResp([])}</div>
       <label class="small muted">Parte el<input type="date" id="tpIni" value="${plan.lunes}"></label>
+      <div style="display:grid;grid-template-columns:1fr 2fr;gap:10px;"><label class="small muted">Cantidad de tableros iguales<input type="number" id="tpCant" min="1" max="20" value="1"></label>
+      <label class="small muted">Si son varios<select id="tpModoArmado"><option value="seguidos">Uno después de otro (mismas personas)</option><option value="paralelo">En paralelo, mismas fechas</option></select></label></div>
+      <div class="hint">Si el nombre termina en número (ej: MDR1) las copias siguen la numeración: MDR2, MDR3…</div>
       <div class="small muted">Etapas (desmarca las que no apliquen y ajusta las horas; cada 8 h = 1 día)</div>
       ${TP_ARMADO.map((t,i)=>`<div class="flex-gap"><input type="checkbox" class="tpEt" data-i="${i}" checked><span class="small" style="flex:1">${escaparHtml(t[0])}</span><input type="number" id="tpH${i}" value="${t[1]}" min="0" step="0.5" style="width:70px"> h</div>`).join("")}
     </div>
@@ -11003,19 +11084,27 @@ function tpCrearArmado(planId){
     const id=plan.items.reduce((m,x)=>Math.max(m,x.id),0)+1;
     plan.items.push({ id, proyectoId, tablero, tarea:TP_ARMADO[i][0], responsables:resp.slice(), ini:cursor, fin, horas:h, meta:"", prioridad:"normal", nota:"", estado:"pendiente", avance:0 }); n++;
     cursor=tpSiguienteHabil(sumarDias(fin,1)); });
-  closeModal(); tpGuardar(plan,`armado de ${tablero}: ${n} etapas`);
+  const cant=Math.max(1,Math.min(20,parseInt(document.getElementById('tpCant').value,10)||1)); let extra=[];
+  if(cant>1) extra=tpDuplicarGrupo(plan,(proyectoId||"")+"||"+tablero,cant-1,document.getElementById('tpModoArmado').value);
+  closeModal(); tpGuardar(plan,`armado de ${tablero}${extra.length?' + '+extra.join(', '):''}: ${n} etapas`);
 }
 /* ---- Mensajes ---- */
 function tpLineaItem(it){
-  const p=it.proyectoId?proy(it.proyectoId):null;
-  return `• *${it.tablero?it.tablero+" – ":""}${it.tarea}*${p?` (${p.codigo})`:''}${it.prioridad==='urgente'?' 🔴 URGENTE':''}\n   📅 ${it.ini===it.fin?distDiaTxt(it.ini):distDiaTxt(it.ini)+' → '+distDiaTxt(it.fin)} · ⏱ ${it.horas} h${it.meta?`\n   🎯 ${it.meta}`:''}${it.nota?`\n   📝 ${it.nota}`:''}`;
+  return `  • ${it.tarea}${it.prioridad==='urgente'?' 🔴 URGENTE':''} — ${it.ini===it.fin?distDiaTxt(it.ini):distDiaTxt(it.ini)+' → '+distDiaTxt(it.fin)} · ${it.horas} h${it.meta?`\n     🎯 ${it.meta}`:''}${it.nota?`\n     📝 ${it.nota}`:''}`;
 }
+function tpBloquesMensaje(plan,items,conResp){
+  const m={}, orden=[]; items.slice().sort((a,b)=>a.ini.localeCompare(b.ini)).forEach(it=>{ const k=tpKey(it); if(!m[k]){ m[k]=[]; orden.push(k); } m[k].push(it); });
+  return orden.map(k=>{ const its=m[k], p=its[0].proyectoId?proy(its[0].proyectoId):null;
+    const resp=conResp?`\n👷 ${[...new Set(its.flatMap(i=>tpNombres(i)))].join(", ")||"sin asignar"}`:'';
+    return `🧰 *${its[0].tablero||"Trabajos varios"}*${p?` (${p.codigo})`:''}${resp}\n${its.map(tpLineaItem).join("\n")}`; }).join("\n\n");
+}
+function tpRango(plan,items){ const ini=items.reduce((m,i)=>i.ini<m?i.ini:m,items.length?items[0].ini:plan.lunes), fin=items.reduce((m,i)=>i.fin>m?i.fin:m,items.length?items[0].fin:plan.lunes); return diasEntre(ini,fin)>6 ? `del ${distDiaTxt(ini)} al ${distDiaTxt(fin)}` : `semana ${distDiaTxt(plan.lunes)} al ${distDiaTxt(sumarDias(plan.lunes,4))}`; }
 function tpMensajePersona(plan,per){
-  const mios=plan.items.filter(i=>i.responsables.includes(per.id)).sort((a,b)=>a.ini.localeCompare(b.ini));
-  return `*Programa de taller – semana ${distDiaTxt(plan.lunes)} al ${distDiaTxt(sumarDias(plan.lunes,4))}*\n\nHola ${per.nombre.split(" ")[0]}, esta semana te toca:\n\n${mios.map(tpLineaItem).join("\n\n")}\n\nSi algo te frena (material, plano, herramienta) avísame apenas lo veas. Al terminar cada trabajo, confírmame ✅.`;
+  const mios=plan.items.filter(i=>i.responsables.includes(per.id));
+  return `*Programa de taller – ${tpRango(plan,mios)}*\n\nHola ${per.nombre.split(" ")[0]}, te toca:\n\n${tpBloquesMensaje(plan,mios,false)}\n\nSi algo te frena (material, plano, herramienta) avísame apenas lo veas. Al terminar cada tarea, confírmame ✅.`;
 }
 function tpMensajeGrupo(plan){
-  return `*Programa de taller – semana ${distDiaTxt(plan.lunes)} al ${distDiaTxt(sumarDias(plan.lunes,4))}*\n\n`+plan.items.slice().sort((a,b)=>a.ini.localeCompare(b.ini)).map(i=>`${tpLineaItem(i)}\n   👷 ${tpNombres(i).join(", ")||"sin asignar"}`).join("\n\n");
+  return `*Programa de taller – ${tpRango(plan,plan.items)}*\n\n${tpBloquesMensaje(plan,plan.items,true)}`;
 }
 function tpValidarEnvio(plan){
   if(!plan.items.length) return "La semana no tiene trabajos.";
@@ -11056,24 +11145,41 @@ function renderTallerPrograma(){
   if(!plan) return head+`<div class="empty-state card">Aún no hay semanas programadas.${gest?' Crea la primera con «+ Nueva semana».':''}</div>`;
   const items=plan.items.slice().sort((a,b)=>a.ini.localeCompare(b.ini)||(a.tablero||"").localeCompare(b.tablero||""));
   const horas=items.reduce((a,i)=>a+(Number(i.horas)||0),0), listos=items.filter(i=>i.estado==="listo").length;
-  const {dias,carga}=tpCarga(plan), pids=Object.keys(carga), sob=tpSobrecargas(plan);
-  const grid=pids.length?`<div class="card" style="padding:12px;margin:12px 0;"><b>Carga por persona (horas por día)</b> <span class="small muted">· rojo = más de ${TP_HORAS_DIA} h</span>
-    <div class="tbl-wrap"><table class="tbl" style="margin-top:6px;"><thead><tr><th>Persona</th>${dias.map(d=>`<th style="text-align:center">${distDiaTxt(d).slice(0,3)} ${new Date(d+"T12:00:00Z").getUTCDate()}</th>`).join("")}<th style="text-align:center">Total</th></tr></thead><tbody>
+  const {columnas,carga,semanal}=tpCarga(plan), pids=Object.keys(carga), sob=tpSobrecargas(plan);
+  const grid=pids.length?`<div class="card" style="padding:12px;margin:12px 0;"><b>Carga por persona (horas ${semanal?'por semana':'por día'})</b> <span class="small muted">· rojo = algún día con más de ${TP_HORAS_DIA} h</span>
+    <div class="tbl-wrap"><table class="tbl" style="margin-top:6px;"><thead><tr><th>Persona</th>${columnas.map(c=>`<th style="text-align:center">${c.label}</th>`).join("")}<th style="text-align:center">Total</th></tr></thead><tbody>
     ${pids.map(pid=>{ const per=DB.personal.find(x=>x.id===pid); const tot=Object.values(carga[pid]).reduce((a,b)=>a+b,0);
-      return `<tr><td class="small"><b>${escaparHtml(per?per.nombre:"?")}</b></td>${dias.map(d=>{ const h=carga[pid][d]||0; return `<td style="text-align:center;${h>TP_HORAS_DIA+0.01?'background:rgba(220,60,60,.18);font-weight:700':''}">${h?Math.round(h*10)/10:'·'}</td>`; }).join("")}<td style="text-align:center"><b>${Math.round(tot*10)/10}</b></td></tr>`; }).join("")}
+      return `<tr><td class="small"><b>${escaparHtml(per?per.nombre:"?")}</b></td>${columnas.map(c=>{ const h=c.dias.reduce((a,d)=>a+(carga[pid][d]||0),0), sobre=c.dias.some(d=>(carga[pid][d]||0)>TP_HORAS_DIA+0.01); return `<td style="text-align:center;${sobre?'background:rgba(220,60,60,.18);font-weight:700':''}">${h?Math.round(h*10)/10:'·'}</td>`; }).join("")}<td style="text-align:center"><b>${Math.round(tot*10)/10}</b></td></tr>`; }).join("")}
     </tbody></table></div></div>`:'';
   const badgeEst={pendiente:'<span class="badge b-gris"><span class="dot"></span>Pendiente</span>',en_curso:'<span class="badge b-amarillo"><span class="dot"></span>En curso</span>',listo:'<span class="badge b-verde"><span class="dot"></span>Listo</span>',bloqueado:'<span class="badge b-rojo"><span class="dot"></span>Bloqueado</span>'};
-  const tabla=`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Tablero / tarea</th><th>Responsables</th><th>Fechas</th><th style="text-align:right">Horas</th><th>Estado</th>${gest?'<th></th>':''}</tr></thead><tbody>
-    ${items.length?items.map(it=>{ const p=it.proyectoId?proy(it.proyectoId):null; const sinR=!it.responsables.length;
-      return `<tr><td><b>${escaparHtml(it.tablero||"—")}</b>${it.prioridad==='urgente'?' <span class="badge b-rojo"><span class="dot"></span>Urgente</span>':''}<div class="small">${escaparHtml(it.tarea)}</div><div class="small muted">${p?escaparHtml(p.codigo):'sin proyecto'}${it.meta?' · 🎯 '+escaparHtml(it.meta):''}${it.nota?' · 📝 '+escaparHtml(it.nota):''}</div></td>
+  const grupos=tpGrupos(plan); tpGrupoKeys=grupos.map(g=>g.key);
+  const nCols=gest?6:5;
+  const filaTarea=(it)=>{ const sinR=!it.responsables.length;
+    return `<tr><td style="padding-left:34px"><div class="small">${escaparHtml(it.tarea)}${it.prioridad==='urgente'?' <span class="badge b-rojo"><span class="dot"></span>Urgente</span>':''}</div>${(it.meta||it.nota)?`<div class="small muted">${it.meta?'🎯 '+escaparHtml(it.meta):''}${it.nota?' · 📝 '+escaparHtml(it.nota):''}</div>`:''}</td>
       <td class="small" style="${sinR?'color:var(--danger)':''}">${sinR?'⚠ sin asignar':escaparHtml(tpNombres(it).join(", "))}</td>
       <td class="small">${distDiaTxt(it.ini)}${it.fin!==it.ini?'<br>→ '+distDiaTxt(it.fin):''}</td><td style="text-align:right">${it.horas}</td>
-      <td>${gest?`<select style="font-size:12px;padding:4px;border-radius:6px;border:1px solid var(--line);background:var(--card)" onchange="tpSetEstado('${plan.id}',${it.id},this.value)">${["pendiente","en_curso","listo","bloqueado"].map(e=>`<option value="${e}" ${it.estado===e?'selected':''}>${e.replace('_',' ')}</option>`).join("")}</select>`:badgeEst[it.estado]||''}</td>
-      ${gest?`<td><button class="btn btn-sm" onclick="tpModalItem('${plan.id}',${it.id})">Editar</button></td>`:''}</tr>`; }).join(""):`<tr><td colspan="${gest?6:5}"><div class="empty-state">Sin trabajos todavía.</div></td></tr>`}
+      <td>${gest?`<select style="font-size:12px;padding:4px;border-radius:6px;border:1px solid var(--line);background:var(--card)" onchange="tpSetEstado('${plan.id}',${it.id},this.value)">${["pendiente","en_curso","listo","bloqueado"].map(e=>`<option value="${e}" ${it.estado===e?'selected':''}>${e.replace('_',' ')}</option>`).join("")}</select>`:(badgeEst[it.estado]||'')}</td>
+      ${gest?`<td><button class="btn btn-sm" onclick="tpModalItem('${plan.id}',${it.id})">Editar</button></td>`:''}</tr>`; };
+  const filas=grupos.map((g,gi)=>{
+    const its=g.items, abierto=tpEstaAbierto(plan,g.key,grupos.length), p=its[0].proyectoId?proy(its[0].proyectoId):null;
+    const h=its.reduce((a,i)=>a+(Number(i.horas)||0),0), hl=its.filter(i=>i.estado==="listo").length;
+    const avance=h?Math.round(its.reduce((a,i)=>a+(Number(i.horas)||0)*(Number(i.avance)||0),0)/h):0;
+    const ini=its.reduce((m,i)=>i.ini<m?i.ini:m,its[0].ini), fin=its.reduce((m,i)=>i.fin>m?i.fin:m,its[0].fin);
+    const resp=[...new Set(its.flatMap(i=>tpNombres(i)))], sinR=its.some(i=>!i.responsables.length);
+    const cab=`<tr style="background:var(--bg-soft,rgba(120,120,120,.08));cursor:pointer" onclick="tpToggle(${gi})"><td><span style="display:inline-block;width:20px;font-weight:700">${abierto?'−':'+'}</span><b>${escaparHtml(its[0].tablero||"Trabajos varios")}</b> <span class="small muted">· ${p?escaparHtml(p.codigo):'sin proyecto'} · ${hl}/${its.length} tareas</span>
+        <div class="progressbar thin" style="margin:4px 0 0 20px;max-width:240px"><span style="width:${avance}%"></span></div></td>
+      <td class="small" style="${sinR?'color:var(--danger)':''}">${resp.length?escaparHtml(resp.join(", ")):'⚠ sin asignar'}${sinR&&resp.length?' <span title="Hay tareas sin asignar">⚠</span>':''}</td>
+      <td class="small">${distDiaTxt(ini)}<br>→ ${distDiaTxt(fin)}</td><td style="text-align:right"><b>${Math.round(h*10)/10}</b></td><td class="small">${avance}%</td>
+      ${gest?`<td style="white-space:nowrap" onclick="event.stopPropagation()"><button class="btn btn-sm" title="Duplicar tablero" onclick="tpModalDuplicar(${gi})">⧉ Duplicar</button> <button class="btn btn-sm" title="Responsables del tablero" onclick="tpModalRespGrupo(${gi})">👷</button> <button class="btn btn-sm" title="Agregar tarea a este tablero" onclick="tpModalItem('${plan.id}',0,${gi})">＋</button> <button class="btn btn-sm" title="Quitar tablero" onclick="tpQuitarGrupo(${gi})">🗑</button></td>`:''}</tr>`;
+    return cab+(abierto?its.slice().sort((a,b)=>a.ini.localeCompare(b.ini)).map(filaTarea).join(""):"");
+  }).join("");
+  const tabla=`<div class="flex-gap" style="margin:6px 0;"><button class="btn btn-sm" onclick="tpExpandirTodo(true)">＋ Expandir todo</button><button class="btn btn-sm" onclick="tpExpandirTodo(false)">− Contraer todo</button><span class="small muted">${grupos.length} tablero(s)</span></div>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Tablero / tarea</th><th>Responsables</th><th>Fechas</th><th style="text-align:right">Horas</th><th>Avance / estado</th>${gest?'<th></th>':''}</tr></thead><tbody>
+    ${filas||`<tr><td colspan="${nCols}"><div class="empty-state">Sin trabajos todavía.</div></td></tr>`}
     </tbody></table></div>`;
   return head+chips+`
     <div class="card" style="padding:12px;margin-top:10px;display:flex;gap:18px;align-items:center;flex-wrap:wrap;">
-      <div><div class="small muted">Semana</div><b>${distDiaTxt(plan.lunes)} → ${distDiaTxt(sumarDias(plan.lunes,4))}</b> ${plan.estado==='enviado'?'<span class="badge b-verde"><span class="dot"></span>Enviado</span>':'<span class="badge b-gris"><span class="dot"></span>Borrador</span>'}</div>
+      <div><div class="small muted">Semana</div><b>${(()=>{ const ini=items.length?items.reduce((m,i)=>i.ini<m?i.ini:m,items[0].ini):plan.lunes, fin=items.length?items.reduce((m,i)=>i.fin>m?i.fin:m,items[0].fin):sumarDias(plan.lunes,4); return distDiaTxt(plan.lunes)+' → '+distDiaTxt(diasEntre(plan.lunes,fin)>4?fin:sumarDias(plan.lunes,4)); })()}</b> ${plan.estado==='enviado'?'<span class="badge b-verde"><span class="dot"></span>Enviado</span>':'<span class="badge b-gris"><span class="dot"></span>Borrador</span>'}</div>
       <div><div class="small muted">Trabajos</div><b>${listos}/${items.length} listos</b></div><div><div class="small muted">Horas programadas</div><b>${Math.round(horas*10)/10} h</b></div>
       ${sob.length?`<div style="color:var(--danger)"><b>⚠ ${sob.length} día(s) sobrecargado(s)</b></div>`:''}
       <div class="flex-gap" style="margin-left:auto;flex-wrap:wrap;">${gest?`<button class="btn btn-sm" onclick="tpModalArmado('${plan.id}')">🧰 Armado de tablero</button><button class="btn btn-sm" onclick="tpModalItem('${plan.id}')">+ Trabajo</button><button class="btn btn-sm btn-primary" onclick="tpModalEnviar('${plan.id}')">📲 Enviar por WhatsApp</button><button class="btn btn-sm" onclick="tpEliminarSemana('${plan.id}')" title="Eliminar semana">🗑</button>`:''}</div>

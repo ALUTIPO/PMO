@@ -502,7 +502,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.7.1";
+const APP_VERSION = "3.7.2";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -3007,6 +3007,24 @@ function tareasPunchDePersonaGlobal(personaId) {
   });
   return out;
 }
+
+/* V3.7.2 — Lo que el programa de taller le asigna a una persona, con la misma forma
+   que una tarea del Punch List, para que aparezca en Mi Panel (Tablero, Lista y Gantt). */
+function tareasTallerDePersona(personaId) {
+  const out = [], corte = sumarDias(hoyISO(), -14);
+  (DB.programaTaller||[]).forEach(pl => (pl.items||[]).forEach(it => {
+    if (!(it.responsables||[]).includes(personaId) || !it.ini || !it.fin) return;
+    if (it.estado === "listo" && it.fin < corte) return;
+    const p = it.proyectoId ? proy(it.proyectoId) : null;
+    out.push({ origenTaller:true, planId:pl.id, itemId:it.id, punchId:"", subId:null, subitem:null,
+      tarea:"🛠 "+(it.tablero ? it.tablero+": " : "")+it.tarea, meta:it.meta||"", horas:it.horas, nota:it.nota||"",
+      estado: it.estado==="listo" ? "Completado" : it.estado==="pendiente" ? "No Iniciado" : "En Progreso", estadoTaller:it.estado,
+      avance: it.estado==="listo" ? 100 : (Number(it.avance)||0), fechaInicio:it.ini, fechaTermino:it.fin, importancia: it.prioridad==="urgente" ? "Urgente" : "",
+      proyectoId:p?p.id:"", proyectoCodigo:(p?p.codigo:"TALLER")+" 🛠", proyectoNombre:p?p.nombre:"Programa de taller", modoCierre:false });
+  }));
+  return out;
+}
+function tareasPanelDePersona(personaId) { return tareasPunchDePersonaGlobal(personaId).concat(tareasTallerDePersona(personaId)); }
 
 /* Calza la sesión iniciada (DB.usuario, puesto por Firebase Auth vía el
    correo autorizado) con su registro en la dotación (DB.personal), por
@@ -6019,7 +6037,7 @@ function mpGanttIrAHoy(instantaneo) {
 function mpGanttTodos(plegar) {
   const el = document.querySelector('.mp-gantt');
   const x = el ? el.scrollLeft : 0;
-  tareasPunchDePersonaGlobal((personaPanelVista() || {}).id).forEach(t => { mpGanttColapsados[t.proyectoCodigo] = plegar; });
+  tareasPanelDePersona((personaPanelVista() || {}).id).forEach(t => { mpGanttColapsados[t.proyectoCodigo] = plegar; });
   renderAll();
   const el2 = document.querySelector('.mp-gantt');
   if (el2) el2.scrollLeft = x;
@@ -6055,7 +6073,7 @@ function renderMiPanel() {
   <div class="page-head">
     <div>
       <h1>Mi Panel</h1>
-      <div class="page-desc">Hola ${yo.nombre.split(' ')[0]} — tus tareas del Punch List en todos los proyectos donde tienes trabajo asignado, con plazos y tu propio avance.</div>
+      <div class="page-desc">Hola ${yo.nombre.split(' ')[0]} — tus tareas del Punch List y los trabajos de taller que te programaron, con plazos y avance.</div>
     </div>
     <div class="flex-gap"><span class="badge b-gris"><span class="dot"></span>${yo.cargo}</span></div>
   </div>
@@ -6097,7 +6115,7 @@ function renderPanelEquipo() {
    urgente, gráficos de estado/proyecto, listado filtrable y actividad
    reciente — todo calculado para la `persona` recibida. */
 function cuerpoPanelTrabajador(persona) {
-  const todas = tareasPunchDePersonaGlobal(persona.id);
+  const todas = tareasPanelDePersona(persona.id);
   const pendientes = todas.filter(t => t.avance < 100);
   const vencidas = todas.filter(t => t.fechaTermino && fechaUrgencia(t.fechaTermino)==='vencido' && t.avance<100);
   const proximas = todas.filter(t => t.fechaTermino && fechaUrgencia(t.fechaTermino)==='proximo' && t.avance<100);
@@ -6108,7 +6126,7 @@ function cuerpoPanelTrabajador(persona) {
   const tab = (id, icono, txt) => `<button class="mp-tab ${vistaMiPanel===id?'on':''}" onclick="vistaMiPanel='${id}'; mpGanttAutoScroll=true; renderAll();">${icono} ${txt}</button>`;
 
   let vista = "";
-  if (!todas.length) vista = `<div class="empty-state card">Aún no tienes tareas asignadas en el Punch List.</div>`;
+  if (!todas.length) vista = `<div class="empty-state card">Aún no tienes tareas asignadas (Punch List ni programa de taller).</div>`;
   else if (vistaMiPanel === 'lista') vista = mpVistaLista(todas, vencidas, pendientes);
   else if (vistaMiPanel === 'gantt') vista = mpVistaGantt(todas);
   else vista = mpVistaTablero(todas);
@@ -6124,7 +6142,7 @@ function cuerpoPanelTrabajador(persona) {
 
   ${top ? `<div class="mp-alerta ${fechaUrgencia(top.fechaTermino)==='vencido'?'rojo':''}">
     <span>${fechaUrgencia(top.fechaTermino)==='vencido' ? '⚠ Vencida' : '⏳ Próxima'}: <b>${escaparHtml(top.tarea)}${top.subitem?' — '+escaparHtml(top.subitem):''}</b> · ${top.proyectoCodigo} · vence ${top.fechaTermino}</span>
-    <button class="btn btn-sm" onclick="DB.proyectoActivo='${top.proyectoId}'; goTo('punch')">Abrir →</button>
+    <button class="btn btn-sm" onclick="${top.origenTaller ? "goTo('tallerPrograma')" : `DB.proyectoActivo='${top.proyectoId}'; goTo('punch')`}">Abrir →</button>
   </div>` : ''}
 
   ${reqAsignados.length ? `<details class="mp-req" ${reqAsignados[0].req.urgencia==='critica'?'open':''}>
@@ -6179,16 +6197,18 @@ function mpCard(t) {
       ${t.importancia ? badgeImportancia(t.importancia) : ''}
       ${t.fechaTermino ? `<span style="color:${colFecha}">${mpFechaCorta(t.fechaTermino)}${urg==='vencido'?' · vencida':''}</span>` : '<span>sin fecha</span>'}
     </div>
+    ${t.origenTaller ? `<div class="mp-card-s">${t.meta?'🎯 '+escaparHtml(t.meta):''}${t.horas?` · ${t.horas} h`:''}</div>` : ''}
     <div class="mp-card-prog">
       <div class="mp-bar"><i style="width:${t.avance}%; background:${barColor}"></i></div>
-      ${t.subitem ? `<input type="number" min="0" max="${tope}" value="${t.avance}" class="mp-num"
+      ${t.origenTaller ? `<span class="small">${t.avance}%</span>` : t.subitem ? `<input type="number" min="0" max="${tope}" value="${t.avance}" class="mp-num"
           onchange="actualizarAvanceSubitem('${t.proyectoId}','${t.punchId}',${t.subId}, Math.min(${tope}, Math.max(0, Number(this.value)||0))); renderAll();">%`
         : `<select class="mp-sel" onchange="cambiarEstadoPunch('${t.proyectoId}','${t.punchId}',this.value); renderAll();">
             <option ${t.estado==='No Iniciado'?'selected':''}>No Iniciado</option><option ${t.estado==='En Progreso'?'selected':''}>En Progreso</option><option ${t.estado==='Completado'?'selected':''}>Completado</option></select>`}
     </div>
-    <div class="mp-card-acc">
-      <a href="#" onclick="DB.proyectoActivo='${t.proyectoId}'; goTo('punch'); return false;">Punch List</a>
-      <a href="#" onclick="modalBitacoraPunch('${t.proyectoId}','${t.punchId}', ${subRef}); return false;">💬 ${contarBitacora(t.proyectoId, t.punchId, t.subId)||''}</a>
+    <div class="mp-card-acc">${t.origenTaller
+      ? `<a href="#" onclick="goTo('tallerPrograma'); return false;">Programa de taller</a>`
+      : `<a href="#" onclick="DB.proyectoActivo='${t.proyectoId}'; goTo('punch'); return false;">Punch List</a>
+      <a href="#" onclick="modalBitacoraPunch('${t.proyectoId}','${t.punchId}', ${subRef}); return false;">💬 ${contarBitacora(t.proyectoId, t.punchId, t.subId)||''}</a>`}
     </div>
   </div>`;
 }
@@ -6221,7 +6241,7 @@ function mpVistaLista(todas, vencidas, pendientes) {
       <span class="mp-est" style="color:${c.color}">● ${c.label}</span>
       <span class="mp-fecha" style="color:${urg==='vencido'?'var(--danger)':urg==='proximo'?'var(--copper-dark)':'var(--muted)'}">${t.fechaTermino?mpFechaCorta(t.fechaTermino):'sin fecha'}</span>
       <div class="mp-bar" style="width:90px"><i style="width:${t.avance}%; background:${c.color}"></i></div><span class="mono small" style="width:36px;text-align:right">${t.avance}%</span>
-      <button class="btn btn-sm" onclick="DB.proyectoActivo='${t.proyectoId}'; goTo('punch')">Abrir</button>
+      <button class="btn btn-sm" onclick="${t.origenTaller ? "goTo('tallerPrograma')" : `DB.proyectoActivo='${t.proyectoId}'; goTo('punch')`}">Abrir</button>
     </div>`; }).join('') : '<div class="empty-state card">No hay tareas en este filtro.</div>'}</div>`;
 }
 function mpVistaGantt(todas) {
@@ -10940,8 +10960,11 @@ function tpDuplicarGrupo(plan,key,cant,modo){
   const span=tpHabilesEntre(ini0,fin0)+1; let id=plan.items.reduce((m,x)=>Math.max(m,x.id),0);
   nombres.forEach((nombre,c)=>{
     const inicioCopia = modo==="paralelo" ? ini0 : tpSumarHabiles(ini0, span*(c+1));
+    const previo = c===0 ? key : (orig[0].proyectoId||"")+"||"+nombres[c-1];
     orig.forEach(o=>{ id++; const offI=tpHabilesEntre(ini0,o.ini), offF=tpHabilesEntre(ini0,o.fin);
-      plan.items.push({ ...o, id, tablero:nombre, responsables:o.responsables.slice(), ini:tpSumarHabiles(inicioCopia,offI), fin:tpSumarHabiles(inicioCopia,offF), estado:"pendiente", avance:0, nota:o.nota }); });
+      const nuevo={ ...o, id, tablero:nombre, responsables:o.responsables.slice(), ini:tpSumarHabiles(inicioCopia,offI), fin:tpSumarHabiles(inicioCopia,offF), estado:"pendiente", avance:0, nota:o.nota };
+      if(modo!=="paralelo") nuevo.despuesDe=previo;
+      plan.items.push(nuevo); });
   });
   return nombres;
 }
@@ -10978,10 +11001,11 @@ function tpAplicarRespGrupo(gi){
 function tpQuitarGrupo(gi){
   if(!tpPuede()) return; const plan=tpPlan(tpPlanId), key=tpGrupoKeys[gi]; const it=tpItemsGrupo(plan,key);
   if(!it.length||!confirm(`¿Quitar el tablero «${it[0].tablero||'—'}» con sus ${it.length} tareas?`)) return;
-  plan.items=plan.items.filter(i=>tpKey(i)!==key); tpGuardar(plan,"tablero quitado: "+(it[0].tablero||""));
+  plan.items=plan.items.filter(i=>tpKey(i)!==key); plan.items.forEach(i=>{ if(i.despuesDe===key) delete i.despuesDe; }); tpGuardar(plan,"tablero quitado: "+(it[0].tablero||""));
 }
 
 function tpGuardar(plan,nota){
+  tpAplicarDependencias(plan);
   tpSincronizarGantt(plan);
   registrarHistorial({proyecto:"Taller", accion:"Modificar", detalle:`Programa de taller (semana ${plan.lunes}): ${nota}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
   guardarEstado(); renderAll();
@@ -11088,6 +11112,231 @@ function tpCrearArmado(planId){
   if(cant>1) extra=tpDuplicarGrupo(plan,(proyectoId||"")+"||"+tablero,cant-1,document.getElementById('tpModoArmado').value);
   closeModal(); tpGuardar(plan,`armado de ${tablero}${extra.length?' + '+extra.join(', '):''}: ${n} etapas`);
 }
+/* ---- Dependencias entre tableros (V3.7.2): «este tablero se arma después de aquel» ---- */
+function tpDespuesDe(items){ return (items.find(i=>i.despuesDe)||{}).despuesDe||""; }
+function tpIniFinGrupo(items){ return { ini:items.reduce((m,i)=>i.ini<m?i.ini:m,items[0].ini), fin:items.reduce((m,i)=>i.fin>m?i.fin:m,items[0].fin) }; }
+function tpNombreKey(key){ return String(key||"").split("||")[1]||"Trabajos varios"; }
+/* Mueve todo el bloque de un tablero para que parta en `nuevoIni`, manteniendo la separación entre sus tareas (en días hábiles). */
+function tpMoverGrupo(items,nuevoIni){
+  const {ini}=tpIniFinGrupo(items);
+  const offs=items.map(i=>[tpHabilesEntre(ini,i.ini),tpHabilesEntre(ini,i.fin)]);
+  items.forEach((i,k)=>{ i.ini=tpSumarHabiles(nuevoIni,offs[k][0]); i.fin=tpSumarHabiles(nuevoIni,offs[k][1]); });
+}
+/* Si un tablero parte antes de que termine el que debe ir antes, lo empuja hacia adelante (nunca lo adelanta solo). */
+function tpAplicarDependencias(plan){
+  for(let pasada=0;pasada<40;pasada++){
+    let cambio=false; const m={};
+    plan.items.forEach(i=>{ (m[tpKey(i)]=m[tpKey(i)]||[]).push(i); });
+    Object.keys(m).forEach(k=>{
+      const its=m[k], dep=tpDespuesDe(its); if(!dep||dep===k||!m[dep]) return;
+      const req=tpSumarHabiles(tpIniFinGrupo(m[dep]).fin,1), ini=tpIniFinGrupo(its).ini;
+      if(tpSiguienteHabil(ini)<req){ tpMoverGrupo(its,req); cambio=true; }
+    });
+    if(!cambio) break;
+  }
+}
+function tpCreaCiclo(plan,key,dep){
+  let cur=dep;
+  for(let i=0;i<60 && cur;i++){ if(cur===key) return true; const its=tpItemsGrupo(plan,cur); cur=its.length?tpDespuesDe(its):""; }
+  return false;
+}
+function tpModalDespues(gi){
+  if(!tpPuede()) return; const plan=tpPlan(tpPlanId), key=tpGrupoKeys[gi]; const its=tpItemsGrupo(plan,key); if(!its.length) return;
+  const actual=tpDespuesDe(its), otros=tpGrupos(plan).filter(g=>g.key!==key);
+  if(!otros.length){ toast("Primero crea otro tablero para poder encadenarlos.","danger"); return; }
+  openModal(`<div class="modal-head"><h3>¿Cuándo se arma «${escaparHtml(its[0].tablero||'—')}»?</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body" style="display:grid;gap:10px;">
+      <label class="small muted">Se arma después de…
+        <select id="tpDepSel"><option value="">(independiente — fechas libres)</option>
+        ${otros.map(g=>{ const f=tpIniFinGrupo(g.items); return `<option value="${escaparHtml(g.key)}" ${g.key===actual?'selected':''}>${escaparHtml(g.items[0].tablero||'Trabajos varios')} (termina ${distDiaTxt(f.fin)})</option>`; }).join("")}</select></label>
+      <p class="hint">Al elegirlo, este tablero se mueve para partir el día hábil siguiente al término del otro, conservando el orden y la duración de sus tareas. Si después alargas o atrasas el tablero anterior, éste se corre solo. Para volver a fechas libres, elige «independiente».</p>
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="tpConfirmarDespues(${gi})">Aplicar</button></div>`, 560);
+}
+function tpConfirmarDespues(gi){
+  if(!tpPuede()) return; const plan=tpPlan(tpPlanId), key=tpGrupoKeys[gi], its=tpItemsGrupo(plan,key); const dep=document.getElementById('tpDepSel').value;
+  if(dep && tpCreaCiclo(plan,key,dep)){ toast("Eso crea un círculo (A después de B y B después de A). Elige otro.","danger"); return; }
+  its.forEach(i=>{ if(dep) i.despuesDe=dep; else delete i.despuesDe; });
+  if(dep){ const pred=tpItemsGrupo(plan,dep); tpMoverGrupo(its,tpSumarHabiles(tpIniFinGrupo(pred).fin,1)); }
+  closeModal(); tpGuardar(plan, dep?`«${its[0].tablero}» queda después de «${tpNombreKey(dep)}»`:`«${its[0].tablero}» queda independiente`);
+}
+
+/* ---- Carta Gantt global por tablero + versión para correo (V3.7.2) ---- */
+let tpVista = "programa", tpGanttAlcance = "todas", tpGanttAbiertos = {}, tpGanttKeys = [];
+function tpHex(h){ h=String(h||"#8a94a3").replace("#",""); if(h.length===3) h=h.split("").map(c=>c+c).join(""); return [parseInt(h.slice(0,2),16)||0,parseInt(h.slice(2,4),16)||0,parseInt(h.slice(4,6),16)||0]; }
+function tpMezcla(hex,t){ const c=tpHex(hex).map(v=>Math.round(v+(255-v)*t)); return "#"+c.map(v=>v.toString(16).padStart(2,"0")).join(""); }
+function tpDiasHabiles(a,b){ const out=[]; let d=tpSiguienteHabil(a); for(let i=0;i<400 && d<=b;i++){ out.push(d); d=tpSiguienteHabil(sumarDias(d,1)); } return out; }
+/* planes: lista de {items}. Une las semanas (lo traspasado a la semana siguiente se toma de la más nueva). */
+function tpGanttDatos(planes){
+  const mapa={};
+  planes.forEach(pl=>{ const cont={}; pl.items.forEach(it=>{ if(!it.ini||!it.fin) return; const b=tpKey(it)+"##"+it.tarea; cont[b]=(cont[b]||0)+1; mapa[b+"##"+cont[b]]=it; }); });
+  const items=Object.values(mapa); if(!items.length) return null;
+  const g={}, orden=[]; items.sort((a,b)=>a.ini.localeCompare(b.ini)).forEach(it=>{ const k=tpKey(it); if(!g[k]){ g[k]=[]; orden.push(k); } g[k].push(it); });
+  const ini=items.reduce((m,i)=>i.ini<m?i.ini:m,items[0].ini); let fin=items.reduce((m,i)=>i.fin>m?i.fin:m,items[0].fin);
+  let dias=tpDiasHabiles(ini,fin); if(dias.length>130) dias=dias.slice(0,130);
+  const idx0=f=>{ for(let i=0;i<dias.length;i++) if(dias[i]>=f) return i; return dias.length-1; };
+  const idx1=f=>{ for(let i=dias.length-1;i>=0;i--) if(dias[i]<=f) return i; return 0; };
+  const filas=[];
+  orden.forEach(k=>{
+    const its=g[k], p=its[0].proyectoId?proy(its[0].proyectoId):null, color=p?mpColorProyecto(p.codigo):"#6b7686";
+    const h=its.reduce((a,i)=>a+(Number(i.horas)||0),0), av=h?Math.round(its.reduce((a,i)=>a+(Number(i.horas)||0)*(Number(i.avance)||0),0)/h):Math.round(its.reduce((a,i)=>a+(Number(i.avance)||0),0)/its.length);
+    const f=tpIniFinGrupo(its), dep=tpDespuesDe(its);
+    filas.push({ tipo:"t", key:k, label:its[0].tablero||"Trabajos varios", sub:(p?p.codigo+" · ":"")+its.filter(i=>i.estado==="listo").length+"/"+its.length+" tareas"+(dep?" · ⛓ después de "+tpNombreKey(dep):""),
+      i0:idx0(f.ini), i1:idx1(f.fin), ini:f.ini, fin:f.fin, avance:av, color, resp:[...new Set(its.flatMap(i=>tpNombres(i)))].join(", ") });
+    its.slice().sort((a,b)=>a.ini.localeCompare(b.ini)).forEach(it=>{
+      const col = it.estado==="listo"?"#2e9e5b" : it.estado==="bloqueado"?"#d64545" : color;
+      filas.push({ tipo:"a", key:k, label:it.tarea+(it.prioridad==="urgente"?" 🔴":""), sub:tpNombres(it).join(", ")||"sin asignar", i0:idx0(it.ini), i1:idx1(it.fin), ini:it.ini, fin:it.fin, avance:Number(it.avance)||0, color:col, meta:it.meta||"" });
+    });
+  });
+  return { dias, filas, ini, fin, nTableros:orden.length };
+}
+/* Tabla con estilos en línea: sirve igual en la pantalla y pegada en un correo. */
+function tpGanttTabla(D, opt){
+  opt=opt||{}; const hoy=hoyISO(), W=opt.ancho||20, LAB=opt.label||250;
+  const dn=["D","L","M","X","J","V","S"], nm=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+  let meses="", ant="", n=0, mesesArr=[];
+  D.dias.forEach(d=>{ const m=d.slice(0,7); if(m!==ant){ mesesArr.push({m,n:1}); ant=m; } else mesesArr[mesesArr.length-1].n++; });
+  meses=mesesArr.map(x=>`<th colspan="${x.n}" style="background:#f1ece6;color:#333;font-size:10px;text-align:left;padding:2px 4px;border:1px solid #ddd;white-space:nowrap">${nm[parseInt(x.m.slice(5),10)-1]} ${x.m.slice(2,4)}</th>`).join("");
+  const iHoy=D.dias.indexOf(hoy);
+  const dh=D.dias.map((d,i)=>{ const dt=new Date(d+"T12:00:00Z"); const h=d===hoy;
+    return `<th style="width:${W}px;min-width:${W}px;background:${h?'#c1712e':'#f7f4f0'};color:${h?'#fff':'#555'};font-size:9px;font-weight:${dt.getUTCDay()===1?700:400};text-align:center;padding:1px 0;border:1px solid #ddd;line-height:1.15">${dn[dt.getUTCDay()]}<br>${dt.getUTCDate()}</th>`; }).join("");
+  const filasHtml=D.filas.map((f,ri)=>{
+    const esT=f.tipo==="t"; if(!esT && opt.abiertos && !opt.abiertos(f.key)) return "";
+    const n=f.i1-f.i0+1, hechas=Math.round(n*f.avance/100), claro=tpMezcla(f.color,0.62);
+    const celdas=D.dias.map((d,i)=>{ let bg="", bd="border:1px solid #eee;";
+      if(i>=f.i0 && i<=f.i1) bg=(i-f.i0<hechas)?f.color:claro;
+      else if(i===iHoy) bg="#fff1e3";
+      return `<td style="width:${W}px;min-width:${W}px;height:${esT?20:16}px;padding:0;${bd}${bg?'background:'+bg+';':''}${i===iHoy?'border-left:2px solid #c1712e;':''}"></td>`; }).join("");
+    const lab = esT
+      ? `<td style="min-width:${LAB}px;max-width:${LAB}px;background:#faf6f1;border:1px solid #ddd;padding:3px 6px;font-size:11.5px;color:#222;${opt.interactivo?'cursor:pointer;position:sticky;left:0;z-index:2;':''}"${opt.interactivo?` onclick="tpGanttToggle(${ri})"`:''}>${opt.interactivo?`<b style="display:inline-block;width:14px">${opt.abiertos&&opt.abiertos(f.key)?'−':'+'}</b>`:''}<b>${escaparHtml(f.label)}</b><div style="font-size:9.5px;color:#777;${opt.interactivo?'margin-left:14px':''}">${escaparHtml(f.sub)} · ${distDiaTxt(f.ini)} → ${distDiaTxt(f.fin)} · ${f.avance}%</div></td>`
+      : `<td style="min-width:${LAB}px;max-width:${LAB}px;background:#fff;border:1px solid #eee;padding:1px 6px 1px ${opt.interactivo?22:14}px;font-size:10.5px;color:#333;${opt.interactivo?'position:sticky;left:0;z-index:2;':''}">${escaparHtml(f.label)} <span style="color:#888;font-size:9.5px">· ${escaparHtml(f.sub)}</span></td>`;
+    return `<tr>${lab}${celdas}</tr>`; }).join("");
+  const leyenda=`<div style="font-size:10px;color:#666;margin-top:6px">Color fuerte = avance · color claro = por hacer · verde = listo · rojo = bloqueado · columna con borde cobre = hoy · solo días hábiles.</div>`;
+  return `<table style="border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;background:#fff;color:#222"><thead>
+    <tr><th rowspan="2" style="min-width:${LAB}px;background:#f1ece6;border:1px solid #ddd;font-size:11px;text-align:left;padding:3px 6px;${opt.interactivo?'position:sticky;left:0;z-index:3;':''}">Tablero / tarea</th>${meses}</tr><tr>${dh}</tr></thead><tbody>${filasHtml}</tbody></table>${leyenda}`;
+}
+function tpGanttToggle(ri){ const f=(tpGanttFilas||[])[ri]; if(!f) return; const k=f.key; tpGanttAbiertos[k]=!(tpGanttAbiertos[k]!==undefined?tpGanttAbiertos[k]:true); const sc=document.getElementById('tpGanttBox'); const x=sc?sc.scrollLeft:0, y=sc?sc.scrollTop:0; renderAll(); const s2=document.getElementById('tpGanttBox'); if(s2){ s2.scrollLeft=x; s2.scrollTop=y; } }
+let tpGanttFilas = [];
+function tpGanttTodos(abrir){ (tpGanttFilas||[]).filter(f=>f.tipo==="t").forEach(f=>{ tpGanttAbiertos[f.key]=abrir; }); renderAll(); }
+function tpGanttIrHoy(){ const box=document.getElementById('tpGanttBox'); if(!box) return; const th=box.querySelector('thead tr:nth-child(2) th[style*="#c1712e"]'); if(th) box.scrollTo({left:Math.max(0,th.offsetLeft-300),behavior:'smooth'}); }
+function tpPlanesParaGantt(plan){ return tpGanttAlcance==="semana" ? [plan] : tpPlanes().slice().sort((a,b)=>a.lunes.localeCompare(b.lunes)); }
+function tpHtmlGantt(plan){
+  const D=tpGanttDatos(tpPlanesParaGantt(plan));
+  const barra=`<div class="flex-gap" style="margin:6px 0;flex-wrap:wrap;">
+    <button class="mp-chip ${tpGanttAlcance==='todas'?'on':''}" onclick="tpGanttAlcance='todas'; renderAll();">Todas las semanas</button>
+    <button class="mp-chip ${tpGanttAlcance==='semana'?'on':''}" onclick="tpGanttAlcance='semana'; renderAll();">Solo esta semana</button>
+    <button class="btn btn-sm" onclick="tpGanttTodos(true)">＋ Desplegar tareas</button><button class="btn btn-sm" onclick="tpGanttTodos(false)">− Plegar tareas</button><button class="btn btn-sm" onclick="tpGanttIrHoy()">◉ Ir a hoy</button>
+    <button class="btn btn-sm" onclick="tpModalCorreo('${plan.id}')">✉ Enviar por correo / PDF</button></div>`;
+  if(!D){ tpGanttFilas=[]; return barra+`<div class="empty-state card">Aún no hay trabajos con fechas para dibujar el Gantt.</div>`; }
+  tpGanttFilas=D.filas;
+  return barra+`<div id="tpGanttBox" style="overflow:auto;max-height:72vh;background:#fff;border:1px solid var(--line);border-radius:8px;padding:6px;">${tpGanttTabla(D,{interactivo:true,abiertos:k=>tpGanttAbiertos[k]!==undefined?tpGanttAbiertos[k]:true})}</div>
+    <div class="hint" style="margin-top:6px;">${D.nTableros} tablero(s) · del ${distDiaTxt(D.ini)} al ${distDiaTxt(D.fin)}. Toca un tablero para plegar o desplegar sus tareas. «⛓ después de» indica el orden de armado.</div>`;
+}
+
+/* ---- Versión para correo y PDF (V3.7.2) ---- */
+let tpCorreoPara = "";
+function tpItemsDe(plan,quien){ return quien==="equipo" ? plan.items.slice() : plan.items.filter(i=>i.responsables.includes(quien)); }
+function tpHtmlCorreo(plan,quien,conGantt){
+  const per = quien==="equipo" ? null : DB.personal.find(p=>p.id===quien);
+  const items=tpItemsDe(plan,quien), td="padding:4px 6px;border:1px solid #ddd;font-size:12px;vertical-align:top;", th="padding:4px 6px;border:1px solid #ddd;background:#f1ece6;font-size:11.5px;text-align:left;";
+  const g={}, orden=[]; items.slice().sort((a,b)=>a.ini.localeCompare(b.ini)).forEach(it=>{ const k=tpKey(it); if(!g[k]){ g[k]=[]; orden.push(k); } g[k].push(it); });
+  const bloques=orden.map(k=>{ const its=g[k], p=its[0].proyectoId?proy(its[0].proyectoId):null, dep=tpDespuesDe(its);
+    const sin=quien==="equipo";
+    return `<div style="margin:14px 0 4px;font-size:14px;font-weight:bold;color:#222">🧰 ${escaparHtml(its[0].tablero||"Trabajos varios")}${p?` <span style="font-weight:normal;color:#666">(${escaparHtml(p.codigo)})</span>`:''}${dep?` <span style="font-weight:normal;font-size:12px;color:#a15a1d">⛓ se arma después de ${escaparHtml(tpNombreKey(dep))}</span>`:''}</div>
+      <table style="border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;width:100%"><tr><th style="${th}">Tarea</th>${sin?`<th style="${th}">Quién</th>`:''}<th style="${th}">Fechas</th><th style="${th};text-align:right">Horas</th><th style="${th}">Qué debe quedar listo</th></tr>
+      ${its.map(it=>`<tr><td style="${td}"><b>${escaparHtml(it.tarea)}</b>${it.prioridad==='urgente'?' <span style="color:#c0392b;font-weight:bold">🔴 URGENTE</span>':''}</td>${sin?`<td style="${td}">${escaparHtml(tpNombres(it).join(", ")||"sin asignar")}</td>`:''}<td style="${td}white-space:nowrap">${it.ini===it.fin?distDiaTxt(it.ini):distDiaTxt(it.ini)+' → '+distDiaTxt(it.fin)}</td><td style="${td}text-align:right">${it.horas}</td><td style="${td}">${escaparHtml(it.meta||"")}${it.nota?`<div style="color:#666">📝 ${escaparHtml(it.nota)}</div>`:''}</td></tr>`).join("")}</table>`; }).join("");
+  let gantt=""; if(conGantt && items.length){ const D=tpGanttDatos([{items}]); if(D) gantt=`<div style="margin:18px 0 4px;font-size:14px;font-weight:bold">📅 Carta Gantt por tablero</div>${tpGanttTabla(D,{ancho:18,label:230,abiertos:()=>quien!=="equipo"})}`; }
+  const saludo = per ? `Hola ${escaparHtml(per.nombre.split(" ")[0])}, esto es lo que te toca:` : `Equipo, este es el programa de armado de tableros:`;
+  const pie = per ? `Si algo te frena (material, plano, herramienta) avísame apenas lo veas. Al terminar cada tarea, confírmame ✅.` : `Cualquier impedimento (material, plano, herramienta) avísenlo apenas lo vean.`;
+  return `<div style="font-family:Arial,Helvetica,sans-serif;color:#222;font-size:13px;max-width:980px">
+    <div style="font-size:17px;font-weight:bold;margin-bottom:6px">Programa de taller – ${escaparHtml(tpRango(plan,items))}</div><div>${saludo}</div>${bloques||'<div style="margin-top:10px">Sin trabajos asignados.</div>'}${gantt}<div style="margin-top:14px">${pie}</div></div>`;
+}
+function tpTextoCorreo(plan,quien){
+  const per = quien==="equipo" ? null : DB.personal.find(p=>p.id===quien);
+  const t = per ? tpMensajePersona(plan,per) : tpMensajeGrupo(plan);
+  return t.replace(/\*/g,"");
+}
+function tpCorreoEstado(){
+  const plan=tpPlan(tpPlanId); const quien=document.getElementById('tpCorreoQuien').value, gantt=document.getElementById('tpCorreoGantt').checked;
+  return { plan, quien, gantt, html:tpHtmlCorreo(plan,quien,gantt), texto:tpTextoCorreo(plan,quien),
+    asunto:document.getElementById('tpCorreoAsunto').value, para:document.getElementById('tpCorreoPara').value.trim() };
+}
+function tpCorreoAsuntoAuto(){
+  const plan=tpPlan(tpPlanId), quien=document.getElementById('tpCorreoQuien').value, per=quien==="equipo"?null:DB.personal.find(p=>p.id===quien);
+  document.getElementById('tpCorreoAsunto').value=`Programa de taller – ${tpRango(plan,tpItemsDe(plan,quien))}${per?' – '+per.nombre:''}`;
+}
+function tpCorreoRefrescar(cambioDestino){
+  if(cambioDestino) tpCorreoAsuntoAuto();
+  const e=tpCorreoEstado(); document.getElementById('tpCorreoPrev').innerHTML=e.html;
+}
+function tpModalCorreo(planId){
+  const plan=tpPlan(planId); if(!plan) return; tpPlanId=planId;
+  if(!plan.items.length){ toast("La semana no tiene trabajos.","danger"); return; }
+  const ids=[...new Set(plan.items.flatMap(i=>i.responsables))], personas=ids.map(id=>DB.personal.find(p=>p.id===id)).filter(Boolean);
+  openModal(`<div class="modal-head"><h3>Programa de taller por correo / PDF</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body" style="display:grid;gap:10px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <label class="small muted">Para quién es
+          <select id="tpCorreoQuien" onchange="tpCorreoRefrescar(true)"><option value="equipo">Todo el equipo (programa completo)</option>${personas.map(p=>`<option value="${p.id}">Solo lo de ${escaparHtml(p.nombre)}</option>`).join("")}</select></label>
+        <label class="small muted">Para (correos, separados por coma)<input type="text" id="tpCorreoPara" value="${escaparHtml(tpCorreoPara)}" placeholder="nombre@empresa.cl" oninput="tpCorreoPara=this.value"></label></div>
+      <label class="small muted">Asunto<input type="text" id="tpCorreoAsunto"></label>
+      <label class="small flex-gap"><input type="checkbox" id="tpCorreoGantt" checked onchange="tpCorreoRefrescar()"> Incluir la carta Gantt por tablero</label>
+      <div class="hint">Para que llegue con tablas y colores: pulsa <b>Copiar con formato</b>, abre el correo y pega con Ctrl+V. Los botones de Outlook abren el borrador con la versión en texto simple (los programas de correo no aceptan tablas por enlace).</div>
+      <div id="tpCorreoPrev" style="border:1px solid var(--line);border-radius:8px;background:#fff;padding:12px;max-height:340px;overflow:auto;"></div>
+    </div>
+    <div class="modal-foot" style="flex-wrap:wrap;gap:6px;"><button class="btn" onclick="closeModal()">Cerrar</button>
+      <button class="btn" onclick="tpCorreoPdf()">📄 Descargar PDF</button>
+      <button class="btn" onclick="tpCorreoAbrir('web')">✉ Outlook web</button>
+      <button class="btn" onclick="tpCorreoAbrir('app')">✉ Outlook (programa)</button>
+      <button class="btn btn-primary" onclick="tpCorreoCopiar()">📋 Copiar con formato</button></div>`, 900);
+  tpCorreoRefrescar(true);
+}
+async function tpCorreoCopiar(silencioso){
+  const e=tpCorreoEstado();
+  try{
+    if(!(navigator.clipboard && window.ClipboardItem)) throw new Error("sin ClipboardItem");
+    await navigator.clipboard.write([new ClipboardItem({"text/html":new Blob([e.html],{type:"text/html"}),"text/plain":new Blob([e.texto],{type:"text/plain"})})]);
+    if(!silencioso) toast("Copiado con formato. Pégalo en el correo con Ctrl+V.","ok"); return true;
+  }catch(err){
+    try{ const el=document.getElementById('tpCorreoPrev'), r=document.createRange(); r.selectNodeContents(el); const s=window.getSelection(); s.removeAllRanges(); s.addRange(r); const ok=document.execCommand('copy'); s.removeAllRanges();
+      if(!silencioso) toast(ok?"Copiado con formato. Pégalo en el correo con Ctrl+V.":"No se pudo copiar. Selecciona la vista previa y copia con Ctrl+C.", ok?"ok":"danger"); return ok; }
+    catch(e2){ if(!silencioso) toast("No se pudo copiar.","danger"); return false; }
+  }
+}
+async function tpCorreoAbrir(modo){
+  const e=tpCorreoEstado(); await tpCorreoCopiar(true);
+  if(modo==="app"){ window.location.href=`mailto:${e.para}?subject=${encodeURIComponent(e.asunto)}&body=${encodeURIComponent(e.texto.replace(/\r?\n/g,"\r\n"))}`; }
+  else { let cuerpo=e.texto; const base=`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(e.para)}&subject=${encodeURIComponent(e.asunto)}&body=`;
+    if(base.length+encodeURIComponent(cuerpo).length>1900) cuerpo=cuerpo.slice(0,700)+"\n\n[...] Pega aquí el programa completo con Ctrl+V.";
+    window.open(base+encodeURIComponent(cuerpo),"_blank"); }
+  toast("Listo. El programa con tablas y Gantt quedó copiado: en el correo, borra el texto y pega con Ctrl+V si lo quieres con formato.","ok");
+  const plan=e.plan; registrarHistorial({proyecto:"Taller", accion:"Modificar", detalle:`Programa de taller (semana ${plan.lunes}) preparado para correo: ${e.quien==="equipo"?"equipo":tpNombres({responsables:[e.quien]}).join("")}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
+}
+async function tpCorreoPdf(){
+  if(!(await asegurarPDF())){ toast("No se pudo cargar el generador de PDF. Revisa tu conexión.","danger"); return; }
+  const e=tpCorreoEstado(), plan=e.plan, items=tpItemsDe(plan,e.quien).slice().sort((a,b)=>a.ini.localeCompare(b.ini)||(a.tablero||"").localeCompare(b.tablero||""));
+  const { jsPDF } = window.jspdf; const doc=new jsPDF({orientation:"landscape",unit:"mm",format:"a4"});
+  doc.setFontSize(15); doc.setFont(undefined,"bold"); doc.text("ALUTIPO — Programa de taller",14,15);
+  doc.setFontSize(10); doc.setFont(undefined,"normal"); doc.text(`${tpRango(plan,items)}${e.quien==="equipo"?"":" · "+((DB.personal.find(p=>p.id===e.quien)||{}).nombre||"")} · Emitido ${hoyISO()} por ${DB.usuario||""}`,14,21);
+  doc.autoTable({ startY:25, head:[["Tablero","Tarea","Responsables","Fechas","Horas","Qué debe quedar listo"]],
+    body:items.map(i=>[ (i.tablero||"—")+(tpDespuesDe(tpItemsGrupo(plan,tpKey(i)))?"\n(después de "+tpNombreKey(tpDespuesDe(tpItemsGrupo(plan,tpKey(i))))+")":""), i.tarea+(i.prioridad==="urgente"?" [URGENTE]":""), tpNombres(i).join(", ")||"sin asignar", i.ini===i.fin?distDiaTxt(i.ini):distDiaTxt(i.ini)+" → "+distDiaTxt(i.fin), i.horas, (i.meta||"")+(i.nota?" · "+i.nota:"") ]),
+    theme:"grid", styles:{fontSize:8,cellPadding:1.5,overflow:"linebreak"}, headStyles:{fillColor:[193,113,46]}, margin:{left:10,right:10} });
+  if(e.gantt){
+    const D=tpGanttDatos([{items}]);
+    if(D){ doc.addPage("a4","landscape"); doc.setFontSize(13); doc.setFont(undefined,"bold"); doc.text("Carta Gantt por tablero",14,14);
+      const nm=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]; const meses=[]; D.dias.forEach(d=>{ const m=d.slice(0,7); if(!meses.length||meses[meses.length-1].m!==m) meses.push({m,n:1}); else meses[meses.length-1].n++; });
+      const head=[[{content:"Tablero / tarea",rowSpan:2}, ...meses.map(x=>({content:nm[parseInt(x.m.slice(5),10)-1]+" "+x.m.slice(2,4),colSpan:x.n}))], D.dias.map(d=>String(new Date(d+"T12:00:00Z").getUTCDate()))];
+      const cw=Math.max(2.6,Math.min(6,(297-20-70)/D.dias.length));
+      const colores={}; const body=D.filas.map((f,ri)=>{ const fila=[ (f.tipo==="t"?f.label+" ("+f.avance+"%)":"   "+f.label+" · "+f.sub), ...D.dias.map(()=>"") ]; colores[ri]=f; return fila; });
+      const cs={0:{cellWidth:70}}; D.dias.forEach((d,i)=>{ cs[i+1]={cellWidth:cw}; });
+      doc.autoTable({ startY:18, head, body, theme:"grid", styles:{fontSize:6.5,cellPadding:0.6,overflow:"ellipsize",minCellHeight:3.6,lineColor:[225,225,225]}, headStyles:{fillColor:[241,236,230],textColor:[60,60,60],halign:"center",fontSize:6}, columnStyles:cs, margin:{left:10,right:10},
+        didParseCell:function(h){ if(h.section!=="body") return; const f=colores[h.row.index]; if(!f) return;
+          if(h.column.index===0){ if(f.tipo==="t"){ h.cell.styles.fontStyle="bold"; h.cell.styles.fillColor=[250,246,241]; } return; }
+          const i=h.column.index-1; if(i>=f.i0&&i<=f.i1){ const n=f.i1-f.i0+1, hechas=Math.round(n*f.avance/100); h.cell.styles.fillColor=tpHex((i-f.i0<hechas)?f.color:tpMezcla(f.color,0.62)); } } });
+      doc.setFontSize(7); doc.setFont(undefined,"normal"); doc.text("Color fuerte = avance · claro = por hacer · verde = listo · rojo = bloqueado · solo días hábiles",14,(doc.lastAutoTable.finalY||190)+5); } }
+  doc.save(`Programa_taller_${plan.lunes}${e.quien==="equipo"?"":"_"+((DB.personal.find(p=>p.id===e.quien)||{}).nombre||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/\W+/g,"_")}.pdf`);
+}
+
 /* ---- Mensajes ---- */
 function tpLineaItem(it){
   return `  • ${it.tarea}${it.prioridad==='urgente'?' 🔴 URGENTE':''} — ${it.ini===it.fin?distDiaTxt(it.ini):distDiaTxt(it.ini)+' → '+distDiaTxt(it.fin)} · ${it.horas} h${it.meta?`\n     🎯 ${it.meta}`:''}${it.nota?`\n     📝 ${it.nota}`:''}`;
@@ -11166,11 +11415,11 @@ function renderTallerPrograma(){
     const avance=h?Math.round(its.reduce((a,i)=>a+(Number(i.horas)||0)*(Number(i.avance)||0),0)/h):0;
     const ini=its.reduce((m,i)=>i.ini<m?i.ini:m,its[0].ini), fin=its.reduce((m,i)=>i.fin>m?i.fin:m,its[0].fin);
     const resp=[...new Set(its.flatMap(i=>tpNombres(i)))], sinR=its.some(i=>!i.responsables.length);
-    const cab=`<tr style="background:var(--bg-soft,rgba(120,120,120,.08));cursor:pointer" onclick="tpToggle(${gi})"><td><span style="display:inline-block;width:20px;font-weight:700">${abierto?'−':'+'}</span><b>${escaparHtml(its[0].tablero||"Trabajos varios")}</b> <span class="small muted">· ${p?escaparHtml(p.codigo):'sin proyecto'} · ${hl}/${its.length} tareas</span>
+    const cab=`<tr style="background:var(--bg-soft,rgba(120,120,120,.08));cursor:pointer" onclick="tpToggle(${gi})"><td><span style="display:inline-block;width:20px;font-weight:700">${abierto?'−':'+'}</span><b>${escaparHtml(its[0].tablero||"Trabajos varios")}</b> <span class="small muted">· ${p?escaparHtml(p.codigo):'sin proyecto'} · ${hl}/${its.length} tareas</span>${tpDespuesDe(its)?` <span class="small" style="color:var(--copper-dark)" title="Se arma cuando termina el otro tablero">⛓ después de ${escaparHtml(tpNombreKey(tpDespuesDe(its)))}${grupos.some(x=>x.key===tpDespuesDe(its))?'':' ⚠ (ya no existe)'}</span>`:''}
         <div class="progressbar thin" style="margin:4px 0 0 20px;max-width:240px"><span style="width:${avance}%"></span></div></td>
       <td class="small" style="${sinR?'color:var(--danger)':''}">${resp.length?escaparHtml(resp.join(", ")):'⚠ sin asignar'}${sinR&&resp.length?' <span title="Hay tareas sin asignar">⚠</span>':''}</td>
       <td class="small">${distDiaTxt(ini)}<br>→ ${distDiaTxt(fin)}</td><td style="text-align:right"><b>${Math.round(h*10)/10}</b></td><td class="small">${avance}%</td>
-      ${gest?`<td style="white-space:nowrap" onclick="event.stopPropagation()"><button class="btn btn-sm" title="Duplicar tablero" onclick="tpModalDuplicar(${gi})">⧉ Duplicar</button> <button class="btn btn-sm" title="Responsables del tablero" onclick="tpModalRespGrupo(${gi})">👷</button> <button class="btn btn-sm" title="Agregar tarea a este tablero" onclick="tpModalItem('${plan.id}',0,${gi})">＋</button> <button class="btn btn-sm" title="Quitar tablero" onclick="tpQuitarGrupo(${gi})">🗑</button></td>`:''}</tr>`;
+      ${gest?`<td style="white-space:nowrap" onclick="event.stopPropagation()"><button class="btn btn-sm" title="Duplicar tablero" onclick="tpModalDuplicar(${gi})">⧉ Duplicar</button> <button class="btn btn-sm" title="Indicar que se arma después de otro tablero" onclick="tpModalDespues(${gi})">⛓ Después de…</button> <button class="btn btn-sm" title="Responsables del tablero" onclick="tpModalRespGrupo(${gi})">👷</button> <button class="btn btn-sm" title="Agregar tarea a este tablero" onclick="tpModalItem('${plan.id}',0,${gi})">＋</button> <button class="btn btn-sm" title="Quitar tablero" onclick="tpQuitarGrupo(${gi})">🗑</button></td>`:''}</tr>`;
     return cab+(abierto?its.slice().sort((a,b)=>a.ini.localeCompare(b.ini)).map(filaTarea).join(""):"");
   }).join("");
   const tabla=`<div class="flex-gap" style="margin:6px 0;"><button class="btn btn-sm" onclick="tpExpandirTodo(true)">＋ Expandir todo</button><button class="btn btn-sm" onclick="tpExpandirTodo(false)">− Contraer todo</button><span class="small muted">${grupos.length} tablero(s)</span></div>
@@ -11182,8 +11431,10 @@ function renderTallerPrograma(){
       <div><div class="small muted">Semana</div><b>${(()=>{ const ini=items.length?items.reduce((m,i)=>i.ini<m?i.ini:m,items[0].ini):plan.lunes, fin=items.length?items.reduce((m,i)=>i.fin>m?i.fin:m,items[0].fin):sumarDias(plan.lunes,4); return distDiaTxt(plan.lunes)+' → '+distDiaTxt(diasEntre(plan.lunes,fin)>4?fin:sumarDias(plan.lunes,4)); })()}</b> ${plan.estado==='enviado'?'<span class="badge b-verde"><span class="dot"></span>Enviado</span>':'<span class="badge b-gris"><span class="dot"></span>Borrador</span>'}</div>
       <div><div class="small muted">Trabajos</div><b>${listos}/${items.length} listos</b></div><div><div class="small muted">Horas programadas</div><b>${Math.round(horas*10)/10} h</b></div>
       ${sob.length?`<div style="color:var(--danger)"><b>⚠ ${sob.length} día(s) sobrecargado(s)</b></div>`:''}
-      <div class="flex-gap" style="margin-left:auto;flex-wrap:wrap;">${gest?`<button class="btn btn-sm" onclick="tpModalArmado('${plan.id}')">🧰 Armado de tablero</button><button class="btn btn-sm" onclick="tpModalItem('${plan.id}')">+ Trabajo</button><button class="btn btn-sm btn-primary" onclick="tpModalEnviar('${plan.id}')">📲 Enviar por WhatsApp</button><button class="btn btn-sm" onclick="tpEliminarSemana('${plan.id}')" title="Eliminar semana">🗑</button>`:''}</div>
-    </div>${grid}${tabla}`;
+      <div class="flex-gap" style="margin-left:auto;flex-wrap:wrap;">${gest?`<button class="btn btn-sm" onclick="tpModalArmado('${plan.id}')">🧰 Armado de tablero</button><button class="btn btn-sm" onclick="tpModalItem('${plan.id}')">+ Trabajo</button><button class="btn btn-sm btn-primary" onclick="tpModalEnviar('${plan.id}')">📲 Enviar por WhatsApp</button><button class="btn btn-sm" onclick="tpModalCorreo('${plan.id}')">✉ Correo / PDF</button><button class="btn btn-sm" onclick="tpEliminarSemana('${plan.id}')" title="Eliminar semana">🗑</button>`:''}</div>
+    </div>
+    <div class="mp-tabs" style="margin-top:10px;"><button class="mp-tab ${tpVista==='programa'?'on':''}" onclick="tpVista='programa'; renderAll();">☰ Programa de la semana</button><button class="mp-tab ${tpVista==='gantt'?'on':''}" onclick="tpVista='gantt'; renderAll();">▤ Gantt por tablero</button></div>
+    ${tpVista==='gantt'?tpHtmlGantt(plan):grid+tabla}`;
 }
 
 // ================================================================

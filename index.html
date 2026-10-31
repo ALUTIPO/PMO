@@ -502,7 +502,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.7.9";
+const APP_VERSION = "3.7.10";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -11068,6 +11068,7 @@ function tpModalItem(planId,itemId,gi){
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
         <label class="small muted">Prioridad<select id="tpPrio"><option value="normal" ${!it||it.prioridad!=='urgente'?'selected':''}>Normal</option><option value="urgente" ${it&&it.prioridad==='urgente'?'selected':''}>🔴 Urgente</option></select></label>
         <label class="small muted">Nota<input type="text" id="tpNota" value="${escaparHtml(it?it.nota:"")}"></label></div>
+      <label class="small muted">Avance de esta tarea (%)<input type="number" id="tpAvFull" min="0" max="100" step="5" value="${it?(Number(it.avance)||0):0}"></label>
     </div>
     <div class="modal-foot">${it?`<button class="btn btn-danger" onclick="tpQuitarItem('${planId}',${it.id})">Quitar</button>`:''}<button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="tpGuardarItem('${planId}',${it?it.id:0})">Guardar</button></div>`, 640);
   tpCabeIniciar(planId,itemId);
@@ -11082,10 +11083,20 @@ function tpGuardarItem(planId,itemId){
   const anc=tpLeerAncla(); let obj;
   if(itemId){ obj=plan.items.find(x=>x.id===itemId); if(anc&&tpAnclaCiclo(plan,itemId,anc.id)){ toast("Ese vínculo crea un círculo. Elige otra tarea.","danger"); return; } Object.assign(obj,d); }
   else { const id=plan.items.reduce((m,x)=>Math.max(m,x.id),0)+1; obj={ id, estado:"pendiente", avance:0, ...d }; plan.items.push(obj); }
+  { const a=Math.max(0,Math.min(100,Math.round(Number((document.getElementById('tpAvFull')||{}).value)||0))); if(a!==(Number(obj.avance)||0)) tpAplicaAvance(obj,a); }
   const prevAnc=obj.ancla; if(anc){ const cambio=!prevAnc||prevAnc.id!==anc.id||prevAnc.tipo!==anc.tipo; obj.ancla=anc; if(cambio) tpSnapAncla(plan,obj); } else { delete obj.ancla; delete obj.enLote; }
   closeModal(); tpGuardar(plan,(itemId?"editado: ":"agregado: ")+d.tarea);
 }
 function tpQuitarItem(planId,itemId){ if(!tpPuede()) return; const plan=tpPlan(planId); const it=plan.items.find(x=>x.id===itemId); plan.items=plan.items.filter(x=>x.id!==itemId); closeModal(); tpGuardar(plan,"quitado: "+(it?it.tarea:"")); }
+/* Avance individual por tarea (0–100 %). El estado se deduce solo; las tareas «en conjunto» de un mismo bloque comparten avance. */
+function tpAplicaAvance(it,a){ it.avance=a; if(it.estado!=="bloqueado"||a>=100) it.estado=a>=100?"listo":a>0?"en_curso":"pendiente"; }
+function tpSetAvance(planId,itemId,v){
+  if(!tpPuede()) return; const plan=tpPlan(planId), it=plan&&plan.items.find(x=>x.id===itemId); if(!it) return;
+  const a=Math.max(0,Math.min(100,Math.round(Number(v)||0)));
+  const lead=(it.enLote&&it.ancla&&plan.items.find(x=>x.id===it.ancla.id))||it;
+  [lead,...plan.items.filter(x=>x.enLote&&x.ancla&&x.ancla.id===lead.id)].forEach(m=>tpAplicaAvance(m,a));
+  tpGuardar(plan,`${it.tarea} → ${a}%`);
+}
 function tpSetEstado(planId,itemId,estado){
   if(!tpPuede()) return; const plan=tpPlan(planId); const it=plan.items.find(x=>x.id===itemId); if(!it) return;
   it.estado=estado; it.avance = estado==="listo"?100 : estado==="pendiente"?0 : (it.avance>0&&it.avance<100?it.avance:50);
@@ -11275,6 +11286,7 @@ function tpModalFechas(ri){
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;"><label class="small muted">Inicio<input type="date" id="tpIni" value="${it.ini}"></label><label class="small muted">Término<input type="date" id="tpFin" value="${it.fin}"></label></div>
       <div class="flex-gap"><button class="btn btn-sm" onclick="tpMoverFechasModal(-1)">◀ 1 día antes</button><button class="btn btn-sm" onclick="tpMoverFechasModal(1)">1 día después ▶</button></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">${tpHtmlAncla(plan,it)}</div>
+      <label class="small muted">Avance de esta tarea (%)<input type="number" id="tpAv" min="0" max="100" step="5" value="${Number(it.avance)||0}"></label>
       <div id="tpCabeMsg" class="small" style="padding:6px 8px;border-radius:6px"></div></div>
     <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn" onclick="closeModal(); tpModalItem('${plan.id}',${it.id})">Más opciones</button><button class="btn btn-primary" onclick="tpGuardarFechas('${plan.id}',${it.id})">Guardar</button></div>`, 560);
   tpCabeIniciar(plan.id,it.id);
@@ -11289,6 +11301,7 @@ function tpGuardarFechas(planId,itemId){
   if(!ini||!fin||fin<ini){ toast("Revisa las fechas de inicio y término.","danger"); return; }
   const anc=tpLeerAncla(); if(anc&&tpAnclaCiclo(plan,itemId,anc.id)){ toast("Ese vínculo crea un círculo. Elige otra tarea.","danger"); return; }
   const prev=it.ancla; it.ini=ini; it.fin=fin;
+  const av=document.getElementById('tpAv'); if(av && Number(av.value)!==(Number(it.avance)||0)){ const a=Math.max(0,Math.min(100,Math.round(Number(av.value)||0))); const lead=(it.enLote&&it.ancla&&plan.items.find(x=>x.id===it.ancla.id))||it; [lead,...plan.items.filter(x=>x.enLote&&x.ancla&&x.ancla.id===lead.id)].forEach(m=>tpAplicaAvance(m,a)); }
   if(anc){ const cambio=!prev||prev.id!==anc.id||prev.tipo!==anc.tipo; it.ancla=anc; if(cambio) tpSnapAncla(plan,it); } else { delete it.ancla; delete it.enLote; }
   closeModal(); tpGuardar(plan,`fechas de ${it.tarea}: ${ini} → ${fin}`);
 }
@@ -11717,7 +11730,7 @@ function renderTallerPrograma(){
     return `<tr><td style="padding-left:34px"><div class="small">${escaparHtml(it.tarea)}${it.prioridad==='urgente'?' <span class="badge b-rojo"><span class="dot"></span>Urgente</span>':''}</div>${(it.meta||it.nota)?`<div class="small muted">${it.meta?'🎯 '+escaparHtml(it.meta):''}${it.nota?' · 📝 '+escaparHtml(it.nota):''}</div>`:''}</td>
       <td class="small" style="${sinR?'color:var(--danger)':''}">${sinR?'⚠ sin asignar':escaparHtml(tpNombres(it).join(", "))}</td>
       <td class="small">${distDiaTxt(it.ini)}${it.fin!==it.ini?'<br>→ '+distDiaTxt(it.fin):''}</td><td style="text-align:right">${it.enLote?"conjunto":it.horas}</td>
-      <td>${gest?`<select style="font-size:12px;padding:4px;border-radius:6px;border:1px solid var(--line);background:var(--card)" onchange="tpSetEstado('${plan.id}',${it.id},this.value)">${["pendiente","en_curso","listo","bloqueado"].map(e=>`<option value="${e}" ${it.estado===e?'selected':''}>${e.replace('_',' ')}</option>`).join("")}</select>`:(badgeEst[it.estado]||'')}</td>
+      <td style="white-space:nowrap">${gest?`<input type="number" min="0" max="100" step="5" value="${Number(it.avance)||0}" title="% de avance de esta tarea" style="width:62px;display:inline-block;font-size:12px;padding:4px;border-radius:6px;border:1px solid var(--line);background:var(--card)" onchange="tpSetAvance('${plan.id}',${it.id},this.value)">% <select style="width:auto;display:inline-block;font-size:12px;padding:4px;border-radius:6px;border:1px solid var(--line);background:var(--card)" onchange="tpSetEstado('${plan.id}',${it.id},this.value)">${["pendiente","en_curso","listo","bloqueado"].map(e=>`<option value="${e}" ${it.estado===e?'selected':''}>${e.replace('_',' ')}</option>`).join("")}</select>`:`${Number(it.avance)||0}% ${badgeEst[it.estado]||''}`}</td>
       ${gest?`<td><button class="btn btn-sm" onclick="tpModalItem('${plan.id}',${it.id})">Editar</button></td>`:''}</tr>`; };
   const filas=grupos.map((g,gi)=>{
     const its=g.items, abierto=tpEstaAbierto(plan,g.key,grupos.length), p=its[0].proyectoId?proy(its[0].proyectoId):null;

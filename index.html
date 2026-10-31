@@ -502,7 +502,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.7.7";
+const APP_VERSION = "3.7.8";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -11377,7 +11377,10 @@ function tpGanttDatos(planes){
   const idx0=f=>{ for(let i=0;i<dias.length;i++) if(dias[i]>=f) return i; return dias.length-1; };
   const idx1=f=>{ for(let i=dias.length-1;i>=0;i--) if(dias[i]<=f) return i; return 0; };
   const filas=[];
+  orden.sort((a,b)=>{ const pa=g[a][0].proyectoId||"", pb=g[b][0].proyectoId||""; return pa===pb?0:(pa<pb?-1:1); });
+  const multiP=new Set(orden.map(k=>g[k][0].proyectoId||"")).size>1; let pidAnt=null;
   orden.forEach(k=>{
+    if(multiP && (g[k][0].proyectoId||"")!==pidAnt){ pidAnt=g[k][0].proyectoId||""; filas.push({ tipo:"p", label:tpProyEtiq(pidAnt) }); }
     const its=g[k], p=its[0].proyectoId?proy(its[0].proyectoId):null, color=p?mpColorProyecto(p.codigo):"#6b7686";
     const h=its.reduce((a,i)=>a+(Number(i.horas)||0),0), av=h?Math.round(its.reduce((a,i)=>a+(Number(i.horas)||0)*(Number(i.avance)||0),0)/h):Math.round(its.reduce((a,i)=>a+(Number(i.avance)||0),0)/its.length);
     const f=tpIniFinGrupo(its), dep=tpDespuesDe(its);
@@ -11393,28 +11396,72 @@ function tpGanttDatos(planes){
 }
 /* Tabla con estilos en línea: sirve igual en la pantalla y pegada en un correo. */
 function tpGanttTabla(D, opt){
-  opt=opt||{}; const hoy=hoyISO(), W=opt.ancho||20, LAB=opt.label||250;
+  opt=opt||{}; const hoy=hoyISO(), W=opt.ancho||20, LAB=opt.label||250, fijo=!!opt.interactivo, N=D.dias.length;
   const dn=["D","L","M","X","J","V","S"], nm=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
-  let meses="", ant="", n=0, mesesArr=[];
+  let ant="", mesesArr=[];
   D.dias.forEach(d=>{ const m=d.slice(0,7); if(m!==ant){ mesesArr.push({m,n:1}); ant=m; } else mesesArr[mesesArr.length-1].n++; });
-  meses=mesesArr.map(x=>`<th colspan="${x.n}" style="background:#f1ece6;color:#333;font-size:10px;text-align:left;padding:2px 4px;border:1px solid #ddd;white-space:nowrap">${nm[parseInt(x.m.slice(5),10)-1]} ${x.m.slice(2,4)}</th>`).join("");
-  const iHoy=D.dias.indexOf(hoy);
-  const dh=D.dias.map((d,i)=>{ const dt=new Date(d+"T12:00:00Z"); const h=d===hoy;
-    return `<th style="width:${W}px;min-width:${W}px;background:${h?'#c1712e':'#f7f4f0'};color:${h?'#fff':'#555'};font-size:9px;font-weight:${dt.getUTCDay()===1?700:400};text-align:center;padding:1px 0;border:1px solid #ddd;line-height:1.15">${dn[dt.getUTCDay()]}<br>${dt.getUTCDate()}</th>`; }).join("");
+  const meses=mesesArr.map(x=>`<th colspan="${x.n}" style="background:#f1ece6;color:#333;font-size:10px;text-align:left;padding:2px 4px;border:1px solid #ddd;white-space:nowrap;overflow:hidden">${x.n>=3?nm[parseInt(x.m.slice(5),10)-1]+" "+x.m.slice(2,4):nm[parseInt(x.m.slice(5),10)-1]}</th>`).join("");
+  const iHoy=D.dias.indexOf(hoy), fs=W>=24?10:W>=18?9:8;
+  const dh=D.dias.map(d=>{ const dt=new Date(d+"T12:00:00Z"); const h=d===hoy;
+    return `<th style="width:${W}px;background:${h?'#c1712e':'#f7f4f0'};color:${h?'#fff':'#555'};font-size:${fs}px;font-weight:${dt.getUTCDay()===1?700:400};text-align:center;padding:1px 0;border:1px solid #ddd;line-height:1.15;overflow:hidden">${dn[dt.getUTCDay()]}<br>${dt.getUTCDate()}</th>`; }).join("");
+  const colg=fijo?`<colgroup><col style="width:${LAB}px">${D.dias.map(()=>`<col style="width:${W}px">`).join("")}</colgroup>`:"";
+  const elip="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
   const filasHtml=D.filas.map((f,ri)=>{
+    if(f.tipo==="p") return `<tr><td colspan="${N+1}" style="background:#faf3ea;border:1px solid #ddd;padding:4px 8px;font-size:12px;font-weight:bold;color:#a15a1d;${elip}${fijo?'position:sticky;left:0;':''}">📁 ${escaparHtml(f.label)}</td></tr>`;
     const esT=f.tipo==="t"; if(!esT && opt.abiertos && !opt.abiertos(f.key)) return "";
-    const n=f.i1-f.i0+1, hechas=Math.round(n*f.avance/100), claro=tpMezcla(f.color,0.62);
-    const celdas=D.dias.map((d,i)=>{ let bg="", bd="border:1px solid #eee;";
-      if(i>=f.i0 && i<=f.i1) bg=(i-f.i0<hechas)?f.color:claro;
-      else if(i===iHoy) bg="#fff1e3";
-      return `<td style="width:${W}px;min-width:${W}px;height:${esT?20:16}px;padding:0;${bd}${bg?'background:'+bg+';':''}${i===iHoy?'border-left:2px solid #c1712e;':''}"></td>`; }).join("");
+    const n=f.i1-f.i0+1, hechas=Math.round(n*f.avance/100), claro=tpMezcla(f.color,0.62), alto=esT?24:19, pad=esT?"3px":"4px";
+    const celdas=D.dias.map((d,i)=>{ let bg="";
+      if(i>=f.i0 && i<=f.i1) bg=(i-f.i0<hechas)?f.color:claro; else if(i===iHoy) bg="#fff1e3";
+      return `<td style="height:${alto}px;padding:${pad} 0;border:1px solid #eee;${bg?'background:'+bg+';background-clip:content-box;':''}${i===iHoy?'border-left:2px solid #c1712e;':''}"></td>`; }).join("");
+    const aviso=opt.interactivo&&f.sobre?' <span style="color:#c0392b" title="Alguien pasa de 9 h por día">⚠</span>':'';
     const lab = esT
-      ? `<td style="min-width:${LAB}px;max-width:${LAB}px;background:#faf6f1;border:1px solid #ddd;padding:3px 6px;font-size:11.5px;color:#222;${opt.interactivo?'cursor:pointer;position:sticky;left:0;z-index:2;':''}"${opt.interactivo?` onclick="tpGanttToggle(${ri})"`:''}>${opt.interactivo?`<b style="display:inline-block;width:14px">${opt.abiertos&&opt.abiertos(f.key)?'−':'+'}</b>`:''}<b>${escaparHtml(f.label)}</b>${opt.interactivo&&f.sobre?' <span style="color:#c0392b" title="Alguien pasa de 9 h por día">⚠</span>':''}${opt.editable?` <span style="cursor:pointer;color:#a15a1d" onclick="event.stopPropagation();tpModalInicioTablero(${ri})" title="Cambiar el inicio del tablero">✎</span>`:''}<div style="font-size:9.5px;color:#777;${opt.interactivo?'margin-left:14px':''}">${escaparHtml(f.sub)} · ${distDiaTxt(f.ini)} → ${distDiaTxt(f.fin)} · ${f.avance}%</div></td>`
-      : `<td style="min-width:${LAB}px;max-width:${LAB}px;background:#fff;border:1px solid #eee;padding:1px 6px 1px ${opt.interactivo?22:14}px;font-size:10.5px;color:#333;${opt.interactivo?'position:sticky;left:0;z-index:2;':''}${opt.editable?'cursor:pointer;':''}"${opt.editable?` onclick="tpModalFechas(${ri})"`:''}>${opt.interactivo&&f.sobre?'<span style="color:#c0392b" title="Alguien pasa de 9 h por día">⚠</span> ':''}${escaparHtml(f.label)}${opt.editable?' <span style="color:#a15a1d">✎</span>':''} <span style="color:#888;font-size:9.5px">· ${escaparHtml(f.sub)}</span></td>`;
+      ? `<td title="${escaparHtml(f.label+' · '+f.sub+' · '+distDiaTxt(f.ini)+' → '+distDiaTxt(f.fin))}" style="background:#faf6f1;border:1px solid #ddd;padding:2px 6px;font-size:12px;color:#222;${elip}${fijo?'cursor:pointer;position:sticky;left:0;z-index:2;':''}"${opt.interactivo?` onclick="tpGanttToggle(${ri})"`:''}>${opt.interactivo?`<b style="display:inline-block;width:14px">${opt.abiertos&&opt.abiertos(f.key)?'−':'+'}</b>`:''}<b>${escaparHtml(f.label)}</b>${aviso}${opt.editable?` <span style="cursor:pointer;color:#a15a1d" onclick="event.stopPropagation();tpModalInicioTablero(${ri})" title="Cambiar el inicio del tablero">✎</span>`:''} <span style="font-size:10px;color:#777">· ${f.avance}% · ${distDiaTxt(f.ini).split(' ').slice(1).join(' ')} → ${distDiaTxt(f.fin).split(' ').slice(1).join(' ')}</span></td>`
+      : `<td title="${escaparHtml(f.label+' · '+f.sub)}" style="background:#fff;border:1px solid #eee;padding:1px 6px 1px ${opt.interactivo?24:14}px;font-size:11px;color:#333;${elip}${fijo?'position:sticky;left:0;z-index:2;':''}${opt.editable?'cursor:pointer;':''}"${opt.editable?` onclick="tpModalFechas(${ri})"`:''}>${aviso?'<span style="color:#c0392b">⚠</span> ':''}${escaparHtml(f.label)}${opt.editable?' <span style="color:#a15a1d">✎</span>':''} <span style="color:#888;font-size:10px">· ${escaparHtml(f.sub.split(' · ')[0])}</span></td>`;
     return `<tr>${lab}${celdas}</tr>`; }).join("");
   const leyenda=`<div style="font-size:10px;color:#666;margin-top:6px">Color fuerte = avance · color claro = por hacer · verde = listo · rojo = bloqueado · columna con borde cobre = hoy · solo días hábiles.</div>`;
-  return `<table style="border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;background:#fff;color:#222"><thead>
-    <tr><th rowspan="2" style="min-width:${LAB}px;background:#f1ece6;border:1px solid #ddd;font-size:11px;text-align:left;padding:3px 6px;${opt.interactivo?'position:sticky;left:0;z-index:3;':''}">Tablero / tarea</th>${meses}</tr><tr>${dh}</tr></thead><tbody>${filasHtml}</tbody></table>${leyenda}`;
+  return `<table style="${fijo?`table-layout:fixed;width:${LAB+N*W}px;`:''}border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;background:#fff;color:#222">${colg}<thead>
+    <tr><th rowspan="2" style="background:#f1ece6;border:1px solid #ddd;font-size:11px;text-align:left;padding:3px 6px;${fijo?'position:sticky;left:0;z-index:3;':`min-width:${LAB}px;`}">Tablero / tarea</th>${meses}</tr><tr>${dh}</tr></thead><tbody>${filasHtml}</tbody></table>${leyenda}`;
+}
+/* ---- PDF solo con la carta Gantt (ajustado a la hoja) ---- */
+function tpModalGanttPdf(planId){
+  const plan=tpPlan(planId); if(!plan) return;
+  openModal(`<div class="modal-head"><h3>Carta Gantt en PDF</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body" style="display:grid;gap:10px;">
+      <label class="small muted">Qué semanas<select id="tpGpAlc"><option value="todas" ${tpGanttAlcance==='todas'?'selected':''}>Todas las semanas</option><option value="semana" ${tpGanttAlcance==='semana'?'selected':''}>Solo la semana seleccionada</option></select></label>
+      <label class="small muted">Nivel de detalle<select id="tpGpDet"><option value="tableros">Solo tableros (una hoja, ideal para gerencia)</option><option value="tareas">Tableros con sus tareas y responsables</option></select></label>
+      <p class="hint">Se ajusta a la hoja: más fechas → columnas más angostas, y si hace falta pasa a tamaño A3. El proyecto aparece una vez y bajo él sus tableros.</p></div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="tpGanttPdf('${planId}')">Descargar PDF</button></div>`, 520);
+}
+async function tpGanttPdf(planId){
+  const plan=tpPlan(planId); const alc=document.getElementById('tpGpAlc').value, det=document.getElementById('tpGpDet').value; closeModal();
+  if(!(await asegurarPDF())){ toast("No se pudo cargar el generador de PDF. Revisa tu conexión.","danger"); return; }
+  const D=tpGanttDatos(alc==="semana"?[plan]:tpPlanes().slice().sort((a,b)=>a.lunes.localeCompare(b.lunes))); if(!D){ toast("No hay trabajos con fechas para dibujar.","danger"); return; }
+  const filas=D.filas.filter(f=>det==="tareas"||f.tipo!=="a"), n=D.dias.length;
+  const formato = n>70 ? "a3" : "a4", PW = formato==="a3"?420:297, PH = formato==="a3"?297:210, M=8;
+  const { jsPDF } = window.jspdf; const doc=new jsPDF({orientation:"landscape",unit:"mm",format:formato});
+  doc.setFontSize(14); doc.setFont(undefined,"bold"); doc.text("ALUTIPO — Carta Gantt del programa de taller",M,11);
+  doc.setFontSize(8.5); doc.setFont(undefined,"normal"); doc.text(`${distDiaTxt(D.ini)} al ${distDiaTxt(D.fin)} · ${D.nTableros} tablero(s) · emitido ${hoyISO()} por ${DB.usuario||""}`,M,16);
+  const labW = Math.min(78,Math.max(48, PW*0.2)); const cw = Math.max(1.6,(PW-2*M-labW)/n);
+  const topY=19, disp=PH-topY-12, rowH=Math.max(3,Math.min(6,disp/(filas.length+2.5))), fz=Math.max(5,Math.min(8,rowH*1.65));
+  const nm=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"], meses=[]; D.dias.forEach(d=>{ const m=d.slice(0,7); if(!meses.length||meses[meses.length-1].m!==m) meses.push({m,n:1}); else meses[meses.length-1].n++; });
+  const hoy=hoyISO(), iHoy=D.dias.indexOf(hoy), mapa={};
+  const head=[[{content:"Tablero / tarea",rowSpan:2,styles:{valign:"middle"}}, ...meses.map(x=>({content:x.n>=3?nm[parseInt(x.m.slice(5),10)-1]+" "+x.m.slice(2,4):nm[parseInt(x.m.slice(5),10)-1],colSpan:x.n,styles:{halign:"left"}}))], D.dias.map((d,i)=>({content:String(new Date(d+"T12:00:00Z").getUTCDate()),styles:i===iHoy?{fillColor:[193,113,46],textColor:[255,255,255]}:{}}))];
+  const body=filas.map((f,ri)=>{ mapa[ri]=f;
+    if(f.tipo==="p") return [{content:f.label,colSpan:n+1,styles:{fillColor:[250,243,234],textColor:[161,90,29],fontStyle:"bold"}}];
+    const txt = f.tipo==="t" ? `${f.label}  ·  ${f.avance}%` : `   ${f.label}${f.sub?"  ·  "+f.sub.split(" · ")[0]:""}`;
+    return [txt, ...D.dias.map(()=>"")]; });
+  const cs={0:{cellWidth:labW}}; D.dias.forEach((d,i)=>{ cs[i+1]={cellWidth:cw}; });
+  doc.autoTable({ startY:topY, head, body, theme:"grid", columnStyles:cs, margin:{left:M,right:M},
+    styles:{fontSize:fz,cellPadding:{top:0.25,bottom:0.25,left:0.8,right:0.4},overflow:"ellipsize",minCellHeight:rowH,lineColor:[228,228,228],lineWidth:0.1,valign:"middle"},
+    headStyles:{fillColor:[241,236,230],textColor:[60,60,60],halign:"center",fontSize:Math.min(fz,6.5),cellPadding:0.3},
+    didParseCell:function(h){ if(h.section!=="body") return; const f=mapa[h.row.index]; if(!f||f.tipo==="p") return;
+      if(h.column.index===0){ if(f.tipo==="t"){ h.cell.styles.fontStyle="bold"; h.cell.styles.fillColor=[250,246,241]; } return; }
+      const i=h.column.index-1;
+      if(i>=f.i0&&i<=f.i1){ const k=f.i1-f.i0+1, hechas=Math.round(k*f.avance/100); h.cell.styles.fillColor=tpHex((i-f.i0<hechas)?f.color:tpMezcla(f.color,0.62)); }
+      else if(i===iHoy) h.cell.styles.fillColor=[255,241,227]; } });
+  doc.setFontSize(7); doc.setFont(undefined,"normal"); doc.setTextColor(110);
+  doc.text("Color fuerte = avance · color claro = por hacer · verde = listo · rojo = bloqueado · columna naranja = hoy · solo días hábiles",M,Math.min(PH-5,(doc.lastAutoTable.finalY||PH-15)+4));
+  doc.save(`Gantt_taller_${hoyISO()}.pdf`);
 }
 function tpGanttToggle(ri){ const f=(tpGanttFilas||[])[ri]; if(!f) return; const k=f.key; tpGanttAbiertos[k]=!(tpGanttAbiertos[k]!==undefined?tpGanttAbiertos[k]:true); const sc=document.getElementById('tpGanttBox'); const x=sc?sc.scrollLeft:0, y=sc?sc.scrollTop:0; renderAll(); const s2=document.getElementById('tpGanttBox'); if(s2){ s2.scrollLeft=x; s2.scrollTop=y; } }
 let tpGanttFilas = [];
@@ -11427,10 +11474,11 @@ function tpHtmlGantt(plan){
     <button class="mp-chip ${tpGanttAlcance==='todas'?'on':''}" onclick="tpGanttAlcance='todas'; renderAll();">Todas las semanas</button>
     <button class="mp-chip ${tpGanttAlcance==='semana'?'on':''}" onclick="tpGanttAlcance='semana'; renderAll();">Solo esta semana</button>
     <button class="btn btn-sm" onclick="tpGanttTodos(true)">＋ Desplegar tareas</button><button class="btn btn-sm" onclick="tpGanttTodos(false)">− Plegar tareas</button><button class="btn btn-sm" onclick="tpGanttIrHoy()">◉ Ir a hoy</button>
-    <button class="btn btn-sm" onclick="tpModalCorreo('${plan.id}')">✉ Enviar por correo / PDF</button></div>`;
+    <button class="btn btn-sm" onclick="tpModalGanttPdf('${plan.id}')">📄 Gantt en PDF</button><button class="btn btn-sm" onclick="tpModalCorreo('${plan.id}')">✉ Enviar por correo / PDF</button></div>`;
   if(!D){ tpGanttFilas=[]; return barra+`<div class="empty-state card">Aún no hay trabajos con fechas para dibujar el Gantt.</div>`; }
   tpGanttFilas=D.filas;
-  return barra+`<div id="tpGanttBox" style="overflow:auto;max-height:72vh;background:#fff;border:1px solid var(--line);border-radius:8px;padding:6px;">${tpGanttTabla(D,{interactivo:true,editable:puedeGestionarTaller(),abiertos:k=>tpGanttAbiertos[k]!==undefined?tpGanttAbiertos[k]:true})}</div>
+  const cont=document.getElementById('content'), disp=Math.max(320,(cont?cont.clientWidth:1000)-70), LAB=disp<700?170:260, W=Math.max(14,Math.min(34,Math.floor((disp-LAB)/D.dias.length)));
+  return barra+`<div id="tpGanttBox" style="overflow:auto;max-height:72vh;background:#fff;border:1px solid var(--line);border-radius:8px;padding:6px;">${tpGanttTabla(D,{interactivo:true,editable:puedeGestionarTaller(),ancho:W,label:LAB,abiertos:k=>tpGanttAbiertos[k]!==undefined?tpGanttAbiertos[k]:true})}</div>
     <div class="hint" style="margin-top:6px;">${D.nTableros} tablero(s) · del ${distDiaTxt(D.ini)} al ${distDiaTxt(D.fin)}. Toca un tablero para plegar o desplegar sus tareas. «⛓ después de» indica el orden de armado.</div>`;
 }
 
@@ -11587,10 +11635,10 @@ async function tpCorreoPdf(){
       const nm=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]; const meses=[]; D.dias.forEach(d=>{ const m=d.slice(0,7); if(!meses.length||meses[meses.length-1].m!==m) meses.push({m,n:1}); else meses[meses.length-1].n++; });
       const head=[[{content:"Tablero / tarea",rowSpan:2}, ...meses.map(x=>({content:nm[parseInt(x.m.slice(5),10)-1]+" "+x.m.slice(2,4),colSpan:x.n}))], D.dias.map(d=>String(new Date(d+"T12:00:00Z").getUTCDate()))];
       const cw=Math.max(2.6,Math.min(6,(297-20-70)/D.dias.length));
-      const colores={}; const body=D.filas.map((f,ri)=>{ const fila=[ (f.tipo==="t"?f.label+" ("+f.avance+"%)":"   "+f.label+" · "+f.sub), ...D.dias.map(()=>"") ]; colores[ri]=f; return fila; });
+      const colores={}; const body=D.filas.map((f,ri)=>{ if(f.tipo==="p"){ colores[ri]=f; return [{content:f.label,colSpan:D.dias.length+1,styles:{fillColor:[250,243,234],textColor:[161,90,29],fontStyle:"bold"}}]; } const fila=[ (f.tipo==="t"?f.label+" ("+f.avance+"%)":"   "+f.label+" · "+f.sub), ...D.dias.map(()=>"") ]; colores[ri]=f; return fila; });
       const cs={0:{cellWidth:70}}; D.dias.forEach((d,i)=>{ cs[i+1]={cellWidth:cw}; });
       doc.autoTable({ startY:18, head, body, theme:"grid", styles:{fontSize:6.5,cellPadding:0.6,overflow:"ellipsize",minCellHeight:3.6,lineColor:[225,225,225]}, headStyles:{fillColor:[241,236,230],textColor:[60,60,60],halign:"center",fontSize:6}, columnStyles:cs, margin:{left:10,right:10},
-        didParseCell:function(h){ if(h.section!=="body") return; const f=colores[h.row.index]; if(!f) return;
+        didParseCell:function(h){ if(h.section!=="body") return; const f=colores[h.row.index]; if(!f||f.tipo==="p") return;
           if(h.column.index===0){ if(f.tipo==="t"){ h.cell.styles.fontStyle="bold"; h.cell.styles.fillColor=[250,246,241]; } return; }
           const i=h.column.index-1; if(i>=f.i0&&i<=f.i1){ const n=f.i1-f.i0+1, hechas=Math.round(n*f.avance/100); h.cell.styles.fillColor=tpHex((i-f.i0<hechas)?f.color:tpMezcla(f.color,0.62)); } } });
       doc.setFontSize(7); doc.setFont(undefined,"normal"); doc.text("Color fuerte = avance · claro = por hacer · verde = listo · rojo = bloqueado · solo días hábiles",14,(doc.lastAutoTable.finalY||190)+5); } }

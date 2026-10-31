@@ -502,7 +502,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.7.8";
+const APP_VERSION = "3.7.9";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -11422,6 +11422,8 @@ function tpGanttTabla(D, opt){
   return `<table style="${fijo?`table-layout:fixed;width:${LAB+N*W}px;`:''}border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;background:#fff;color:#222">${colg}<thead>
     <tr><th rowspan="2" style="background:#f1ece6;border:1px solid #ddd;font-size:11px;text-align:left;padding:3px 6px;${fijo?'position:sticky;left:0;z-index:3;':`min-width:${LAB}px;`}">Tablero / tarea</th>${meses}</tr><tr>${dh}</tr></thead><tbody>${filasHtml}</tbody></table>${leyenda}`;
 }
+/* Logo de Alutipo en el borde superior derecho de la página actual */
+function tpPdfLogo(doc,anchoPagina,margen,y){ try{ const w=34; doc.addImage(LOGO_ALUTIPO_B64,"PNG",anchoPagina-margen-w,y,w,w*108/400); }catch(e){} }
 /* ---- PDF solo con la carta Gantt (ajustado a la hoja) ---- */
 function tpModalGanttPdf(planId){
   const plan=tpPlan(planId); if(!plan) return;
@@ -11439,7 +11441,7 @@ async function tpGanttPdf(planId){
   const filas=D.filas.filter(f=>det==="tareas"||f.tipo!=="a"), n=D.dias.length;
   const formato = n>70 ? "a3" : "a4", PW = formato==="a3"?420:297, PH = formato==="a3"?297:210, M=8;
   const { jsPDF } = window.jspdf; const doc=new jsPDF({orientation:"landscape",unit:"mm",format:formato});
-  doc.setFontSize(14); doc.setFont(undefined,"bold"); doc.text("ALUTIPO — Carta Gantt del programa de taller",M,11);
+  tpPdfLogo(doc,PW,M,5); doc.setFontSize(14); doc.setFont(undefined,"bold"); doc.text("ALUTIPO — Carta Gantt del programa de taller",M,11);
   doc.setFontSize(8.5); doc.setFont(undefined,"normal"); doc.text(`${distDiaTxt(D.ini)} al ${distDiaTxt(D.fin)} · ${D.nTableros} tablero(s) · emitido ${hoyISO()} por ${DB.usuario||""}`,M,16);
   const labW = Math.min(78,Math.max(48, PW*0.2)); const cw = Math.max(1.6,(PW-2*M-labW)/n);
   const topY=19, disp=PH-topY-12, rowH=Math.max(3,Math.min(6,disp/(filas.length+2.5))), fz=Math.max(5,Math.min(8,rowH*1.65));
@@ -11612,7 +11614,7 @@ async function tpCorreoPdf(){
   if(!(await asegurarPDF())){ toast("No se pudo cargar el generador de PDF. Revisa tu conexión.","danger"); return; }
   const e=tpCorreoEstado(), plan=e.plan, items=tpItemsDe(plan,e.quien).slice().sort((a,b)=>a.ini.localeCompare(b.ini)||(a.tablero||"").localeCompare(b.tablero||""));
   const { jsPDF } = window.jspdf; const doc=new jsPDF({orientation:"landscape",unit:"mm",format:"a4"});
-  doc.setFontSize(15); doc.setFont(undefined,"bold"); doc.text("ALUTIPO — Programa de taller",14,15);
+  tpPdfLogo(doc,297,10,6); doc.setFontSize(15); doc.setFont(undefined,"bold"); doc.text("ALUTIPO — Programa de taller",14,15);
   doc.setFontSize(10); doc.setFont(undefined,"normal"); doc.text(`${tpRango(plan,items)}${e.quien==="equipo"?"":" · "+((DB.personal.find(p=>p.id===e.quien)||{}).nombre||"")} · Emitido ${hoyISO()} por ${DB.usuario||""}`,14,21);
   if(e.ger){
     const its=items.filter(i=>i.ini&&i.fin), dias=tpResumenDias(its), nom=["Lunes","Martes","Miércoles","Jueves","Viernes"], mes=["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
@@ -11631,7 +11633,7 @@ async function tpCorreoPdf(){
     theme:"grid", styles:{fontSize:8,cellPadding:1.5,overflow:"linebreak"}, headStyles:{fillColor:[193,113,46]}, margin:{left:10,right:10} });
   if(e.gantt){
     const D=tpGanttDatos([{items}]);
-    if(D){ doc.addPage("a4","landscape"); doc.setFontSize(13); doc.setFont(undefined,"bold"); doc.text("Carta Gantt por tablero",14,14);
+    if(D){ doc.addPage("a4","landscape"); tpPdfLogo(doc,297,10,6); doc.setFontSize(13); doc.setFont(undefined,"bold"); doc.text("Carta Gantt por tablero",14,14);
       const nm=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]; const meses=[]; D.dias.forEach(d=>{ const m=d.slice(0,7); if(!meses.length||meses[meses.length-1].m!==m) meses.push({m,n:1}); else meses[meses.length-1].n++; });
       const head=[[{content:"Tablero / tarea",rowSpan:2}, ...meses.map(x=>({content:nm[parseInt(x.m.slice(5),10)-1]+" "+x.m.slice(2,4),colSpan:x.n}))], D.dias.map(d=>String(new Date(d+"T12:00:00Z").getUTCDate()))];
       const cw=Math.max(2.6,Math.min(6,(297-20-70)/D.dias.length));

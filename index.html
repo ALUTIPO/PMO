@@ -502,7 +502,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.7.6";
+const APP_VERSION = "3.7.7";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -11437,7 +11437,7 @@ function tpHtmlGantt(plan){
 /* ---- Resumen por día para gerencia (V3.7.3) ---- */
 function tpResumenDias(items){
   const m={};
-  items.forEach(it=>{ if(!it.ini||!it.fin) return; tpDias(it.ini,it.fin).forEach(d=>{ const k=tpKey(it); m[d]=m[d]||{}; const e=m[d][k]=m[d][k]||{ nombre:it.tablero||"Trabajos varios", proy:it.proyectoId?((proy(it.proyectoId)||{}).codigo||""):"", personas:[], etapas:[] };
+  items.forEach(it=>{ if(!it.ini||!it.fin) return; tpDias(it.ini,it.fin).forEach(d=>{ const k=tpKey(it); m[d]=m[d]||{}; const e=m[d][k]=m[d][k]||{ nombre:it.tablero||"Trabajos varios", pid:it.proyectoId||"", personas:[], etapas:[] };
     tpNombres(it).forEach(n=>{ if(!e.personas.includes(n)) e.personas.push(n); }); if(!e.etapas.includes(it.tarea)) e.etapas.push(it.tarea); }); });
   return m;
 }
@@ -11447,29 +11447,35 @@ function tpSemanasResumen(items){
   return out;
 }
 function tpPrimerNombre(n){ return String(n).split(" ")[0]; }
+function tpProyEtiq(pid){ const p=pid?proy(pid):null; return p?`${p.codigo} · ${p.nombre}`:"Sin proyecto"; }
+function tpProyCod(pid){ const p=pid?proy(pid):null; return p?p.codigo:"Sin proyecto"; }
+function tpAgrupaPorProyecto(lista,fpid){ const m={}, orden=[]; lista.forEach(x=>{ const k=fpid(x); if(!m[k]){ m[k]=[]; orden.push(k); } m[k].push(x); }); return orden.map(k=>({pid:k,items:m[k]})); }
 function tpHtmlGerencia(plan,quien){
   const items=tpItemsDe(plan,quien).filter(i=>i.ini&&i.fin); const per=quien==="equipo"?null:DB.personal.find(p=>p.id===quien);
   if(!items.length) return `<div style="font-family:Arial,sans-serif">Sin trabajos programados.</div>`;
   const dias=tpResumenDias(items), semanas=tpSemanasResumen(items), g=tpGrupos({items});
+  const pids=[...new Set(items.map(i=>i.proyectoId||""))], unico=pids.length===1;
   const personas=[...new Set(items.flatMap(i=>tpNombres(i)))], rango=tpRango(plan,items);
   const nom=["Lunes","Martes","Miércoles","Jueves","Viernes"], mes=["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
   const celda=d=>{ const dt=new Date(d+"T12:00:00Z"), e=Object.values(dias[d]||{});
+    const cuerpo=tpAgrupaPorProyecto(e,x=>x.pid).map(gp=>`${unico?'':`<div style="font-size:10px;font-weight:bold;color:#a15a1d;margin:2px 0 3px">${escaparHtml(tpProyCod(gp.pid))}</div>`}${gp.items.map(x=>`<div style="margin-bottom:5px"><b>${escaparHtml(x.nombre)}</b><br><span style="color:#444">${escaparHtml(x.personas.join(", ")||"sin asignar")}</span></div>`).join("")}`).join("");
     return `<td style="width:20%;vertical-align:top;border:1px solid #d9d2c9;padding:0;font-family:Arial,Helvetica,sans-serif"><div style="background:#c1712e;color:#fff;font-size:11px;font-weight:bold;padding:3px 6px">${nom[dt.getUTCDay()-1]} ${dt.getUTCDate()} ${mes[dt.getUTCMonth()]}</div>
-      <div style="padding:5px 6px;font-size:12px;min-height:40px">${e.length?e.map(x=>`<div style="margin-bottom:6px"><b>${escaparHtml(x.nombre)}</b>${x.proy?` <span style="color:#888;font-size:10px">${escaparHtml(x.proy)}</span>`:''}<br><span style="color:#333">${escaparHtml(x.personas.join(", ")||"sin asignar")}</span></div>`).join(""):'<span style="color:#aaa">—</span>'}</div></td>`; };
-  const filaSem=s=>`<tr>${s.map(celda).join("")}</tr>`;
-  const resumen=g.map(x=>{ const its=x.items, f=tpIniFinGrupo(its), hh=its.reduce((a,i)=>a+(Number(i.horas)||0),0), av=hh?Math.round(its.reduce((a,i)=>a+(Number(i.horas)||0)*(Number(i.avance)||0),0)/hh):0;
-    return `<tr><td style="border:1px solid #ddd;padding:3px 6px;font-size:12px"><b>${escaparHtml(its[0].tablero||"Trabajos varios")}</b></td><td style="border:1px solid #ddd;padding:3px 6px;font-size:12px">${escaparHtml([...new Set(its.flatMap(i=>tpNombres(i)))].join(", ")||"sin asignar")}</td><td style="border:1px solid #ddd;padding:3px 6px;font-size:12px;white-space:nowrap">${distDiaTxt(f.ini)} → ${distDiaTxt(f.fin)}</td><td style="border:1px solid #ddd;padding:3px 6px;font-size:12px;text-align:right">${av}%</td></tr>`; }).join("");
+      <div style="padding:5px 6px;font-size:12px;min-height:40px">${e.length?cuerpo:'<span style="color:#aaa">—</span>'}</div></td>`; };
+  const fil=(x)=>{ const its=x.items, f=tpIniFinGrupo(its), hh=its.reduce((a,i)=>a+tpHorasEf(i),0), av=hh?Math.round(its.reduce((a,i)=>a+(Number(i.horas)||0)*(Number(i.avance)||0),0)/Math.max(1,its.reduce((a,i)=>a+(Number(i.horas)||0),0))):0;
+    const td="border:1px solid #ddd;padding:3px 6px;font-size:12px"; return `<tr><td style="${td}"><b>${escaparHtml(its[0].tablero||"Trabajos varios")}</b></td><td style="${td}">${escaparHtml([...new Set(its.flatMap(i=>tpNombres(i)))].join(", ")||"sin asignar")}</td><td style="${td};white-space:nowrap">${distDiaTxt(f.ini)} → ${distDiaTxt(f.fin)}</td><td style="${td};text-align:right">${av}%</td></tr>`; };
+  const resumen=tpAgrupaPorProyecto(g,x=>x.items[0].proyectoId||"").map(gp=>`${unico?'':`<tr><td colspan="4" style="background:#faf3ea;border:1px solid #ddd;padding:3px 6px;font-size:12px;font-weight:bold;color:#a15a1d">${escaparHtml(tpProyEtiq(gp.pid))}</td></tr>`}${gp.items.map(fil).join("")}`).join("");
   return `<div style="font-family:Arial,Helvetica,sans-serif;color:#222;font-size:13px;max-width:900px">
     <div style="font-size:17px;font-weight:bold">Programa de taller – ${escaparHtml(rango)}${per?' – '+escaparHtml(per.nombre):''}</div>
+    ${unico?`<div style="margin-top:2px;font-weight:bold;color:#a15a1d">${escaparHtml(tpProyEtiq(pids[0]))}</div>`:''}
     <div style="margin:4px 0 10px;color:#555">${g.length} tablero(s) · ${personas.length} persona(s): ${escaparHtml(personas.map(tpPrimerNombre).join(", "))}</div>
-    ${semanas.map(s=>`<table style="border-collapse:collapse;width:100%;table-layout:fixed;margin-bottom:8px">${filaSem(s)}</table>`).join("")}
+    ${semanas.map(s=>`<table style="border-collapse:collapse;width:100%;table-layout:fixed;margin-bottom:8px"><tr>${s.map(celda).join("")}</tr></table>`).join("")}
     <div style="margin:12px 0 4px;font-weight:bold">Fechas de término por tablero</div>
     <table style="border-collapse:collapse;width:100%"><tr>${["Tablero","Quién","Fechas","Avance"].map(t=>`<th style="border:1px solid #ddd;background:#f1ece6;padding:3px 6px;font-size:11px;text-align:left">${t}</th>`).join("")}</tr>${resumen}</table></div>`;
 }
 function tpTextoGerencia(plan,quien){
   const items=tpItemsDe(plan,quien).filter(i=>i.ini&&i.fin); if(!items.length) return "Sin trabajos programados.";
-  const dias=tpResumenDias(items); const ds=Object.keys(dias).sort();
-  return `Programa de taller – ${tpRango(plan,items)}\n\n`+ds.map(d=>`${distDiaTxt(d)}\n`+Object.values(dias[d]).map(x=>`  • ${x.nombre}: ${x.personas.join(", ")||"sin asignar"}`).join("\n")).join("\n\n");
+  const dias=tpResumenDias(items), ds=Object.keys(dias).sort(), unico=new Set(items.map(i=>i.proyectoId||"")).size===1;
+  return `Programa de taller – ${tpRango(plan,items)}\n${unico?tpProyEtiq(items[0].proyectoId||"")+"\n":""}\n`+ds.map(d=>`${distDiaTxt(d)}\n`+tpAgrupaPorProyecto(Object.values(dias[d]),x=>x.pid).map(gp=>`${unico?"":"  "+tpProyCod(gp.pid)+"\n"}`+gp.items.map(x=>`  • ${x.nombre}: ${x.personas.join(", ")||"sin asignar"}`).join("\n")).join("\n")).join("\n\n");
 }
 /* ---- Versión para correo y PDF (V3.7.2) ---- */
 let tpCorreoPara = "";
@@ -11478,16 +11484,18 @@ function tpHtmlCorreo(plan,quien,conGantt){
   const per = quien==="equipo" ? null : DB.personal.find(p=>p.id===quien);
   const items=tpItemsDe(plan,quien), td="padding:4px 6px;border:1px solid #ddd;font-size:12px;vertical-align:top;", th="padding:4px 6px;border:1px solid #ddd;background:#f1ece6;font-size:11.5px;text-align:left;";
   const g={}, orden=[]; items.slice().sort((a,b)=>a.ini.localeCompare(b.ini)).forEach(it=>{ const k=tpKey(it); if(!g[k]){ g[k]=[]; orden.push(k); } g[k].push(it); });
-  const bloques=orden.map(k=>{ const its=g[k], p=its[0].proyectoId?proy(its[0].proyectoId):null, dep=tpDespuesDe(its);
-    const sin=quien==="equipo";
-    return `<div style="margin:14px 0 4px;font-size:14px;font-weight:bold;color:#222">🧰 ${escaparHtml(its[0].tablero||"Trabajos varios")}${p?` <span style="font-weight:normal;color:#666">(${escaparHtml(p.codigo)})</span>`:''}${dep?` <span style="font-weight:normal;font-size:12px;color:#a15a1d">⛓ se arma después de ${escaparHtml(tpNombreKey(dep))}</span>`:''}</div>
+  orden.sort((a,b)=>{ const pa=g[a][0].proyectoId||"", pb=g[b][0].proyectoId||""; return pa===pb?0:(pa<pb?-1:1); });
+  const unico=new Set(orden.map(k=>g[k][0].proyectoId||"")).size<=1; let pidAnt=null;
+  const bloques=orden.map(k=>{ const its=g[k], dep=tpDespuesDe(its);
+    const sin=quien==="equipo"; const pid=its[0].proyectoId||""; const cab=(!unico&&pid!==pidAnt)?`<div style="margin:20px 0 0;padding:4px 8px;background:#f1ece6;font-size:15px;font-weight:bold;color:#a15a1d">📁 ${escaparHtml(tpProyEtiq(pid))}</div>`:''; pidAnt=pid;
+    return `${cab}<div style="margin:14px 0 4px;font-size:14px;font-weight:bold;color:#222">🧰 ${escaparHtml(its[0].tablero||"Trabajos varios")}${dep?` <span style="font-weight:normal;font-size:12px;color:#a15a1d">⛓ se arma después de ${escaparHtml(tpNombreKey(dep))}</span>`:''}</div>
       <table style="border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;width:100%"><tr><th style="${th}">Tarea</th>${sin?`<th style="${th}">Quién</th>`:''}<th style="${th}">Fechas</th><th style="${th};text-align:right">Horas</th><th style="${th}">Qué debe quedar listo</th></tr>
       ${its.map(it=>`<tr><td style="${td}"><b>${escaparHtml(it.tarea)}</b>${it.prioridad==='urgente'?' <span style="color:#c0392b;font-weight:bold">🔴 URGENTE</span>':''}</td>${sin?`<td style="${td}">${escaparHtml(tpNombres(it).join(", ")||"sin asignar")}</td>`:''}<td style="${td}white-space:nowrap">${it.ini===it.fin?distDiaTxt(it.ini):distDiaTxt(it.ini)+' → '+distDiaTxt(it.fin)}</td><td style="${td}text-align:right">${it.enLote?"conjunto":it.horas}</td><td style="${td}">${escaparHtml(it.meta||"")}${it.nota?`<div style="color:#666">📝 ${escaparHtml(it.nota)}</div>`:''}</td></tr>`).join("")}</table>`; }).join("");
   let gantt=""; if(conGantt && items.length){ const D=tpGanttDatos([{items}]); if(D) gantt=`<div style="margin:18px 0 4px;font-size:14px;font-weight:bold">📅 Carta Gantt por tablero</div>${tpGanttTabla(D,{ancho:18,label:230,abiertos:()=>quien!=="equipo"})}`; }
   const saludo = per ? `Hola ${escaparHtml(per.nombre.split(" ")[0])}, esto es lo que te toca:` : `Equipo, este es el programa de armado de tableros:`;
   const pie = per ? `Si algo te frena (material, plano, herramienta) avísame apenas lo veas. Al terminar cada tarea, confírmame ✅.` : `Cualquier impedimento (material, plano, herramienta) avísenlo apenas lo vean.`;
   return `<div style="font-family:Arial,Helvetica,sans-serif;color:#222;font-size:13px;max-width:980px">
-    <div style="font-size:17px;font-weight:bold;margin-bottom:6px">Programa de taller – ${escaparHtml(tpRango(plan,items))}</div><div>${saludo}</div>${bloques||'<div style="margin-top:10px">Sin trabajos asignados.</div>'}${gantt}<div style="margin-top:14px">${pie}</div></div>`;
+    <div style="font-size:17px;font-weight:bold;margin-bottom:6px">Programa de taller – ${escaparHtml(tpRango(plan,items))}</div>${unico?`<div style="font-weight:bold;color:#a15a1d;margin-bottom:4px">📁 ${escaparHtml(tpProyEtiq(orden.length?g[orden[0]][0].proyectoId||"":""))}</div>`:''}<div>${saludo}</div>${bloques||'<div style="margin-top:10px">Sin trabajos asignados.</div>'}${gantt}<div style="margin-top:14px">${pie}</div></div>`;
 }
 function tpTextoCorreo(plan,quien){
   const per = quien==="equipo" ? null : DB.personal.find(p=>p.id===quien);
@@ -11561,14 +11569,17 @@ async function tpCorreoPdf(){
   if(e.ger){
     const its=items.filter(i=>i.ini&&i.fin), dias=tpResumenDias(its), nom=["Lunes","Martes","Miércoles","Jueves","Viernes"], mes=["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
     const sem=its.length?tpSemanasResumen(its):[]; let y=25;
-    const personas=[...new Set(its.flatMap(i=>tpNombres(i)))]; doc.setFontSize(9); doc.text(`${tpGrupos({items:its}).length} tablero(s) · ${personas.length} persona(s)`,14,y); y+=3;
+    const personas=[...new Set(its.flatMap(i=>tpNombres(i)))]; const pidsP=[...new Set(its.map(i=>i.proyectoId||""))], unicoP=pidsP.length===1; doc.setFontSize(9); doc.text((unicoP?tpProyEtiq(pidsP[0])+" · ":"")+`${tpGrupos({items:its}).length} tablero(s) · ${personas.length} persona(s)`,14,y); y+=3;
     sem.forEach(s=>{ doc.autoTable({ startY:y+1, head:[s.map(d=>{ const dt=new Date(d+"T12:00:00Z"); return nom[dt.getUTCDay()-1]+" "+dt.getUTCDate()+" "+mes[dt.getUTCMonth()]; })],
-      body:[s.map(d=>Object.values(dias[d]||{}).map(x=>x.nombre+"\n"+(x.personas.join(", ")||"sin asignar")).join("\n\n")||"—")], theme:"grid", styles:{fontSize:8.5,cellPadding:2,overflow:"linebreak",valign:"top"}, headStyles:{fillColor:[193,113,46]}, margin:{left:10,right:10}, tableWidth:277, pageBreak:"avoid" }); y=doc.lastAutoTable.finalY+2; });
-    doc.autoTable({ startY:y+4, head:[["Tablero","Quién","Fechas","Avance"]], body:tpGrupos({items:its}).map(x=>{ const f=tpIniFinGrupo(x.items), hh=x.items.reduce((a,i)=>a+(Number(i.horas)||0),0), av=hh?Math.round(x.items.reduce((a,i)=>a+(Number(i.horas)||0)*(Number(i.avance)||0),0)/hh):0; return [x.items[0].tablero||"—",[...new Set(x.items.flatMap(i=>tpNombres(i)))].join(", "),distDiaTxt(f.ini)+" → "+distDiaTxt(f.fin),av+"%"]; }), theme:"grid", styles:{fontSize:8,cellPadding:1.5}, headStyles:{fillColor:[100,100,100]}, margin:{left:10,right:10} });
+      body:[s.map(d=>tpAgrupaPorProyecto(Object.values(dias[d]||{}),x=>x.pid).map(gp=>(unicoP?"":tpProyCod(gp.pid)+"\n")+gp.items.map(x=>x.nombre+": "+(x.personas.join(", ")||"sin asignar")).join("\n")).join("\n\n")||"—")], theme:"grid", styles:{fontSize:8.5,cellPadding:2,overflow:"linebreak",valign:"top"}, headStyles:{fillColor:[193,113,46]}, margin:{left:10,right:10}, tableWidth:277, pageBreak:"avoid" }); y=doc.lastAutoTable.finalY+2; });
+    const filasRes=[]; tpAgrupaPorProyecto(tpGrupos({items:its}),x=>x.items[0].proyectoId||"").forEach(gp=>{ if(!unicoP) filasRes.push([{content:tpProyEtiq(gp.pid),colSpan:4,styles:{fillColor:[250,243,234],fontStyle:"bold",textColor:[161,90,29]}}]);
+      gp.items.forEach(x=>{ const f=tpIniFinGrupo(x.items), hh=x.items.reduce((a,i)=>a+(Number(i.horas)||0),0), av=hh?Math.round(x.items.reduce((a,i)=>a+(Number(i.horas)||0)*(Number(i.avance)||0),0)/hh):0; filasRes.push([x.items[0].tablero||"—",[...new Set(x.items.flatMap(i=>tpNombres(i)))].join(", "),distDiaTxt(f.ini)+" → "+distDiaTxt(f.fin),av+"%"]); }); });
+    doc.autoTable({ startY:y+4, head:[["Tablero","Quién","Fechas","Avance"]], body:filasRes, theme:"grid", styles:{fontSize:8,cellPadding:1.5}, headStyles:{fillColor:[100,100,100]}, margin:{left:10,right:10} });
     doc.save(`Programa_taller_gerencia_${plan.lunes}.pdf`); return;
   }
-  doc.autoTable({ startY:25, head:[["Tablero","Tarea","Responsables","Fechas","Horas","Qué debe quedar listo"]],
-    body:items.map(i=>[ (i.tablero||"—")+(tpDespuesDe(tpItemsGrupo(plan,tpKey(i)))?"\n(después de "+tpNombreKey(tpDespuesDe(tpItemsGrupo(plan,tpKey(i))))+")":""), i.tarea+(i.prioridad==="urgente"?" [URGENTE]":""), tpNombres(i).join(", ")||"sin asignar", i.ini===i.fin?distDiaTxt(i.ini):distDiaTxt(i.ini)+" → "+distDiaTxt(i.fin), (i.enLote?"conjunto":i.horas), (i.meta||"")+(i.nota?" · "+i.nota:"") ]),
+  const unicoD=new Set(items.map(i=>i.proyectoId||"")).size<=1, cuerpoD=[];
+  tpAgrupaPorProyecto(items.slice().sort((a,b)=>(a.proyectoId||"")<(b.proyectoId||"")?-1:(a.proyectoId||"")>(b.proyectoId||"")?1:0),x=>x.proyectoId||"").forEach(gp=>{ if(!unicoD) cuerpoD.push([{content:tpProyEtiq(gp.pid),colSpan:6,styles:{fillColor:[250,243,234],fontStyle:"bold",textColor:[161,90,29]}}]); gp.items.forEach(i=>cuerpoD.push([ (i.tablero||"—")+(tpDespuesDe(tpItemsGrupo(plan,tpKey(i)))?"\n(después de "+tpNombreKey(tpDespuesDe(tpItemsGrupo(plan,tpKey(i))))+")":""), i.tarea+(i.prioridad==="urgente"?" [URGENTE]":""), tpNombres(i).join(", ")||"sin asignar", i.ini===i.fin?distDiaTxt(i.ini):distDiaTxt(i.ini)+" → "+distDiaTxt(i.fin), (i.enLote?"conjunto":i.horas), (i.meta||"")+(i.nota?" · "+i.nota:"") ])); });
+  doc.autoTable({ startY:25, head:[["Tablero","Tarea","Responsables","Fechas","Horas","Qué debe quedar listo"]], body:cuerpoD,
     theme:"grid", styles:{fontSize:8,cellPadding:1.5,overflow:"linebreak"}, headStyles:{fillColor:[193,113,46]}, margin:{left:10,right:10} });
   if(e.gantt){
     const D=tpGanttDatos([{items}]);

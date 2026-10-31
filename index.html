@@ -502,7 +502,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.7.4";
+const APP_VERSION = "3.7.5";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -11166,6 +11166,13 @@ function tpSnapAncla(plan,t){
   const span=tpHabilesEntre(t.ini,t.fin), nuevo=t.ancla.tipo==='mismo'?tpSiguienteHabil(a.ini):tpSumarHabiles(a.fin,1);
   t.ini=nuevo; t.fin=tpSumarHabiles(nuevo,span);
 }
+/* Lleva la tarea a su día vinculado moviendo TODO su tablero (así no se desordena por dentro). */
+function tpSnapGrupo(plan,t){
+  const a=plan.items.find(x=>x.id===t.ancla.id); if(!a) return;
+  const objetivo=t.ancla.tipo==='mismo'?tpSiguienteHabil(a.ini):tpSumarHabiles(a.fin,1), actual=tpSiguienteHabil(t.ini);
+  const delta = objetivo>=actual ? tpHabilesEntre(actual,objetivo) : -tpHabilesEntre(objetivo,actual);
+  tpItemsGrupo(plan,tpKey(t)).forEach(i=>{ i.ini=tpDesplazaHabiles(i.ini,delta); i.fin=tpDesplazaHabiles(i.fin,delta); });
+}
 function tpCabeEstado(planId,itemId){
   const plan=tpPlan(planId), it=itemId?plan.items.find(x=>x.id===itemId):null; const g=id=>document.getElementById(id);
   const resp=document.querySelector('.tpResp')?tpLeerResp():(it?it.responsables:[]);
@@ -11242,7 +11249,7 @@ function tpConfirmarCoordinar(planId){
   const claves=new Set(ts.map(tpKey)); let quitados=0;
   if(modo!=="libre") plan.items.forEach(i=>{ if(i.despuesDe && claves.has(i.despuesDe) && claves.has(tpKey(i))){ delete i.despuesDe; quitados++; } });
   ts.forEach((t,k)=>{ if(modo==="libre"||k===0){ if(modo==="libre") delete t.ancla; return; }
-    t.ancla = modo==="mismo" ? {id:ts[0].id,tipo:"mismo"} : {id:ts[k-1].id,tipo:"despues"}; tpSnapAncla(plan,t); });
+    t.ancla = modo==="mismo" ? {id:ts[0].id,tipo:"mismo"} : {id:ts[k-1].id,tipo:"despues"}; tpSnapGrupo(plan,t); });
   closeModal(); tpGuardar(plan,`«${nombre}» coordinada entre ${ts.length} tableros (${modo})`);
   if(modo!=="libre" && tpPlanAjuste(plan).cambios.length) tpModalAjuste(planId);
 }

@@ -502,7 +502,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.7.2";
+const APP_VERSION = "3.7.3";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -11233,6 +11233,43 @@ function tpHtmlGantt(plan){
     <div class="hint" style="margin-top:6px;">${D.nTableros} tablero(s) · del ${distDiaTxt(D.ini)} al ${distDiaTxt(D.fin)}. Toca un tablero para plegar o desplegar sus tareas. «⛓ después de» indica el orden de armado.</div>`;
 }
 
+/* ---- Resumen por día para gerencia (V3.7.3) ---- */
+function tpResumenDias(items){
+  const m={};
+  items.forEach(it=>{ if(!it.ini||!it.fin) return; tpDias(it.ini,it.fin).forEach(d=>{ const k=tpKey(it); m[d]=m[d]||{}; const e=m[d][k]=m[d][k]||{ nombre:it.tablero||"Trabajos varios", proy:it.proyectoId?((proy(it.proyectoId)||{}).codigo||""):"", personas:[], etapas:[] };
+    tpNombres(it).forEach(n=>{ if(!e.personas.includes(n)) e.personas.push(n); }); if(!e.etapas.includes(it.tarea)) e.etapas.push(it.tarea); }); });
+  return m;
+}
+function tpSemanasResumen(items){
+  const ini=items.reduce((a,i)=>i.ini<a?i.ini:a,items[0].ini), fin=items.reduce((a,i)=>i.fin>a?i.fin:a,items[0].fin), out=[];
+  for(let l=tpLunesDe(ini),n=0;l<=fin && n<30;l=sumarDias(l,7),n++) out.push([0,1,2,3,4].map(k=>sumarDias(l,k)));
+  return out;
+}
+function tpPrimerNombre(n){ return String(n).split(" ")[0]; }
+function tpHtmlGerencia(plan,quien){
+  const items=tpItemsDe(plan,quien).filter(i=>i.ini&&i.fin); const per=quien==="equipo"?null:DB.personal.find(p=>p.id===quien);
+  if(!items.length) return `<div style="font-family:Arial,sans-serif">Sin trabajos programados.</div>`;
+  const dias=tpResumenDias(items), semanas=tpSemanasResumen(items), g=tpGrupos({items});
+  const personas=[...new Set(items.flatMap(i=>tpNombres(i)))], rango=tpRango(plan,items);
+  const nom=["Lunes","Martes","Miércoles","Jueves","Viernes"], mes=["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
+  const celda=d=>{ const dt=new Date(d+"T12:00:00Z"), e=Object.values(dias[d]||{});
+    return `<td style="width:20%;vertical-align:top;border:1px solid #d9d2c9;padding:0;font-family:Arial,Helvetica,sans-serif"><div style="background:#c1712e;color:#fff;font-size:11px;font-weight:bold;padding:3px 6px">${nom[dt.getUTCDay()-1]} ${dt.getUTCDate()} ${mes[dt.getUTCMonth()]}</div>
+      <div style="padding:5px 6px;font-size:12px;min-height:40px">${e.length?e.map(x=>`<div style="margin-bottom:6px"><b>${escaparHtml(x.nombre)}</b>${x.proy?` <span style="color:#888;font-size:10px">${escaparHtml(x.proy)}</span>`:''}<br><span style="color:#333">${escaparHtml(x.personas.join(", ")||"sin asignar")}</span></div>`).join(""):'<span style="color:#aaa">—</span>'}</div></td>`; };
+  const filaSem=s=>`<tr>${s.map(celda).join("")}</tr>`;
+  const resumen=g.map(x=>{ const its=x.items, f=tpIniFinGrupo(its), hh=its.reduce((a,i)=>a+(Number(i.horas)||0),0), av=hh?Math.round(its.reduce((a,i)=>a+(Number(i.horas)||0)*(Number(i.avance)||0),0)/hh):0;
+    return `<tr><td style="border:1px solid #ddd;padding:3px 6px;font-size:12px"><b>${escaparHtml(its[0].tablero||"Trabajos varios")}</b></td><td style="border:1px solid #ddd;padding:3px 6px;font-size:12px">${escaparHtml([...new Set(its.flatMap(i=>tpNombres(i)))].join(", ")||"sin asignar")}</td><td style="border:1px solid #ddd;padding:3px 6px;font-size:12px;white-space:nowrap">${distDiaTxt(f.ini)} → ${distDiaTxt(f.fin)}</td><td style="border:1px solid #ddd;padding:3px 6px;font-size:12px;text-align:right">${av}%</td></tr>`; }).join("");
+  return `<div style="font-family:Arial,Helvetica,sans-serif;color:#222;font-size:13px;max-width:900px">
+    <div style="font-size:17px;font-weight:bold">Programa de taller – ${escaparHtml(rango)}${per?' – '+escaparHtml(per.nombre):''}</div>
+    <div style="margin:4px 0 10px;color:#555">${g.length} tablero(s) · ${personas.length} persona(s): ${escaparHtml(personas.map(tpPrimerNombre).join(", "))}</div>
+    ${semanas.map(s=>`<table style="border-collapse:collapse;width:100%;table-layout:fixed;margin-bottom:8px">${filaSem(s)}</table>`).join("")}
+    <div style="margin:12px 0 4px;font-weight:bold">Fechas de término por tablero</div>
+    <table style="border-collapse:collapse;width:100%"><tr>${["Tablero","Quién","Fechas","Avance"].map(t=>`<th style="border:1px solid #ddd;background:#f1ece6;padding:3px 6px;font-size:11px;text-align:left">${t}</th>`).join("")}</tr>${resumen}</table></div>`;
+}
+function tpTextoGerencia(plan,quien){
+  const items=tpItemsDe(plan,quien).filter(i=>i.ini&&i.fin); if(!items.length) return "Sin trabajos programados.";
+  const dias=tpResumenDias(items); const ds=Object.keys(dias).sort();
+  return `Programa de taller – ${tpRango(plan,items)}\n\n`+ds.map(d=>`${distDiaTxt(d)}\n`+Object.values(dias[d]).map(x=>`  • ${x.nombre}: ${x.personas.join(", ")||"sin asignar"}`).join("\n")).join("\n\n");
+}
 /* ---- Versión para correo y PDF (V3.7.2) ---- */
 let tpCorreoPara = "";
 function tpItemsDe(plan,quien){ return quien==="equipo" ? plan.items.slice() : plan.items.filter(i=>i.responsables.includes(quien)); }
@@ -11258,7 +11295,8 @@ function tpTextoCorreo(plan,quien){
 }
 function tpCorreoEstado(){
   const plan=tpPlan(tpPlanId); const quien=document.getElementById('tpCorreoQuien').value, gantt=document.getElementById('tpCorreoGantt').checked;
-  return { plan, quien, gantt, html:tpHtmlCorreo(plan,quien,gantt), texto:tpTextoCorreo(plan,quien),
+  const ger=document.getElementById('tpCorreoFmt').value==="gerencia";
+  return { plan, quien, gantt, ger, html:ger?tpHtmlGerencia(plan,quien):tpHtmlCorreo(plan,quien,gantt), texto:ger?tpTextoGerencia(plan,quien):tpTextoCorreo(plan,quien),
     asunto:document.getElementById('tpCorreoAsunto').value, para:document.getElementById('tpCorreoPara').value.trim() };
 }
 function tpCorreoAsuntoAuto(){
@@ -11280,7 +11318,8 @@ function tpModalCorreo(planId){
           <select id="tpCorreoQuien" onchange="tpCorreoRefrescar(true)"><option value="equipo">Todo el equipo (programa completo)</option>${personas.map(p=>`<option value="${p.id}">Solo lo de ${escaparHtml(p.nombre)}</option>`).join("")}</select></label>
         <label class="small muted">Para (correos, separados por coma)<input type="text" id="tpCorreoPara" value="${escaparHtml(tpCorreoPara)}" placeholder="nombre@empresa.cl" oninput="tpCorreoPara=this.value"></label></div>
       <label class="small muted">Asunto<input type="text" id="tpCorreoAsunto"></label>
-      <label class="small flex-gap"><input type="checkbox" id="tpCorreoGantt" checked onchange="tpCorreoRefrescar()"> Incluir la carta Gantt por tablero</label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;"><label class="small muted">Formato<select id="tpCorreoFmt" onchange="tpCorreoRefrescar()"><option value="gerencia">Resumen por día (para gerencia)</option><option value="detalle">Detalle completo (tareas, horas, metas)</option></select></label>
+      <label class="small flex-gap"><input type="checkbox" id="tpCorreoGantt" checked onchange="tpCorreoRefrescar()"> Detalle: incluir carta Gantt</label></div>
       <div class="hint">Para que llegue con tablas y colores: pulsa <b>Copiar con formato</b>, abre el correo y pega con Ctrl+V. Los botones de Outlook abren el borrador con la versión en texto simple (los programas de correo no aceptan tablas por enlace).</div>
       <div id="tpCorreoPrev" style="border:1px solid var(--line);border-radius:8px;background:#fff;padding:12px;max-height:340px;overflow:auto;"></div>
     </div>
@@ -11318,6 +11357,15 @@ async function tpCorreoPdf(){
   const { jsPDF } = window.jspdf; const doc=new jsPDF({orientation:"landscape",unit:"mm",format:"a4"});
   doc.setFontSize(15); doc.setFont(undefined,"bold"); doc.text("ALUTIPO — Programa de taller",14,15);
   doc.setFontSize(10); doc.setFont(undefined,"normal"); doc.text(`${tpRango(plan,items)}${e.quien==="equipo"?"":" · "+((DB.personal.find(p=>p.id===e.quien)||{}).nombre||"")} · Emitido ${hoyISO()} por ${DB.usuario||""}`,14,21);
+  if(e.ger){
+    const its=items.filter(i=>i.ini&&i.fin), dias=tpResumenDias(its), nom=["Lunes","Martes","Miércoles","Jueves","Viernes"], mes=["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
+    const sem=its.length?tpSemanasResumen(its):[]; let y=25;
+    const personas=[...new Set(its.flatMap(i=>tpNombres(i)))]; doc.setFontSize(9); doc.text(`${tpGrupos({items:its}).length} tablero(s) · ${personas.length} persona(s)`,14,y); y+=3;
+    sem.forEach(s=>{ doc.autoTable({ startY:y+1, head:[s.map(d=>{ const dt=new Date(d+"T12:00:00Z"); return nom[dt.getUTCDay()-1]+" "+dt.getUTCDate()+" "+mes[dt.getUTCMonth()]; })],
+      body:[s.map(d=>Object.values(dias[d]||{}).map(x=>x.nombre+"\n"+(x.personas.join(", ")||"sin asignar")).join("\n\n")||"—")], theme:"grid", styles:{fontSize:8.5,cellPadding:2,overflow:"linebreak",valign:"top"}, headStyles:{fillColor:[193,113,46]}, margin:{left:10,right:10}, tableWidth:277, pageBreak:"avoid" }); y=doc.lastAutoTable.finalY+2; });
+    doc.autoTable({ startY:y+4, head:[["Tablero","Quién","Fechas","Avance"]], body:tpGrupos({items:its}).map(x=>{ const f=tpIniFinGrupo(x.items), hh=x.items.reduce((a,i)=>a+(Number(i.horas)||0),0), av=hh?Math.round(x.items.reduce((a,i)=>a+(Number(i.horas)||0)*(Number(i.avance)||0),0)/hh):0; return [x.items[0].tablero||"—",[...new Set(x.items.flatMap(i=>tpNombres(i)))].join(", "),distDiaTxt(f.ini)+" → "+distDiaTxt(f.fin),av+"%"]; }), theme:"grid", styles:{fontSize:8,cellPadding:1.5}, headStyles:{fillColor:[100,100,100]}, margin:{left:10,right:10} });
+    doc.save(`Programa_taller_gerencia_${plan.lunes}.pdf`); return;
+  }
   doc.autoTable({ startY:25, head:[["Tablero","Tarea","Responsables","Fechas","Horas","Qué debe quedar listo"]],
     body:items.map(i=>[ (i.tablero||"—")+(tpDespuesDe(tpItemsGrupo(plan,tpKey(i)))?"\n(después de "+tpNombreKey(tpDespuesDe(tpItemsGrupo(plan,tpKey(i))))+")":""), i.tarea+(i.prioridad==="urgente"?" [URGENTE]":""), tpNombres(i).join(", ")||"sin asignar", i.ini===i.fin?distDiaTxt(i.ini):distDiaTxt(i.ini)+" → "+distDiaTxt(i.fin), i.horas, (i.meta||"")+(i.nota?" · "+i.nota:"") ]),
     theme:"grid", styles:{fontSize:8,cellPadding:1.5,overflow:"linebreak"}, headStyles:{fillColor:[193,113,46]}, margin:{left:10,right:10} });

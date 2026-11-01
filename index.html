@@ -217,7 +217,7 @@ tr:last-child td { border-bottom: none; }
 .progressbar { height: 8px; border-radius: 20px; background: var(--paper-2); overflow: hidden; position: relative; }
 .progressbar > span { display: block; height: 100%; background: linear-gradient(90deg, var(--copper), #d68a44); border-radius: 20px; transition: width .3s ease; }
 .progressbar.thin { height: 5px; }
-.toast-wrap { position: fixed; bottom: 20px; right: 20px; z-index: 999; display: flex; flex-direction: column; gap: 8px; max-width: 360px; }
+.toast-wrap { position: fixed; bottom: 84px; right: 20px; z-index: 999; display: flex; flex-direction: column; gap: 8px; max-width: 360px; }
 .toast {
   background: var(--ink); color: #fff; padding: 12px 15px; border-radius: 9px; font-size: 12.5px;
   box-shadow: 0 10px 30px -8px rgba(0,0,0,.4); display: flex; gap: 10px; align-items: flex-start;
@@ -487,6 +487,40 @@ table { min-width: 560px; }
 .mp-g-bar{position:absolute;top:8px;height:20px;border:1.5px solid;border-radius:5px;overflow:hidden}
 .mp-g-bar i{display:block;height:100%}
 @media(max-width:760px){.mp-kpis{grid-template-columns:repeat(2,1fr)}.mp-board{grid-template-columns:repeat(4,240px)}}
+
+.wms-fab{position:fixed;right:20px;bottom:20px;z-index:240;display:flex;align-items:center;gap:8px;padding:12px 18px;border:0;border-radius:999px;background:var(--copper);color:#fff;font:600 13.5px 'IBM Plex Sans',system-ui,sans-serif;cursor:pointer;box-shadow:0 10px 24px -8px rgba(16,21,28,.5)}
+.wms-fab:hover{background:var(--copper-dark)}
+.wms-win{position:fixed;right:20px;bottom:20px;width:min(940px,calc(100vw - 40px));height:min(82vh,780px);z-index:250;background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 30px 70px -20px rgba(16,21,28,.55);display:flex;flex-direction:column;overflow:hidden}
+.wms-head{display:flex;align-items:center;gap:12px;padding:11px 14px;background:var(--ink);color:#fff;cursor:move;user-select:none;touch-action:none}
+.wms-sub{font-size:11.5px;color:#aab4bf}
+.wms-x{margin-left:auto;border:0;background:transparent;color:#fff;font-size:22px;line-height:1;cursor:pointer;padding:0 6px}
+.wms-tabs{display:flex;gap:2px;padding:8px 10px 0;border-bottom:1px solid var(--line);background:var(--paper);overflow-x:auto}
+.wms-tabs button{border:0;background:transparent;padding:9px 13px;font:600 12.5px 'IBM Plex Sans',system-ui,sans-serif;color:var(--muted);cursor:pointer;border-bottom:3px solid transparent;white-space:nowrap}
+.wms-tabs button.on{color:var(--ink);border-bottom-color:var(--copper)}
+.wms-body{flex:1;overflow:auto;padding:14px}
+.wms-chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+.wms-chip{display:inline-flex;align-items:center;gap:7px;padding:6px 11px;border:1.5px solid var(--c);border-radius:999px;background:#fff;color:var(--ink);font:600 12px 'IBM Plex Sans',system-ui,sans-serif;cursor:pointer}
+.wms-chip i{width:9px;height:9px;border-radius:50%;background:var(--c)}
+.wms-chip b{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted)}
+.wms-chip.on{background:var(--c);color:#fff}.wms-chip.on b{color:#fff}.wms-chip.on i{background:#fff}
+.wms-q{width:100%;margin-bottom:10px}
+.wms-mat{border:1px solid var(--line);border-radius:10px;margin-bottom:10px;overflow:hidden}
+.wms-mh{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;justify-content:space-between;padding:9px 12px;background:var(--paper)}
+.wms-t{width:100%;border-collapse:collapse;font-size:12.5px}
+.wms-t th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);padding:6px 10px;border-bottom:1px solid var(--line-soft)}
+.wms-t td{padding:7px 10px;border-top:1px solid var(--line-soft);vertical-align:top}
+.wms-sin td{background:var(--warn-bg)}
+.wms-tag{display:inline-block;padding:2px 9px;border-radius:999px;background:var(--c);color:#fff;font-size:11.5px;font-weight:600}
+.wms-vacio{padding:18px;text-align:center;color:var(--muted)}
+.wms-l{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:600;color:var(--ink-3);margin-bottom:10px}
+.wms-l input,.wms-l select{font-weight:400}
+.wms-g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}.wms-g3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.wms-h{font-size:11.5px;color:var(--muted);margin:-4px 0 10px}
+.wms-box{border:1px dashed var(--copper);border-radius:10px;padding:12px;margin-bottom:12px;background:#fffaf3}
+.wms-prev{background:var(--blueprint-light);border-radius:8px;padding:9px 12px;margin:2px 0 12px;font-size:12.5px}
+.wms-pill{display:inline-flex;align-items:center;gap:6px;padding:4px 6px 4px 11px;border-radius:999px;background:var(--paper-2);font-size:12px}
+.wms-pill button{border:0;background:transparent;cursor:pointer;color:var(--muted);font-size:15px}
+@media(max-width:760px){.wms-win{left:0!important;top:0!important;right:0!important;bottom:0!important;width:100%!important;height:100%!important;border-radius:0}.wms-fab b{display:none}.wms-fab{padding:14px}.wms-g2,.wms-g3{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -502,7 +536,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.7.11";
+const APP_VERSION = "3.8.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -1149,6 +1183,9 @@ const DB = {
   proyectos: [],
   proveedores: [],
   bodegaGeneral: [],
+  ubicaciones: [],
+  existencias: [],
+  wmsOrigenes: [],
   acuerdos: [],
   usuariosAutorizados: {},
   personal: [],
@@ -1183,6 +1220,9 @@ function aplicarEstadoRemoto(data) {
   DB.asignacionesVehiculos = data.asignacionesVehiculos || [];
   DB.programaTaller = data.programaTaller || []; tpPlanes();
   DB.bodegaGeneral = data.bodegaGeneral || [];
+  DB.ubicaciones = data.ubicaciones && data.ubicaciones.length ? data.ubicaciones : WMS_UB_DEFAULT.map(u => Object.assign({}, u));
+  DB.existencias = data.existencias || [];
+  DB.wmsOrigenes = data.wmsOrigenes && data.wmsOrigenes.length ? data.wmsOrigenes : WMS_ORIGENES_DEF.slice();
   DB.solicitudesPanol = data.solicitudesPanol || [];
   // Firebase no guarda arrays vacíos: se normalizan al cargar.
   DB.acuerdos = (data.acuerdos || []).map(ac => {
@@ -1208,6 +1248,9 @@ function construirPayloadEstado() {
     asignacionesVehiculos: DB.asignacionesVehiculos,
     programaTaller: DB.programaTaller || [],
     bodegaGeneral: DB.bodegaGeneral,
+    ubicaciones: DB.ubicaciones || [],
+    existencias: DB.existencias || [],
+    wmsOrigenes: DB.wmsOrigenes || [],
     solicitudesPanol: DB.solicitudesPanol,
     acuerdos: DB.acuerdos || [],
     versionApp: APP_VERSION,
@@ -5371,6 +5414,7 @@ function renderBodegaGeneral() {
       <div class="page-desc">Material disponible de la empresa, sin asignar todavía a ningún proyecto. Desde acá se asigna a un proyecto específico cuando corresponda.</div>
     </div>
     <div class="flex-gap">
+      <button class="btn" onclick="wmsAbrir()" title="Dónde está cada material, traspasos Central/Taller/Estante y trazabilidad">📍 Ubicaciones</button>
       <button class="btn" onclick="goTo('panol')" title="Solicitar material de esta bodega para un proyecto">📦 Ir al Pañol</button>
       ${puede ? `<button class="btn" onclick="modalImportarBodegaExcel()" title="Cargar productos masivamente desde un Excel">⬆ Importar Excel</button>` : ''}
       <button class="btn" onclick="exportarBodegaExcelBsale()" title="Descarga un Excel listo para cargar en el importador de Stock de Bsale">⬇ Exportar a Excel (Bsale)</button>
@@ -12014,7 +12058,461 @@ function renderAll() {
   }
   const contentEl = document.getElementById("content");
   if (contentEl) contentEl.scrollTop = scrollGuardado;
+  wmsFabAsegurar();
 }
+
+/* =====================================================================
+   WMS — UBICACIONES Y TRAZABILIDAD DE MATERIALES (panel flotante)
+   Capas físicas: Bodega Central (estante-nivel-posición), Bodega Taller
+   (alta rotación) y Estante de cada tablero (rack de niveles con el BOM).
+   - DB.ubicaciones : capas editables (se agregan desde el mismo panel).
+   - DB.existencias : lotes por ubicación {codigo, ubicId, pos, cant, origen…}.
+   - El stock total sigue siendo DB.bodegaGeneral[].stock; lo que no tiene
+     ubicación aparece como "Por ubicar" (así no se rompe nada existente).
+   - Cada movimiento va al libro /movimientosBodega con desde → hacia,
+     proveedor / terreno / documento, para poder trazar el material.
+   ===================================================================== */
+const WMS_UB_DEFAULT = [
+  { id:"UB-CENTRAL", nombre:"Bodega Central", tipo:"central", piso:"2", esquema:"epn", niveles:0, activa:true },
+  { id:"UB-TALLER",  nombre:"Bodega Taller",  tipo:"taller",  piso:"1", esquema:"zona", niveles:0, activa:true },
+];
+const WMS_ORIGENES_DEF = ["Proveedor","Terreno (sobrante de obra)","Devolución de tablero","Otro"];
+const WMS_COLOR = { central:"#2f6f8f", taller:"#c1712e", bodega:"#6b7480", estante:"#2f7d5c" };
+let wms = { abierto:false, tab:"donde", q:"", ub:"", form:{}, pos:"" };
+
+function wmsR(n) { return Math.round((Number(n)||0)*1000)/1000; }
+function wmsN(n) { return Number(n||0).toLocaleString("es-CL", {maximumFractionDigits:3}); }
+function wmsId() { return "EX-"+Math.random().toString(36).slice(2,9); }
+function wmsPuede() { return puedeGestionarBodega() || puedeGestionarTaller(); }
+function wmsV(k, def) { const v = wms.form[k]; return (v===undefined || v===null) ? (def===undefined ? "" : def) : v; }
+function wmsAsegurar() {
+  if (!DB.ubicaciones || !DB.ubicaciones.length) DB.ubicaciones = WMS_UB_DEFAULT.map(u => Object.assign({}, u));
+  if (!DB.existencias) DB.existencias = [];
+  if (!DB.wmsOrigenes || !DB.wmsOrigenes.length) DB.wmsOrigenes = WMS_ORIGENES_DEF.slice();
+}
+function wmsUb(id) { return (DB.ubicaciones||[]).find(u => u.id === id); }
+function wmsEsEst(u) { return !!u && u.tipo === "estante"; }
+function wmsMatPorCodigo(c) { return DB.bodegaGeneral.find(b => b.codigo === c); }
+function wmsExist(codigo) { return (DB.existencias||[]).filter(e => e.codigo === codigo && e.cant > 0); }
+function wmsEnBodegas(codigo) { return wmsR(wmsExist(codigo).filter(e => !wmsEsEst(wmsUb(e.ubicId))).reduce((s,e) => s+e.cant, 0)); }
+function wmsEnTableros(codigo) { return wmsR(wmsExist(codigo).filter(e => wmsEsEst(wmsUb(e.ubicId))).reduce((s,e) => s+e.cant, 0)); }
+function wmsSinUbicar(b) { return Math.max(0, wmsR((Number(b.stock)||0) - wmsEnBodegas(b.codigo))); }
+function wmsNombreUb(u, pos) { return u ? (u.nombre + (pos ? " · "+pos : "")) : "—"; }
+function wmsSumarFila(codigo, ubId, pos, cant, o) {
+  o = o || {}; pos = pos || "";
+  const f = DB.existencias.find(e => e.codigo===codigo && e.ubicId===ubId && (e.pos||"")===pos && (e.origenTipo||"")===(o.origenTipo||"") && (e.origenDetalle||"")===(o.origenDetalle||"") && (e.vieneDe||"")===(o.vieneDe||""));
+  if (f) { f.cant = wmsR(f.cant + cant); return f; }
+  const n = { id:wmsId(), codigo, ubicId:ubId, pos, cant:wmsR(cant), origenTipo:o.origenTipo||"", origenDetalle:o.origenDetalle||"", doc:o.doc||"", fecha:hoyISO(), vieneDe:o.vieneDe||"" };
+  DB.existencias.push(n); return n;
+}
+function wmsRestarFila(f, cant) {
+  f.cant = wmsR(f.cant - cant);
+  if (f.cant <= 0) { const i = DB.existencias.indexOf(f); if (i >= 0) DB.existencias.splice(i, 1); }
+}
+/* Si el stock bajó por salidas hechas fuera del panel (Pañol, ajustes…),
+   se descuentan las ubicaciones: primero Taller, luego Central (más antiguo). */
+function wmsNormalizar() {
+  wmsAsegurar();
+  const notas = [];
+  DB.bodegaGeneral.forEach(b => {
+    let exceso = wmsR(wmsEnBodegas(b.codigo) - (Number(b.stock)||0));
+    if (exceso <= 0) return;
+    const filas = wmsExist(b.codigo).filter(e => !wmsEsEst(wmsUb(e.ubicId))).sort((a,c) => {
+      const ta = (wmsUb(a.ubicId)||{}).tipo==="taller" ? 0 : 1, tc = (wmsUb(c.ubicId)||{}).tipo==="taller" ? 0 : 1;
+      return (ta-tc) || (a.fecha||"").localeCompare(c.fecha||"");
+    });
+    for (const f of filas) {
+      if (exceso <= 0) break;
+      const q = Math.min(f.cant, exceso);
+      notas.push(`${b.material}: −${wmsN(q)} en ${wmsNombreUb(wmsUb(f.ubicId), f.pos)}`);
+      wmsRestarFila(f, q); exceso = wmsR(exceso - q);
+    }
+  });
+  return notas;
+}
+
+/* ---------- posiciones según el esquema de cada ubicación ---------- */
+function wmsParte(pref, v) { v = (v||"").trim().toUpperCase(); if (!v) return ""; return /^\d+$/.test(v) ? pref+v : v; }
+function wmsPosHtml(p, ub) {
+  if (!ub) return "";
+  const inp = (k, lbl, ph) => `<label class="wms-l">${lbl}<input data-f="${p}_${k}" value="${escaparHtml(wmsV(p+"_"+k))}" placeholder="${ph}"></label>`;
+  if (ub.esquema === "epn") return `<div class="wms-g3">${inp("e","Estante","3")}${inp("n","Nivel","2")}${inp("p","Posición","4")}</div><div class="wms-h">Se guarda como E3-N2-P4</div>`;
+  if (ub.esquema === "niveles") {
+    const n = ub.niveles || 3; let o = "";
+    for (let i=1;i<=n;i++) o += `<option value="${i}" ${String(wmsV(p+"_niv","1"))===String(i)?"selected":""}>Nivel ${i}${i===1?" (abajo)":(i===n?" (arriba)":"")}</option>`;
+    return `<div class="wms-g2"><label class="wms-l">Nivel del estante<select data-f="${p}_niv">${o}</select></label>${inp("t","Tramo / nota (opcional)","izquierda, centro, derecha")}</div>`;
+  }
+  const usadas = [...new Set(DB.existencias.filter(e => e.ubicId===ub.id && e.pos).map(e => e.pos))];
+  return `<label class="wms-l">Zona / posición<input data-f="${p}_z" list="wms_dl_${p}" value="${escaparHtml(wmsV(p+"_z"))}" placeholder="ej: Cajón cables, Estante A"></label><datalist id="wms_dl_${p}">${usadas.map(x => `<option value="${escaparHtml(x)}">`).join("")}</datalist>`;
+}
+function wmsPosLeer(p, ub) {
+  if (!ub) return "";
+  if (ub.esquema === "epn") return [wmsParte("E", wmsV(p+"_e")), wmsParte("N", wmsV(p+"_n")), wmsParte("P", wmsV(p+"_p"))].filter(Boolean).join("-");
+  if (ub.esquema === "niveles") { const t = (wmsV(p+"_t")||"").trim(); return "N"+(wmsV(p+"_niv","1")||"1") + (t ? " · "+t : ""); }
+  return (wmsV(p+"_z")||"").trim();
+}
+function wmsSnap() { document.querySelectorAll("#wmsRoot [data-f]").forEach(el => { wms.form[el.dataset.f] = el.value; }); }
+
+/* ---------- selección de material ---------- */
+function wmsMatDeInput(txt) {
+  txt = (txt||"").trim().toLowerCase(); if (!txt) return null;
+  let r = DB.bodegaGeneral.find(b => (b.codigo+" — "+b.material).toLowerCase() === txt);
+  if (r) return r;
+  r = DB.bodegaGeneral.find(b => (b.codigo||"").toLowerCase() === txt); if (r) return r;
+  const c = DB.bodegaGeneral.filter(b => (b.material||"").toLowerCase() === txt);
+  return c.length === 1 ? c[0] : null;
+}
+function wmsMatInput(key, label) {
+  return `<label class="wms-l">${label}<input data-f="${key}" list="wms_dl_mat" value="${escaparHtml(wmsV(key))}" placeholder="Escribe código o nombre…" onchange="wmsRefrescar()"></label>`;
+}
+function wmsMatDatalist() {
+  return `<datalist id="wms_dl_mat">${DB.bodegaGeneral.map(b => `<option value="${escaparHtml(b.codigo+" — "+b.material)}">`).join("")}</datalist>`;
+}
+function wmsOpcionesOrigen(b) {
+  const out = [];
+  const sin = wmsSinUbicar(b);
+  if (sin > 0) out.push({ id:"SIN", txt:`Por ubicar (sin posición) — ${wmsN(sin)} ${b.unidad}`, cant:sin, f:null });
+  wmsExist(b.codigo).forEach(f => {
+    const u = wmsUb(f.ubicId);
+    out.push({ id:f.id, txt:`${wmsNombreUb(u, f.pos)} — ${wmsN(f.cant)} ${b.unidad}${f.origenDetalle?" · "+f.origenDetalle:""}`, cant:f.cant, f });
+  });
+  return out;
+}
+function wmsOpcionesUb(sel, extra) {
+  const act = (DB.ubicaciones||[]).filter(u => u.activa !== false);
+  const bod = act.filter(u => !wmsEsEst(u)), est = act.filter(wmsEsEst);
+  const opt = u => { const p = u.proyectoId ? proy(u.proyectoId) : null; return `<option value="${u.id}" ${sel===u.id?"selected":""}>${escaparHtml(u.nombre)}${p?" ("+escaparHtml(p.codigo)+")":""}</option>`; };
+  return `<option value="">Elegir…</option><optgroup label="Bodegas">${bod.map(opt).join("")}</optgroup>` +
+    (extra && est.length ? `<optgroup label="Estantes de tablero">${est.map(opt).join("")}</optgroup>` : "") +
+    (extra === "consumo" ? `<option value="__consumo" ${sel==="__consumo"?"selected":""}>🔧 Retirado por técnico / consumido</option>` : "") +
+    `<option value="__nueva" ${sel==="__nueva"?"selected":""}>＋ Crear nueva ubicación…</option>`;
+}
+/* mini formulario para crear una ubicación al vuelo (en Mover, Ingresar o Ubicaciones) */
+function wmsFormNuevaUb(src) {
+  const t = wmsV("nu_tipo", "epn");
+  const proyOpts = DB.proyectos.map(p => `<option value="${p.id}" ${wmsV("nu_proy")===p.id?"selected":""}>${escaparHtml(p.codigo)} — ${escaparHtml(p.nombre)}</option>`).join("");
+  const tabs = [...new Set(tpPlanes().flatMap(pl => (pl.items||[]).filter(i => i.proyectoId===wmsV("nu_proy") && i.tablero).map(i => i.tablero)))];
+  return `<div class="wms-box">
+    <div class="wms-g2">
+      <label class="wms-l">Tipo de ubicación<select data-f="nu_tipo" onchange="wmsRefrescar()">
+        <option value="epn" ${t==="epn"?"selected":""}>Bodega con estantes (estante-nivel-posición)</option>
+        <option value="zona" ${t==="zona"?"selected":""}>Bodega o zona simple</option>
+        <option value="estante" ${t==="estante"?"selected":""}>Estante de un tablero (niveles)</option></select></label>
+      <label class="wms-l">${t==="estante"?"Nombre (opcional)":"Nombre"}<input data-f="nu_nombre" value="${escaparHtml(wmsV("nu_nombre"))}" placeholder="${t==="estante"?"se arma solo: Estante + tablero":"ej: Contenedor patio"}"></label>
+    </div>
+    ${t==="estante" ? `<div class="wms-g2">
+      <label class="wms-l">Proyecto<select data-f="nu_proy" onchange="wmsRefrescar()"><option value="">Elegir…</option>${proyOpts}</select></label>
+      <label class="wms-l">Tablero<input data-f="nu_tab" list="wms_dl_tab" value="${escaparHtml(wmsV("nu_tab"))}" placeholder="ej: MDR-1"><datalist id="wms_dl_tab">${tabs.map(x => `<option value="${escaparHtml(x)}">`).join("")}</datalist></label></div>
+      <label class="wms-l" style="max-width:200px;">Niveles del estante<input type="number" min="1" max="8" data-f="nu_niv" value="${escaparHtml(wmsV("nu_niv","3"))}"></label>`
+    : `<label class="wms-l" style="max-width:200px;">Piso / sector (opcional)<input data-f="nu_piso" value="${escaparHtml(wmsV("nu_piso"))}" placeholder="ej: 1"></label>`}
+    <button class="btn btn-primary btn-sm" onclick="wmsCrearUb('${src}')">Crear ubicación</button>
+  </div>`;
+}
+function wmsCrearUb(src) {
+  wmsSnap();
+  if (!wmsPuede()) { toast("Tu rol no gestiona ubicaciones.", "danger"); return; }
+  const t = wmsV("nu_tipo","epn"); let nombre = (wmsV("nu_nombre")||"").trim();
+  const u = { id:"UB-"+Math.random().toString(36).slice(2,7).toUpperCase(), activa:true, piso:(wmsV("nu_piso")||"").trim(), tipo:"bodega", esquema:t, niveles:0 };
+  if (t === "estante") {
+    const p = proy(wmsV("nu_proy")); const tab = (wmsV("nu_tab")||"").trim();
+    if (!p || !tab) { toast("Para un estante de tablero elige el proyecto y escribe el tablero.", "danger"); return; }
+    u.tipo = "estante"; u.esquema = "niveles"; u.proyectoId = p.id; u.tablero = tab; u.niveles = Math.max(1, Math.min(8, Number(wmsV("nu_niv","3"))||3)); u.piso = "";
+    if (!nombre) nombre = "Estante "+tab;
+    if (DB.ubicaciones.some(x => x.tipo==="estante" && x.proyectoId===p.id && (x.tablero||"").toLowerCase()===tab.toLowerCase())) { toast("Ese tablero ya tiene su estante.", "danger"); return; }
+  } else if (!nombre) { toast("Ponle un nombre a la ubicación.", "danger"); return; }
+  if (DB.ubicaciones.some(x => x.nombre.toLowerCase() === nombre.toLowerCase())) { toast("Ya existe una ubicación con ese nombre.", "danger"); return; }
+  u.nombre = nombre;
+  DB.ubicaciones.push(u);
+  registrarHistorial({ proyecto:"Bodega", accion:"Crear", detalle:`Nueva ubicación de bodega: ${nombre}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja" });
+  if (src === "mv") wms.form.mv_dst = u.id; else if (src === "in") wms.form.in_dst = u.id;
+  ["nu_nombre","nu_tab","nu_piso"].forEach(k => delete wms.form[k]);
+  toast(`Ubicación "${nombre}" creada.`, "ok");
+  guardarEstado(); wmsRender();
+}
+
+/* ---------- ejecución de movimientos ---------- */
+function wmsMov(b, tipo, signo, cant, extra) {
+  const cu = Number(b.precioUnitario)||0;
+  return registrarMovimientoBodega(Object.assign({ tipo, signo, codigo:b.codigo, material:b.material, unidad:b.unidad||"", cantidad:cant, costoUnitario:cu, total:cant*cu, estadoInforme:"No aplica" }, extra));
+}
+function wmsHist(txt) { registrarHistorial({ proyecto:"Bodega", accion:"Modificar", detalle:txt, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja" }); }
+function wmsEjecutarMover() {
+  wmsSnap();
+  if (!wmsPuede()) { toast("Tu rol no mueve material.", "danger"); return; }
+  const b = wmsMatDeInput(wmsV("mv_mat")); if (!b) { toast("Elige el material.", "danger"); return; }
+  const ops = wmsOpcionesOrigen(b); const org = ops.find(o => o.id === wmsV("mv_org")) || ops[0];
+  if (!org) { toast("Ese material no tiene existencias para mover.", "danger"); return; }
+  const dstId = wmsV("mv_dst"); const cant = wmsR(wmsV("mv_cant"));
+  if (!dstId || dstId === "__nueva") { toast("Elige hacia dónde va.", "danger"); return; }
+  if (!(cant > 0)) { toast("Indica una cantidad válida.", "danger"); return; }
+  if (cant > org.cant + 1e-9) { toast(`En el origen solo hay ${wmsN(org.cant)} ${b.unidad}.`, "danger"); return; }
+  const f = org.f, ubO = f ? wmsUb(f.ubicId) : null, posO = f ? (f.pos||"") : "";
+  const nota = (wmsV("mv_nota")||"").trim();
+  const o = f ? { origenTipo:f.origenTipo, origenDetalle:f.origenDetalle, doc:f.doc } : { origenTipo:"Sin registrar", origenDetalle:"", doc:"" };
+  const vieneDe = f ? wmsNombreUb(ubO, posO) : "Por ubicar";
+  const base = { ubicOrigenId:ubO?ubO.id:"", ubicOrigen:ubO?ubO.nombre:"Por ubicar", posOrigen:posO, origenTipo:o.origenTipo||"", origenDetalle:o.origenDetalle||"", documento:nota||o.doc||"" };
+
+  if (dstId === "__consumo") {
+    if (!wmsEsEst(ubO)) { toast("Solo se retira/consume desde el estante de un tablero.", "danger"); return; }
+    const p = proy(ubO.proyectoId); const d = p ? buscarBodegaPorNombre(p, b.material) : null;
+    if (d) d.stock = Math.max(0, wmsR(d.stock - cant));
+    wmsRestarFila(f, cant);
+    wmsMov(b, "Retiro / consumo en tablero", -1, cant, Object.assign(base, { proyectoId:ubO.proyectoId, proyectoCodigo:p?p.codigo:"", proyectoNombre:p?p.nombre:"", tablero:ubO.tablero||"", ubicDestino:"Consumido en tablero", documento:nota||("Retiro técnico — "+(ubO.tablero||"")) }));
+    wmsHist(`${wmsN(cant)} ${b.unidad} de "${b.material}" retirados del ${ubO.nombre}`);
+    return wmsTerminar("Retiro registrado.");
+  }
+  const ubD = wmsUb(dstId); if (!ubD) { toast("Ubicación destino no válida.", "danger"); return; }
+  const posD = wmsPosLeer("mv", ubD);
+  if (ubD.esquema === "epn" && !posD) { toast(`Indica la posición en ${ubD.nombre} (estante-nivel-posición).`, "danger"); return; }
+  if (f && f.ubicId === ubD.id && (f.pos||"") === posD) { toast("El origen y el destino son la misma posición.", "danger"); return; }
+  const extraD = { ubicDestinoId:ubD.id, ubicDestino:ubD.nombre, posDestino:posD };
+  const orgEst = wmsEsEst(ubO), dstEst = wmsEsEst(ubD);
+
+  if (!orgEst && dstEst) {            // bodega → estante de tablero (sale de bodega general hacia el proyecto)
+    const p = proy(ubD.proyectoId); if (!p) { toast("El proyecto de ese estante ya no existe.", "danger"); return; }
+    if (cant > (Number(b.stock)||0)) { toast(`Solo hay ${wmsN(b.stock)} ${b.unidad} en bodega general.`, "danger"); return; }
+    if (f) wmsRestarFila(f, cant);
+    b.stock = wmsR(b.stock - cant);
+    let d = buscarBodegaPorNombre(p, b.material);
+    if (!d) { d = { codigo:"MAT-"+String(1000+p.bodega.length+Math.floor(Math.random()*900)), material:b.material, stock:0, unidad:b.unidad, minimo:0 }; p.bodega.push(d); }
+    d.stock = wmsR(d.stock + cant);
+    wmsSumarFila(b.codigo, ubD.id, posD, cant, Object.assign({}, o, { vieneDe }));
+    wmsMov(b, "Traspaso a estante de tablero", -1, cant, Object.assign(base, extraD, { proyectoId:p.id, proyectoCodigo:p.codigo, proyectoNombre:p.nombre, tablero:ubD.tablero||"", estadoInforme:"Pendiente", acuerdoId:b.acuerdoId||"" }));
+    wmsHist(`${wmsN(cant)} ${b.unidad} de "${b.material}": ${vieneDe} → ${wmsNombreUb(ubD, posD)} (${p.codigo})`);
+    return wmsTerminar("Material enviado al estante del tablero.");
+  }
+  if (orgEst && !dstEst) {            // estante → bodega (devolución de sobrante)
+    const p = proy(ubO.proyectoId); const d = p ? buscarBodegaPorNombre(p, b.material) : null;
+    if (d) d.stock = Math.max(0, wmsR(d.stock - cant));
+    wmsRestarFila(f, cant);
+    b.stock = wmsR((Number(b.stock)||0) + cant);
+    wmsSumarFila(b.codigo, ubD.id, posD, cant, Object.assign({}, o, { origenTipo:"Devolución de tablero", origenDetalle:(p?p.codigo+" ":"")+(ubO.tablero||""), vieneDe }));
+    wmsMov(b, "Devolución de tablero a bodega", 1, cant, Object.assign(base, extraD, { proyectoId:ubO.proyectoId, proyectoCodigo:p?p.codigo:"", tablero:ubO.tablero||"", origenTipo:"Devolución de tablero", origenDetalle:(p?p.codigo+" ":"")+(ubO.tablero||"") }));
+    wmsHist(`${wmsN(cant)} ${b.unidad} de "${b.material}" devueltos: ${vieneDe} → ${wmsNombreUb(ubD, posD)}`);
+    return wmsTerminar("Devolución registrada (revisa en Bsale si corresponde nota de crédito).");
+  }
+  if (orgEst && dstEst) {             // entre estantes del mismo proyecto
+    if (ubO.proyectoId !== ubD.proyectoId) { toast("Para pasar material a otro proyecto primero devuélvelo a una bodega.", "danger"); return; }
+    wmsRestarFila(f, cant);
+    wmsSumarFila(b.codigo, ubD.id, posD, cant, Object.assign({}, o, { vieneDe }));
+    wmsMov(b, "Cambio de posición en tablero", 0, cant, Object.assign(base, extraD, { proyectoId:ubD.proyectoId, tablero:ubD.tablero||"" }));
+    wmsHist(`${wmsN(cant)} ${b.unidad} de "${b.material}": ${vieneDe} → ${wmsNombreUb(ubD, posD)}`);
+    return wmsTerminar("Material movido.");
+  }
+  // bodega → bodega (reposición Central ↔ Taller) o "por ubicar" → posición
+  if (f) wmsRestarFila(f, cant);
+  wmsSumarFila(b.codigo, ubD.id, posD, cant, Object.assign({}, o, { vieneDe }));
+  wmsMov(b, f ? "Traspaso entre bodegas" : "Ubicación de material", 0, cant, Object.assign(base, extraD));
+  wmsHist(`${wmsN(cant)} ${b.unidad} de "${b.material}": ${vieneDe} → ${wmsNombreUb(ubD, posD)}`);
+  return wmsTerminar(f ? "Traspaso registrado." : "Material ubicado.");
+}
+function wmsTerminar(msg) {
+  ["mv_cant","mv_nota","mv_e","mv_n","mv_p","mv_z","mv_t","in_cant","in_doc","in_total","in_e","in_n","in_p","in_z"].forEach(k => delete wms.form[k]);
+  toast(msg, "ok"); guardarEstado(); wmsRender();
+}
+function wmsEjecutarIngreso() {
+  wmsSnap();
+  if (!wmsPuede()) { toast("Tu rol no ingresa material.", "danger"); return; }
+  const b = wmsMatDeInput(wmsV("in_mat")); if (!b) { toast("Elige el material (si es nuevo, créalo antes en Bodega General → Agregar producto).", "danger"); return; }
+  const cant = wmsR(wmsV("in_cant")); if (!(cant > 0)) { toast("Indica la cantidad que ingresa.", "danger"); return; }
+  const ubD = wmsUb(wmsV("in_dst")); if (!ubD || wmsEsEst(ubD)) { toast("Elige la bodega donde queda.", "danger"); return; }
+  const pos = wmsPosLeer("in", ubD);
+  if (ubD.esquema === "epn" && !pos) { toast(`Indica la posición en ${ubD.nombre} (estante-nivel-posición).`, "danger"); return; }
+  const ot = wmsV("in_ot") || DB.wmsOrigenes[0]; const od = (wmsV("in_od")||"").trim(); const doc = (wmsV("in_doc")||"").trim();
+  const total = Number(wmsV("in_total"))||0; const antes = Number(b.stock)||0;
+  if (total > 0) { const pa = b.precioUnitario||0; b.precioUnitario = Math.round(((antes*pa)+total)/(antes+cant)); }
+  b.stock = wmsR(antes + cant);
+  wmsSumarFila(b.codigo, ubD.id, pos, cant, { origenTipo:ot, origenDetalle:od, doc, vieneDe:(ot+(od?" · "+od:"")) });
+  wmsMov(b, "Ingreso a ubicación", 1, cant, { ubicDestinoId:ubD.id, ubicDestino:ubD.nombre, posDestino:pos, origenTipo:ot, origenDetalle:od, documento:doc || ("Ingreso — "+ot) });
+  wmsHist(`Ingreso ${wmsN(cant)} ${b.unidad} de "${b.material}" a ${wmsNombreUb(ubD, pos)} — ${ot}${od?" · "+od:""}${doc?" · "+doc:""}`);
+  wmsTerminar("Ingreso registrado.");
+}
+
+/* ---------- panel flotante ---------- */
+function wmsFabAsegurar() {
+  let f = document.getElementById("wmsFab");
+  if (!DB.role) { if (f) f.remove(); return; }
+  if (!f) { f = document.createElement("button"); f.id = "wmsFab"; f.className = "wms-fab"; f.onclick = wmsAbrir; f.innerHTML = '<span>📍</span><b>Ubicaciones</b>'; f.title = "Dónde está cada material, traspasos y trazabilidad"; document.body.appendChild(f); }
+  if (!document.getElementById("wmsRoot")) { const r = document.createElement("div"); r.id = "wmsRoot"; document.body.appendChild(r); }
+  f.style.display = wms.abierto ? "none" : "";
+}
+function wmsAbrir(tab) {
+  wmsAsegurar();
+  const notas = wmsNormalizar();
+  wms.abierto = true; if (typeof tab === "string") wms.tab = tab;
+  wmsFabAsegurar(); wmsRender();
+  if (notas.length) { toast("Se ajustaron ubicaciones por salidas hechas fuera del panel: "+notas.slice(0,3).join("; ")+(notas.length>3?"…":""), "ok"); guardarEstado(); }
+}
+function wmsCerrar() { wms.abierto = false; wmsRender(); wmsFabAsegurar(); }
+function wmsTab(t) { wmsSnap(); wms.tab = t; wmsRender(); }
+function wmsRefrescar() { wmsSnap(); wmsRender(); }
+function wmsIrMover(i, orgId) {
+  const b = DB.bodegaGeneral[i]; if (!b) return;
+  wms.form.mv_mat = b.codigo+" — "+b.material; wms.form.mv_org = orgId || ""; wms.form.mv_dst = ""; wms.tab = "mover"; wmsRender();
+}
+function wmsIrTraza(i) { const b = DB.bodegaGeneral[i]; if (!b) return; wms.form.tr_mat = b.codigo+" — "+b.material; wms.tab = "traza"; wmsRender(); }
+function wmsIrIngreso(i) { const b = DB.bodegaGeneral[i]; if (!b) return; wms.form.in_mat = b.codigo+" — "+b.material; wms.tab = "ingreso"; wmsRender(); }
+function wmsFiltroUb(id) { wms.ub = (wms.ub === id) ? "" : id; wmsRender(); }
+function wmsBuscar(v) { wms.q = v; const el = document.getElementById("wmsResultados"); if (el) el.innerHTML = wmsResultadosHtml(); }
+
+function wmsChip(txt, n, color, activo, onclick) {
+  return `<button class="wms-chip ${activo?"on":""}" style="--c:${color};" onclick="${onclick}"><i></i>${txt}<b>${n}</b></button>`;
+}
+function wmsTabDonde() {
+  const act = DB.ubicaciones.filter(u => u.activa !== false);
+  const matsEn = id => new Set(DB.existencias.filter(e => e.ubicId === id && e.cant > 0).map(e => e.codigo)).size;
+  const porUbicar = DB.bodegaGeneral.filter(b => wmsSinUbicar(b) > 0).length;
+  const chips = [wmsChip("Todas", DB.bodegaGeneral.length, "#10151c", !wms.ub, "wmsFiltroUb('')")]
+    .concat(act.map(u => wmsChip(escaparHtml(u.nombre), matsEn(u.id), WMS_COLOR[u.tipo]||WMS_COLOR.bodega, wms.ub===u.id, `wmsFiltroUb('${u.id}')`)))
+    .concat([wmsChip("⚠ Por ubicar", porUbicar, "#c98a2b", wms.ub==="SIN", "wmsFiltroUb('SIN')")]);
+  return `<div class="wms-chips">${chips.join("")}</div>
+    <input class="wms-q" placeholder="🔎 Buscar material o código…" value="${escaparHtml(wms.q)}" oninput="wmsBuscar(this.value)">
+    <div id="wmsResultados">${wmsResultadosHtml()}</div>`;
+}
+function wmsResultadosHtml() {
+  const q = (wms.q||"").trim().toLowerCase(), puede = wmsPuede();
+  let lista = DB.bodegaGeneral.filter(b => !q || (b.material||"").toLowerCase().includes(q) || (b.codigo||"").toLowerCase().includes(q));
+  if (wms.ub === "SIN") lista = lista.filter(b => wmsSinUbicar(b) > 0);
+  else if (wms.ub) lista = lista.filter(b => wmsExist(b.codigo).some(e => e.ubicId === wms.ub));
+  if (!lista.length) return `<div class="wms-vacio">${DB.bodegaGeneral.length ? "Nada coincide con ese filtro." : "Aún no hay productos en Bodega General. Agrégalos desde la página Bodega General."}</div>`;
+  const total = lista.length; lista = lista.slice(0, 60);
+  return lista.map(b => {
+    const filas = [];
+    const sin = wmsSinUbicar(b);
+    if (sin > 0 && (!wms.ub || wms.ub === "SIN")) filas.push(`<tr class="wms-sin"><td><span class="wms-tag" style="--c:#c98a2b;">⚠ Por ubicar</span></td><td class="muted">sin posición</td><td class="mono">${wmsN(sin)} ${escaparHtml(b.unidad)}</td><td class="muted">no registrado</td><td class="muted">—</td><td>${puede?`<button class="btn btn-sm btn-primary" onclick="wmsIrMover(${DB.bodegaGeneral.indexOf(b)},'SIN')">Ubicar</button>`:""}</td></tr>`);
+    wmsExist(b.codigo).filter(e => !wms.ub || wms.ub === "SIN" || e.ubicId === wms.ub).forEach(e => {
+      const u = wmsUb(e.ubicId); const est = wmsEsEst(u);
+      filas.push(`<tr><td><span class="wms-tag" style="--c:${WMS_COLOR[u?u.tipo:"bodega"]||WMS_COLOR.bodega};">${escaparHtml(u?u.nombre:"(ubicación borrada)")}</span></td>
+        <td class="mono">${e.pos?escaparHtml(e.pos):'<span class="muted">sin posición</span>'}</td><td class="mono">${wmsN(e.cant)} ${escaparHtml(b.unidad)}</td>
+        <td class="small">${escaparHtml(e.origenTipo||"—")}${e.origenDetalle?`<br><span class="muted">${escaparHtml(e.origenDetalle)}</span>`:""}${e.doc?`<br><span class="muted">${escaparHtml(e.doc)}</span>`:""}</td>
+        <td class="small muted">${escaparHtml(e.vieneDe||"—")}<br>${escaparHtml(e.fecha||"")}</td>
+        <td>${puede?`<button class="btn btn-sm" onclick="wmsIrMover(${DB.bodegaGeneral.indexOf(b)},'${e.id}')">${est?"Retirar / devolver":"Mover"}</button>`:""}</td></tr>`);
+    });
+    return `<div class="wms-mat"><div class="wms-mh"><div><b>${escaparHtml(b.material)}</b> <span class="mono muted small">${escaparHtml(b.codigo)}</span></div>
+      <div class="small muted">Stock bodegas: <b>${wmsN(b.stock)} ${escaparHtml(b.unidad)}</b> · en tableros: <b>${wmsN(wmsEnTableros(b.codigo))}</b></div>
+      <div class="flex-gap">${puede?`<button class="btn btn-sm" onclick="wmsIrIngreso(${DB.bodegaGeneral.indexOf(b)})">⬇ Ingresar</button>`:""}<button class="btn btn-sm" onclick="wmsIrTraza(${DB.bodegaGeneral.indexOf(b)})">🧭 Trazar</button></div></div>
+      ${filas.length ? `<table class="wms-t"><tr><th>Ubicación</th><th>Posición</th><th>Cantidad</th><th>Origen</th><th>Viene de</th><th></th></tr>${filas.join("")}</table>` : `<div class="wms-vacio small">Sin existencias.</div>`}</div>`;
+  }).join("") + (total > 60 ? `<div class="wms-vacio small">Mostrando 60 de ${total}. Usa el buscador para afinar.</div>` : "");
+}
+function wmsTabMover() {
+  const b = wmsMatDeInput(wmsV("mv_mat"));
+  const ops = b ? wmsOpcionesOrigen(b) : [];
+  let org = wmsV("mv_org"); if (!ops.find(o => o.id === org)) org = ops[0] ? ops[0].id : "";
+  const oi = ops.find(o => o.id === org);
+  const ubO = oi && oi.f ? wmsUb(oi.f.ubicId) : null;
+  const dstSel = wmsV("mv_dst"); const ubD = wmsUb(dstSel);
+  const ver = (ubD && wmsPosLeer("mv", ubD)) ? wmsNombreUb(ubD, wmsPosLeer("mv", ubD)) : (ubD ? ubD.nombre : "");
+  return `${wmsMatDatalist()}
+    <p class="wms-h" style="margin-top:0;">Reposición Central ↔ Taller, armado del estante de un tablero, devoluciones y retiros del técnico. Todo queda registrado con desde → hacia.</p>
+    ${wmsMatInput("mv_mat", "Material")}
+    ${b ? `<label class="wms-l">Sale de<select data-f="mv_org" onchange="wmsRefrescar()">${ops.map(o => `<option value="${o.id}" ${o.id===org?"selected":""}>${escaparHtml(o.txt)}</option>`).join("")}</select></label>` : ""}
+    ${b && !ops.length ? `<div class="wms-vacio small">Este material no tiene existencias. Ingrésalo primero en la pestaña ⬇ Ingresar.</div>` : ""}
+    ${b && ops.length ? `<label class="wms-l">Va hacia<select data-f="mv_dst" onchange="wmsRefrescar()">${wmsOpcionesUb(dstSel, wmsEsEst(ubO) ? "consumo" : "est")}</select></label>
+      ${dstSel==="__nueva" ? wmsFormNuevaUb("mv") : ""}
+      ${ubD ? wmsPosHtml("mv", ubD) : ""}
+      <div class="wms-g2"><label class="wms-l">Cantidad${oi?` (máx ${wmsN(oi.cant)} ${escaparHtml(b.unidad)})`:""}<input type="number" step="any" min="0" data-f="mv_cant" value="${escaparHtml(wmsV("mv_cant"))}"></label>
+      <label class="wms-l">Nota (opcional)<input data-f="mv_nota" value="${escaparHtml(wmsV("mv_nota"))}" placeholder="ej: reposición semanal"></label></div>
+      ${ver && oi ? `<div class="wms-prev">Quedará en <b>${escaparHtml(ver)}</b> · viene de <b>${escaparHtml(oi.f ? wmsNombreUb(ubO, oi.f.pos) : "Por ubicar")}</b></div>` : ""}
+      <button class="btn btn-primary" onclick="wmsEjecutarMover()">Registrar movimiento</button>` : ""}`;
+}
+function wmsTabIngreso() {
+  const ubD = wmsUb(wmsV("in_dst"));
+  const ot = wmsV("in_ot") || DB.wmsOrigenes[0];
+  const provs = (DB.proveedores||[]).map(p => p.nombre), proys = DB.proyectos.map(p => p.codigo+" "+p.nombre);
+  return `${wmsMatDatalist()}
+    <p class="wms-h" style="margin-top:0;">Entrada de material a una bodega, con su posición y de dónde viene (proveedor, terreno, etc.). Si no está en el listado, créalo antes en Bodega General → Agregar producto.</p>
+    ${wmsMatInput("in_mat", "Material")}
+    <div class="wms-g2"><label class="wms-l">Cantidad<input type="number" step="any" min="0" data-f="in_cant" value="${escaparHtml(wmsV("in_cant"))}"></label>
+      <label class="wms-l">Total pagado (opcional, para el costo)<input type="number" step="any" min="0" data-f="in_total" value="${escaparHtml(wmsV("in_total"))}"></label></div>
+    <label class="wms-l">Queda en<select data-f="in_dst" onchange="wmsRefrescar()">${wmsOpcionesUb(wmsV("in_dst"), "")}</select></label>
+    ${wmsV("in_dst")==="__nueva" ? wmsFormNuevaUb("in") : ""}
+    ${ubD && !wmsEsEst(ubD) ? wmsPosHtml("in", ubD) : ""}
+    <div class="wms-g2"><label class="wms-l">Viene de<select data-f="in_ot">${DB.wmsOrigenes.map(o => `<option ${o===ot?"selected":""}>${escaparHtml(o)}</option>`).join("")}</select></label>
+      <label class="wms-l">Proveedor / proyecto / detalle<input data-f="in_od" list="wms_dl_od" value="${escaparHtml(wmsV("in_od"))}" placeholder="ej: Rhona, o CL465-01-A"><datalist id="wms_dl_od">${provs.concat(proys).map(x => `<option value="${escaparHtml(x)}">`).join("")}</datalist></label></div>
+    <label class="wms-l">Documento (OC, guía, factura)<input data-f="in_doc" value="${escaparHtml(wmsV("in_doc"))}" placeholder="ej: OC-1234 / Guía 5678"></label>
+    <button class="btn btn-primary" onclick="wmsEjecutarIngreso()">Registrar ingreso</button>`;
+}
+function wmsTabTraza() {
+  const b = wmsMatDeInput(wmsV("tr_mat"));
+  return `${wmsMatDatalist()}${wmsMatInput("tr_mat", "Material a trazar")}
+    ${b ? `<div class="wms-prev"><b>${escaparHtml(b.material)}</b> · hoy: ${wmsN(wmsEnBodegas(b.codigo))} en bodegas ubicadas · ${wmsN(wmsSinUbicar(b))} por ubicar · ${wmsN(wmsEnTableros(b.codigo))} en tableros</div>
+    <div id="wmsTraza" class="wms-vacio small">Cargando movimientos…</div>` : `<div class="wms-vacio small">Elige un material para ver su recorrido: proveedor o terreno → bodegas → tablero.</div>`}`;
+}
+function wmsCargarTraza() {
+  const b = wmsMatDeInput(wmsV("tr_mat")); const el = document.getElementById("wmsTraza"); if (!b || !el) return;
+  cargarMovimientosBodega(true).then(todos => {
+    const el2 = document.getElementById("wmsTraza"); if (!el2) return;
+    const ms = todos.filter(m => m.codigo === b.codigo || (m.material||"").toLowerCase() === (b.material||"").toLowerCase()).sort((a,c) => (c.hora||"").localeCompare(a.hora||""));
+    if (!ms.length) { el2.innerHTML = "Sin movimientos registrados para este material."; return; }
+    const lugar = (u, p) => u ? (u + (p ? " · "+p : "")) : "";
+    el2.className = "";
+    el2.innerHTML = `<table class="wms-t"><tr><th>Fecha</th><th>Movimiento</th><th>Cant.</th><th>Desde → Hacia</th><th>Origen</th><th>Documento / por</th></tr>${ms.slice(0,150).map(m => {
+      const d = lugar(m.ubicOrigen, m.posOrigen), h = lugar(m.ubicDestino, m.posDestino) || (m.proyectoCodigo ? "Proyecto "+m.proyectoCodigo : "");
+      const s = m.signo > 0 ? "+" : (m.signo < 0 ? "−" : "↔");
+      return `<tr><td class="small mono">${escaparHtml((m.fecha||"")+" "+(m.hora?new Date(m.hora).toLocaleTimeString("es-CL",{hour:"2-digit",minute:"2-digit"}):""))}</td><td class="small"><b>${escaparHtml(m.tipo||"")}</b></td><td class="mono">${s}${wmsN(m.cantidad)}</td>
+        <td class="small">${escaparHtml(d||"—")} <b>→</b> ${escaparHtml(h||"—")}</td><td class="small">${escaparHtml(m.origenTipo||"")}${m.origenDetalle?`<br><span class="muted">${escaparHtml(m.origenDetalle)}</span>`:""}</td>
+        <td class="small">${escaparHtml(m.documento||"")}<br><span class="muted">${escaparHtml(m.por||"")}</span></td></tr>`;
+    }).join("")}</table>`;
+  }).catch(() => { const e3 = document.getElementById("wmsTraza"); if (e3) e3.innerHTML = "No se pudo leer el libro de movimientos."; });
+}
+function wmsTabConfig() {
+  const filas = DB.ubicaciones.map(u => {
+    const n = DB.existencias.filter(e => e.ubicId === u.id && e.cant > 0).length;
+    const esq = { epn:"estante-nivel-posición", zona:"zona libre", niveles:`${u.niveles||3} niveles` }[u.esquema] || u.esquema;
+    const p = u.proyectoId ? proy(u.proyectoId) : null;
+    return `<tr><td><input value="${escaparHtml(u.nombre)}" style="min-width:160px;" onchange="wmsEditarUb('${u.id}',this.value)"></td>
+      <td class="small"><span class="wms-tag" style="--c:${WMS_COLOR[u.tipo]||WMS_COLOR.bodega};">${u.tipo==="estante"?"Estante de tablero":(u.tipo==="central"?"Central":(u.tipo==="taller"?"Taller":"Bodega"))}</span>${p?` <span class="muted">${escaparHtml(p.codigo)}</span>`:""}${u.piso?` <span class="muted">· piso ${escaparHtml(u.piso)}</span>`:""}</td>
+      <td class="small muted">${esq}</td><td class="mono small">${n} lote(s)</td>
+      <td class="flex-gap"><button class="btn btn-sm" onclick="wmsToggleUb('${u.id}')">${u.activa===false?"Activar":"Ocultar"}</button>${n?"":`<button class="btn btn-sm btn-danger" onclick="wmsBorrarUb('${u.id}')">Borrar</button>`}</td></tr>`;
+  }).join("");
+  return `<h4 style="margin:0 0 8px;">Ubicaciones (capas)</h4>
+    <table class="wms-t"><tr><th>Nombre</th><th>Tipo</th><th>Posición</th><th>En uso</th><th></th></tr>${filas}</table>
+    <h4 style="margin:16px 0 8px;">＋ Agregar otra ubicación</h4>${wmsFormNuevaUb("cfg")}
+    <h4 style="margin:16px 0 8px;">Orígenes del material</h4>
+    <div class="wms-chips">${DB.wmsOrigenes.map((o,i) => `<span class="wms-pill">${escaparHtml(o)} <button onclick="wmsQuitarOrigen(${i})" title="Quitar">×</button></span>`).join("")}</div>
+    <div class="flex-gap" style="margin-top:8px;"><input data-f="nu_origen" value="${escaparHtml(wmsV("nu_origen"))}" placeholder="ej: Importación, Préstamo cliente" style="max-width:280px;"><button class="btn btn-sm" onclick="wmsAgregarOrigen()">Agregar</button></div>`;
+}
+function wmsEditarUb(id, v) { const u = wmsUb(id); v = (v||"").trim(); if (!u || !v || !wmsPuede()) return; u.nombre = v; guardarEstado(); wmsRender(); }
+function wmsToggleUb(id) { const u = wmsUb(id); if (!u || !wmsPuede()) return; u.activa = (u.activa === false); guardarEstado(); wmsRender(); }
+function wmsBorrarUb(id) {
+  const u = wmsUb(id); if (!u || !wmsPuede()) return;
+  if (DB.existencias.some(e => e.ubicId === id && e.cant > 0)) { toast("Tiene material: muévelo antes de borrarla.", "danger"); return; }
+  DB.ubicaciones = DB.ubicaciones.filter(x => x.id !== id); toast("Ubicación borrada.", "ok"); guardarEstado(); wmsRender();
+}
+function wmsAgregarOrigen() { wmsSnap(); const v = (wmsV("nu_origen")||"").trim(); if (!v || !wmsPuede()) return; if (!DB.wmsOrigenes.includes(v)) DB.wmsOrigenes.push(v); delete wms.form.nu_origen; guardarEstado(); wmsRender(); }
+function wmsQuitarOrigen(i) { if (!wmsPuede() || DB.wmsOrigenes.length <= 1) return; DB.wmsOrigenes.splice(i, 1); guardarEstado(); wmsRender(); }
+
+function wmsRender() {
+  const root = document.getElementById("wmsRoot"); if (!root) return;
+  if (!wms.abierto) { root.innerHTML = ""; return; }
+  wmsAsegurar();
+  const puede = wmsPuede();
+  const tabs = [["donde","📍 Dónde está"],["mover","⇄ Mover / reponer"],["ingreso","⬇ Ingresar"],["traza","🧭 Trazabilidad"],["config","⚙ Ubicaciones"]].filter(t => puede || ["donde","traza"].includes(t[0]));
+  if (!tabs.some(t => t[0] === wms.tab)) wms.tab = "donde";
+  const sc = (document.getElementById("wmsBody")||{}).scrollTop || 0;
+  const cuerpo = { donde:wmsTabDonde, mover:wmsTabMover, ingreso:wmsTabIngreso, traza:wmsTabTraza, config:wmsTabConfig }[wms.tab]();
+  root.innerHTML = `<div class="wms-win" id="wmsWin" style="${wms.pos}">
+    <div class="wms-head" onpointerdown="wmsDragIni(event)"><b>📍 Ubicaciones y trazabilidad</b><span class="wms-sub">Central · Taller · Estantes de tablero</span><button class="wms-x" onclick="wmsCerrar()" title="Cerrar">×</button></div>
+    <div class="wms-tabs">${tabs.map(t => `<button class="${wms.tab===t[0]?"on":""}" onclick="wmsTab('${t[0]}')">${t[1]}</button>`).join("")}</div>
+    <div class="wms-body" id="wmsBody">${cuerpo}</div></div>`;
+  const body = document.getElementById("wmsBody"); if (body) body.scrollTop = sc;
+  if (wms.tab === "traza") wmsCargarTraza();
+}
+let _wmsDrag = null;
+function wmsDragIni(e) {
+  if (e.target.closest("button") || window.innerWidth < 760) return;
+  const w = document.getElementById("wmsWin"); if (!w) return;
+  const r = w.getBoundingClientRect();
+  _wmsDrag = { dx:e.clientX - r.left, dy:e.clientY - r.top, w:r.width, h:r.height };
+  document.addEventListener("pointermove", wmsDragMov); document.addEventListener("pointerup", wmsDragFin);
+}
+function wmsDragMov(e) {
+  const w = document.getElementById("wmsWin"); if (!w || !_wmsDrag) return;
+  const x = Math.max(0, Math.min(window.innerWidth - 120, e.clientX - _wmsDrag.dx)), y = Math.max(0, Math.min(window.innerHeight - 60, e.clientY - _wmsDrag.dy));
+  wms.pos = `left:${x}px; top:${y}px; right:auto; bottom:auto; width:${_wmsDrag.w}px; height:${_wmsDrag.h}px;`;
+  w.setAttribute("style", wms.pos);
+}
+function wmsDragFin() { _wmsDrag = null; document.removeEventListener("pointermove", wmsDragMov); document.removeEventListener("pointerup", wmsDragFin); }
 
 function shellCargando() {
   document.getElementById("app").innerHTML = `

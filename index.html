@@ -536,7 +536,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.10.0";
+const APP_VERSION = "3.10.1";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -4789,6 +4789,138 @@ function guardarAmpliacionCantidadAcuerdo(aid, codigo) {
   guardarEstado("Ampliación de cantidad"); closeModal(); renderAll();
   toast(`Cantidad ampliada en ${q}. Revisa que el monto total alcance.`, "ok");
 }
+/* ---------- Agregar / ampliar productos del compendio (monto $ no cambia) ---------- */
+let acAmp = null;
+function acAmpBuscar(a, cod) {
+  const c = (cod || "").trim().toLowerCase(); if (!c) return null;
+  return (a.items || []).find(x => String(x.codigo).trim().toLowerCase() === c) || null;
+}
+function modalAgregarProductosAcuerdo(aid) {
+  const a = (DB.acuerdos || []).find(x => x.id === aid); if (!a) return;
+  if (!puedeGestionarAcuerdo()) { toast(`Tu rol (${DB.role}) no gestiona acuerdos.`, "danger"); return; }
+  acAmp = { aid, filas: [{ codigo: "", desc: "", cat: "", unidad: "un", precio: "", cant: "" }], eid: "" };
+  const abiertas = a.entregas.filter(e => e.estado !== "Recibida");
+  openModal(`
+    <div class="modal-head"><h3>Agregar / ampliar productos del compendio</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <p class="small muted">Escribe el código. Si ya existe en el compendio se <strong>suma la cantidad</strong>; si no se encuentra, se <strong>crea como código nuevo</strong> (completa descripción y, si lo tienes, el precio). El monto del acuerdo (${money(a.montoAcordado)}) no cambia.</p>
+      <datalist id="acAmpCodigos">${(a.items || []).map(i => `<option value="${escaparHtml(i.codigo)}">${escaparHtml(i.descripcion)}</option>`).join('')}</datalist>
+      <div id="acAmpFilas"></div>
+      <div class="flex-gap" style="margin:8px 0; flex-wrap:wrap;">
+        <button class="btn btn-sm" onclick="acAmpAgregarFila()">＋ Otra fila</button>
+        <button class="btn btn-sm" onclick="document.getElementById('acAmpPegarBox').style.display='block'">📋 Pegar varias desde Excel</button>
+      </div>
+      <div id="acAmpPegarBox" style="display:none; margin-bottom:10px;">
+        <p class="small muted">Una línea por producto: <span class="mono">código · descripción · cantidad · precio</span> (separados por tabulación, ; o coma). Precio es opcional.</p>
+        <textarea id="acAmpPegar" rows="5" style="width:100%;" placeholder="1234567&#9;Borne gris 4 mm&#9;200&#9;350"></textarea>
+        <button class="btn btn-sm" style="margin-top:6px;" onclick="acAmpPegarAplicar()">Cargar a la tabla</button>
+      </div>
+      <div class="flex-gap" style="flex-wrap:wrap;">
+        <div style="flex:1; min-width:240px;"><label class="field-label">¿En qué entrega va?</label>
+          <select id="acAmpEntrega"><option value="">Dejar como saldo (sin entrega aún)</option>${abiertas.map(e => `<option value="${e.id}">${e.nombre} (${e.estado})</option>`).join('')}</select></div>
+        <div style="flex:1; min-width:240px;"><label class="field-label">Motivo</label><input type="text" id="acAmpMotivo" placeholder="Ej: mayor consumo, nuevos proyectos"></div>
+      </div>
+      <div id="acAmpImpacto" style="margin-top:12px;"></div>
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="guardarAgregarProductosAcuerdo()">Guardar en el compendio</button></div>`, 1100);
+  acAmpPintar();
+}
+function acAmpLeer() {
+  if (!acAmp) return;
+  acAmp.filas.forEach((f, i) => {
+    const g = k => { const el = document.getElementById('acAmp_' + k + '_' + i); return el ? el.value : undefined; };
+    ['codigo', 'desc', 'cat', 'unidad', 'precio', 'cant'].forEach(k => { const v = g(k); if (v !== undefined) f[k] = v; });
+  });
+}
+function acAmpAgregarFila() { acAmpLeer(); acAmp.filas.push({ codigo: "", desc: "", cat: "", unidad: "un", precio: "", cant: "" }); acAmpPintar(); }
+function acAmpQuitarFila(i) { acAmpLeer(); acAmp.filas.splice(i, 1); if (!acAmp.filas.length) acAmp.filas.push({ codigo: "", desc: "", cat: "", unidad: "un", precio: "", cant: "" }); acAmpPintar(); }
+function acAmpCodigoCambio(i) { acAmpLeer(); acAmpPintar(); const el = document.getElementById('acAmp_cant_' + i); if (el && acAmp.filas[i].codigo) el.focus(); }
+function acAmpPegarAplicar() {
+  acAmpLeer();
+  const txt = document.getElementById('acAmpPegar').value || "";
+  const nuevas = txt.split(/\r?\n/).map(l => l.trim()).filter(Boolean).map(l => {
+    const p = l.split(/\t|;|,/).map(x => x.trim());
+    const num = s => String(s || "").replace(/[^\d.]/g, "");
+    return { codigo: p[0] || "", desc: p[1] || "", cat: "", unidad: "un", cant: num(p[2]), precio: num(p[3]) };
+  }).filter(f => f.codigo);
+  if (!nuevas.length) { toast("No encontré líneas con código.", "danger"); return; }
+  acAmp.filas = acAmp.filas.filter(f => f.codigo || f.cant).concat(nuevas);
+  document.getElementById('acAmpPegar').value = ""; document.getElementById('acAmpPegarBox').style.display = 'none';
+  acAmpPintar();
+}
+function acAmpPintar() {
+  const a = (DB.acuerdos || []).find(x => x.id === acAmp.aid); if (!a) return;
+  const box = document.getElementById('acAmpFilas'); if (!box) return;
+  const inp = 'width:100%; padding:7px 8px; border:1px solid var(--line); border-radius:7px;';
+  box.innerHTML = `<div class="table-wrap"><table>
+    <tr><th style="width:150px">Código</th><th>Descripción</th><th style="width:130px">Categoría</th><th style="width:70px">Unidad</th><th style="width:100px">Precio unit.</th><th style="width:90px">Cantidad a sumar</th><th style="width:30px"></th></tr>
+    ${acAmp.filas.map((f, i) => {
+      const ex = acAmpBuscar(a, f.codigo);
+      const estado = !f.codigo.trim() ? '' : ex
+        ? `<div class="small" style="color:var(--green-dark,#1b7a3a)">✔ Ya existe · acordado ${ex.cantAcordada} → <strong>${(Number(ex.cantAcordada) || 0) + (Number(f.cant) || 0)}</strong></div>`
+        : `<div class="small" style="color:var(--copper-dark)">★ Código nuevo</div>`;
+      return `<tr>
+        <td><input style="${inp}" list="acAmpCodigos" id="acAmp_codigo_${i}" value="${escaparHtml(f.codigo)}" onchange="acAmpCodigoCambio(${i})" placeholder="Código">${estado}</td>
+        <td>${ex ? `<span class="small">${escaparHtml(ex.descripcion)}</span>` : `<input style="${inp}" id="acAmp_desc_${i}" value="${escaparHtml(f.desc)}" placeholder="Descripción del producto" oninput="acAmpImpacto()">`}</td>
+        <td>${ex ? `<span class="small muted">${escaparHtml(ex.categoria || '')}</span>` : `<input style="${inp}" id="acAmp_cat_${i}" value="${escaparHtml(f.cat)}" placeholder="Familia">`}</td>
+        <td>${ex ? `<span class="small muted">${escaparHtml(ex.unidad || 'un')}</span>` : `<input style="${inp}" id="acAmp_unidad_${i}" value="${escaparHtml(f.unidad)}">`}</td>
+        <td>${ex && Number(ex.precio) > 0 ? `<span class="small">${money(ex.precio)}</span>` : `<input type="number" min="0" style="${inp}" id="acAmp_precio_${i}" value="${escaparHtml(f.precio)}" placeholder="pendiente" oninput="acAmpImpacto()">`}</td>
+        <td><input type="number" min="1" style="${inp}" id="acAmp_cant_${i}" value="${escaparHtml(f.cant)}" oninput="acAmpImpacto()"></td>
+        <td><button class="btn btn-sm" onclick="acAmpQuitarFila(${i})">✕</button></td></tr>`;
+    }).join('')}</table></div>`;
+  acAmpImpacto(true);
+}
+function acAmpImpacto(sinLeer) {
+  if (!sinLeer) acAmpLeer();
+  const a = (DB.acuerdos || []).find(x => x.id === acAmp.aid); const el = document.getElementById('acAmpImpacto'); if (!a || !el) return;
+  let extra = 0, sinPrecio = 0, nuevos = 0, ampl = 0;
+  acAmp.filas.forEach(f => {
+    const q = Number(f.cant) || 0; if (!f.codigo.trim() || q <= 0) return;
+    const ex = acAmpBuscar(a, f.codigo);
+    const p = ex ? (Number(ex.precio) > 0 ? Number(ex.precio) : Number(f.precio) || 0) : (Number(f.precio) || 0);
+    if (ex) ampl++; else nuevos++;
+    if (p > 0) extra += q * p; else sinPrecio++;
+  });
+  const m = montosAcuerdo(a); const total = m.acordadoProductos + extra; const sobra = m.tope - total;
+  el.innerHTML = `<div class="card" style="background:var(--bg-soft,#f6f4ef);">
+    <div class="small">Monto del acuerdo (no cambia): <strong>${money(m.tope)}</strong> · Productos ya acordados valorizados: ${money(m.acordadoProductos)} · Esta carga suma: <strong>${money(extra)}</strong> (${ampl} ampliados, ${nuevos} nuevos)</div>
+    <div class="small" style="margin-top:4px; color:${sobra < 0 ? 'var(--red,#b3261e)' : 'inherit'};">${sobra < 0 ? `⚠ Los productos acordados pasarían el monto en ${money(-sobra)}. Puedes guardar igual, pero no se podrá pedir todo.` : `Quedaría disponible ${money(sobra)} dentro del monto.`}${sinPrecio ? ` · ${sinPrecio} línea(s) sin precio, no se valorizan.` : ''}</div></div>`;
+}
+function guardarAgregarProductosAcuerdo() {
+  acAmpLeer();
+  const a = (DB.acuerdos || []).find(x => x.id === acAmp.aid); if (!a) return;
+  const eid = document.getElementById('acAmpEntrega').value;
+  const motivo = (document.getElementById('acAmpMotivo').value || "").trim();
+  const e = eid ? a.entregas.find(x => x.id === eid) : null;
+  const validas = acAmp.filas.filter(f => f.codigo.trim() || Number(f.cant));
+  if (!validas.length) { toast("Agrega al menos un producto.", "danger"); return; }
+  const vistos = {};
+  for (const f of validas) {
+    const k = f.codigo.trim().toLowerCase();
+    if (!k) { toast("Hay una fila con cantidad pero sin código.", "danger"); return; }
+    if (vistos[k]) { toast(`El código ${f.codigo} está repetido en la tabla.`, "danger"); return; }
+    vistos[k] = 1;
+    if (!(Math.round(Number(f.cant)) > 0)) { toast(`Indica la cantidad de ${f.codigo}.`, "danger"); return; }
+    if (!acAmpBuscar(a, f.codigo) && !f.desc.trim()) { toast(`El código ${f.codigo} es nuevo: escribe su descripción.`, "danger"); return; }
+  }
+  a.ampliaciones = a.ampliaciones || [];
+  let nuevos = 0, ampl = 0;
+  validas.forEach(f => {
+    const q = Math.round(Number(f.cant)); const cod = f.codigo.trim();
+    let it = acAmpBuscar(a, cod);
+    if (it) { it.cantAcordada = (Number(it.cantAcordada) || 0) + q; if (!(Number(it.precio) > 0) && Number(f.precio) > 0) it.precio = Number(f.precio); ampl++; }
+    else {
+      it = { codigo: cod, descripcion: f.desc.trim(), categoria: f.cat.trim() || "Ampliación del compendio", unidad: f.unidad.trim() || "un", cantAcordada: q, precio: Number(f.precio) > 0 ? Number(f.precio) : 0, embalaje: 1, stockProveedor: 0, ampliacion: true };
+      a.items.push(it); nuevos++;
+    }
+    if (e) { const l = e.lineas.find(x => x.codigo === it.codigo); if (l) l.cantPlan += q; else e.lineas.push({ codigo: it.codigo, cantPlan: q, cantRecibida: 0 }); }
+    a.ampliaciones.push({ fecha: hoyISO(), por: DB.usuario + " · " + DB.role, tipo: it.ampliacion && nuevos && ampl === 0 ? "producto" : "cantidad", codigo: it.codigo, descripcion: it.descripcion, cantidad: q, entrega: e ? e.id : "saldo", motivo });
+  });
+  registrarHistorial({ proyecto: "General", accion: "Modificar", detalle: `Acuerdo ${a.nombre}: compendio actualizado (${nuevos} códigos nuevos, ${ampl} ampliados)${motivo ? ' — ' + motivo : ''}`, usuario: DB.usuario + " · " + DB.role, criticidad: "Media" });
+  guardarEstado("Compendio ampliado"); closeModal(); renderAll();
+  toast(`Compendio actualizado: ${nuevos} nuevos, ${ampl} ampliados.`, "ok");
+}
 function modalEditarAcuerdo(aid) {
   const a = (DB.acuerdos || []).find(x => x.id === aid); if (!a) return;
   if (!puedeGestionarAcuerdo()) { toast(`Tu rol (${DB.role}) no gestiona acuerdos.`, "danger"); return; }
@@ -4910,7 +5042,7 @@ function htmlCompendioAcuerdo(a) {
     <input type="text" placeholder="Buscar por código, producto o familia..." style="flex:1; min-width:220px;" value="${acuerdoBusqueda}" oninput="acuerdoBusqueda=this.value; refrescarCompendioAcuerdo();">
     <select style="${sel}" onchange="acuerdoFiltro=this.value; refrescarCompendioAcuerdo();">
       ${[['todos', 'Todos'], ['pendientes', 'Con entrega solicitada'], ['agotados', 'Máximo alcanzado'], ['bajoMinimo', 'En stock mínimo'], ['sinPrecio', 'Sin precio']].map(([v, l]) => `<option value="${v}" ${acuerdoFiltro === v ? 'selected' : ''}>${l}</option>`).join('')}
-    </select></div></div>
+    </select>${puedeGestionarAcuerdo() ? `<button class="btn btn-primary btn-sm" onclick="modalAgregarProductosAcuerdo('${a.id}')">＋ Agregar / ampliar productos</button>` : ''}</div></div>
   <div id="compendioAcuerdoTabla">${tablaCompendioAcuerdo(a, filas)}</div>`;
 }
 function refrescarCompendioAcuerdo() {

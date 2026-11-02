@@ -536,7 +536,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.10.2";
+const APP_VERSION = "3.11.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -4667,6 +4667,7 @@ function modalRecepcionEntregaAcuerdo(aid, eid) {
           <td style="color:${f.pend > 0 ? 'var(--copper-dark)' : 'var(--ok)'}">${f.pend > 0 ? f.pend : '✔ completo'}</td>
           <td>${f.pend > 0 ? `<input type="number" min="0" step="1" id="acRec_${f.i}" value="0" data-pend="${f.pend}" data-precio="${Number(f.it.precio) || 0}" oninput="acRecTotal()" style="width:100px;">` : '<span class="hint">—</span>'}</td></tr>`).join('')}
       </table></div>
+      ${htmlAdelantoRecepcionAcuerdo(a, e)}
       <div class="small" id="acRecResumen" style="margin-top:8px;">Esta factura: 0 productos · $0</div>
       <label class="small flex-gap" style="margin-top:8px;"><input type="checkbox" id="acCerrarEntrega"> Es la última factura: cerrar la entrega aunque falten productos (lo que falte queda como saldo del acuerdo)</label>
     </div>
@@ -4676,10 +4677,26 @@ function modalRecepcionEntregaAcuerdo(aid, eid) {
     </div>`, 1180);
   const mo = document.querySelector("#modalRoot .modal"); if (mo) mo.style.maxHeight = "94vh";
 }
-function acRecFiltrar(v) { v = (v || "").trim().toLowerCase(); document.querySelectorAll("#acRecTabla tr[data-txt]").forEach(tr => { tr.style.display = (!v || tr.dataset.txt.includes(v)) ? "" : "none"; }); }
+function htmlAdelantoRecepcionAcuerdo(a, e) {
+  const filas = [];
+  a.entregas.forEach(oe => {
+    if (oe.id === e.id || oe.estado === "Recibida") return;
+    oe.lineas.forEach(l => { const pend = (Number(l.cantPlan) || 0) - (Number(l.cantRecibida) || 0); if (pend > 0) { const it = a.items.find(x => x.codigo === l.codigo) || {}; filas.push({ eid: oe.id, ent: oe.nombre, cod: l.codigo, desc: it.descripcion || '', pend, precio: Number(it.precio) || 0, tipo: 'Pedido pendiente' }); } });
+  });
+  a.items.forEach(it => { const sd = totalesItemAcuerdo(a, it).saldo; if (sd > 0) filas.push({ eid: "", ent: "Saldo del acuerdo (sin entrega)", cod: it.codigo, desc: it.descripcion, pend: sd, precio: Number(it.precio) || 0, tipo: 'Saldo' }); });
+  if (!filas.length) return '';
+  return `<details style="margin-top:10px;" id="acAdDet"><summary class="small" style="cursor:pointer;"><b>¿Llegó material adelantado, de otro pedido?</b> Se ingresa con esta misma factura y se descuenta del pedido donde estaba pendiente (sin crear otra entrega)</summary>
+    <p class="small muted" style="margin:6px 0;">Usa el buscador de arriba para encontrar el producto. «Pedido pendiente» descuenta de esa entrega; «Saldo del acuerdo» es material aún no pedido en ninguna entrega: se agrega a esta entrega y baja el saldo.</p>
+    <div class="table-wrap" style="max-height:260px; overflow:auto;"><table id="acAdTabla">
+    <tr><th>Viene de</th><th>Código</th><th>Producto</th><th>Pendiente</th><th>Llega ahora</th></tr>
+    ${filas.map((f, j) => `<tr data-txt="${escaparHtml((f.cod + ' ' + f.desc + ' ' + f.ent).toLowerCase())}"><td class="small">${escaparHtml(f.ent)}</td><td class="mono small">${escaparHtml(f.cod)}</td><td>${escaparHtml(f.desc)}</td><td>${f.pend}</td>
+      <td><input type="number" min="0" step="1" value="0" id="acAd_${j}" data-ad="1" data-eid="${f.eid}" data-cod="${escaparHtml(f.cod)}" data-pend="${f.pend}" data-precio="${f.precio}" oninput="acRecTotal()" style="width:100px;"></td></tr>`).join('')}
+    </table></div></details>`;
+}
+function acRecFiltrar(v) { v = (v || "").trim().toLowerCase(); document.querySelectorAll("#acRecTabla tr[data-txt], #acAdTabla tr[data-txt]").forEach(tr => { tr.style.display = (!v || tr.dataset.txt.includes(v)) ? "" : "none"; }); }
 function acRecPoner(modo) { document.querySelectorAll("#acRecTabla input[data-pend]").forEach(i => { i.value = modo === "pend" ? i.dataset.pend : 0; }); acRecTotal(); }
 function acRecTotal() {
-  let n = 0, tot = 0; document.querySelectorAll("#acRecTabla input[data-pend]").forEach(i => { const q = Number(i.value) || 0; if (q > 0) { n++; tot += q * (Number(i.dataset.precio) || 0); } });
+  let n = 0, tot = 0; document.querySelectorAll("#acRecTabla input[data-pend], #acAdTabla input[data-pend]").forEach(i => { const q = Number(i.value) || 0; if (q > 0) { n++; tot += q * (Number(i.dataset.precio) || 0); } });
   const el = document.getElementById("acRecResumen"); if (el) el.textContent = `Esta factura: ${n} producto(s) · ${money(tot)}`;
 }
 function ingresarBodegaGeneralDesdeAcuerdo(a, it, qty, yaRecibido, documento) {
@@ -4700,32 +4717,66 @@ function confirmarRecepcionAcuerdo(aid, eid) {
   const e = a.entregas.find(x => x.id === eid); if (!e || e.estado === "Recibida") return;
   const factura = (document.getElementById('acFactura').value || "").trim();
   if (!factura) { toast("Indica el N° de factura o guía.", "danger"); return; }
-  const recs = acEntregaRecs(e);
-  if (recs.some(r => String(r.factura).trim().toLowerCase() === factura.toLowerCase())) { toast(`La factura ${factura} ya fue ingresada en esta entrega.`, "danger"); return; }
+  const mismaFac = ent => acEntregaRecs(ent).some(r => String(r.factura).trim().toLowerCase() === factura.toLowerCase());
+  if (mismaFac(e)) { toast(`La factura ${factura} ya fue ingresada en esta entrega.`, "danger"); return; }
   const cantidades = e.lineas.map((l, i) => { const el = document.getElementById('acRec_' + i); return el ? Number(el.value) || 0 : 0; });
   if (cantidades.some(q => q < 0)) { toast("Revisa las cantidades recibidas.", "danger"); return; }
+  const ads = [...document.querySelectorAll('#acAdTabla input[data-ad]')].map(el => ({ eid: el.dataset.eid, cod: el.dataset.cod, q: Math.round(Number(el.value) || 0) })).filter(x => x.q !== 0);
+  if (ads.some(x => x.q < 0)) { toast("Revisa las cantidades del material adelantado.", "danger"); return; }
   const cerrar = !!(document.getElementById('acCerrarEntrega') || {}).checked;
-  if (!cantidades.some(q => q > 0) && !cerrar) { toast("Escribe al menos una cantidad que llegó en esta factura.", "danger"); return; }
+  if (!cantidades.some(q => q > 0) && !ads.length && !cerrar) { toast("Escribe al menos una cantidad que llegó en esta factura.", "danger"); return; }
+  const otras = {}; // entregas ajenas afectadas
+  for (const x of ads) if (x.eid) { const oe = a.entregas.find(y => y.id === x.eid); if (!oe) continue; if (mismaFac(oe)) { toast(`La factura ${factura} ya está ingresada en «${oe.nombre}»; no se puede repartir el adelanto ahí.`, "danger"); return; } otras[x.eid] = oe; }
   const fecha = document.getElementById('acFechaRec').value || hoyISO();
-  let ingresados = 0, total = 0; const lineasRec = [];
+  let ingresados = 0, total = 0; const lineasRec = []; const nota = [];
+  const recs = acEntregaRecs(e);
+  const sumar = (ent, l, it, q, docSufijo) => {
+    const ya = totalesItemAcuerdo(a, it).recibida;
+    l.cantRecibida = (Number(l.cantRecibida) || 0) + q;
+    ingresarBodegaGeneralDesdeAcuerdo(a, it, q, ya, `Factura ${factura} (${ent.nombre}${docSufijo || ''})`);
+    total += q * (Number(it.precio) || 0); ingresados++;
+  };
   e.lineas.forEach((l, i) => {
     const it = a.items.find(x => x.codigo === l.codigo); if (!it) return;
     const q = cantidades[i]; if (!(q > 0)) return;
-    const ya = totalesItemAcuerdo(a, it).recibida;
-    l.cantRecibida = (Number(l.cantRecibida) || 0) + q;
-    ingresarBodegaGeneralDesdeAcuerdo(a, it, q, ya, `Factura ${factura} (${e.nombre})`);
-    lineasRec.push({ codigo: l.codigo, cant: q }); total += q * (Number(it.precio) || 0); ingresados++;
+    sumar(e, l, it, q); lineasRec.push({ codigo: l.codigo, cant: q });
   });
-  if (lineasRec.length) recs.push({ id: "R" + (recs.length + 1) + "-" + Date.now().toString(36), factura, fecha, por: DB.usuario + " · " + DB.role, total, lineas: lineasRec });
-  const faltan = e.lineas.filter(l => (Number(l.cantRecibida) || 0) < (Number(l.cantPlan) || 0)).length;
-  e.factura = recs.map(r => r.factura).join(", "); e.fechaRecepcion = fecha;
-  if (faltan === 0 || cerrar) { e.estado = "Recibida"; e.cerradaConFaltante = faltan > 0; } else e.estado = "Parcial";
-  registrarHistorial({ proyecto: "General", accion: "Modificar", detalle: `Acuerdo ${a.nombre}: ${e.nombre} — factura ${factura}: ${ingresados} productos ingresados a Bodega General (${money(total)})${e.estado === "Recibida" ? (faltan ? `; entrega cerrada con ${faltan} producto(s) pendientes como saldo` : "; entrega completa") : `; entrega parcial, faltan ${faltan} producto(s)`}`, usuario: DB.usuario + " · " + DB.role, criticidad: "Media" });
+  // material adelantado
+  const porOtra = {};
+  ads.forEach(x => {
+    const it = a.items.find(y => y.codigo === x.cod); if (!it) return;
+    if (!x.eid) { // saldo del acuerdo: se agrega a esta entrega
+      let l = e.lineas.find(y => y.codigo === x.cod);
+      if (l) l.cantPlan = (Number(l.cantPlan) || 0) + x.q; else { l = { codigo: x.cod, cantPlan: x.q, cantRecibida: 0, adelantada: true }; e.lineas.push(l); }
+      sumar(e, l, it, x.q, " · del saldo del acuerdo");
+      const rl = lineasRec.find(y => y.codigo === x.cod); if (rl) rl.cant += x.q; else lineasRec.push({ codigo: x.cod, cant: x.q });
+      nota.push(`${x.cod} +${x.q} del saldo`);
+    } else {
+      const oe = otras[x.eid]; const l = oe && oe.lineas.find(y => y.codigo === x.cod); if (!l) return;
+      sumar(oe, l, it, x.q, ` · adelantada junto a ${e.nombre}`);
+      (porOtra[x.eid] = porOtra[x.eid] || []).push({ codigo: x.cod, cant: x.q });
+      nota.push(`${x.cod} +${x.q} descontado de «${oe.nombre}»`);
+    }
+  });
+  const estadoDe = (ent, cerrarEnt) => {
+    const f = ent.lineas.filter(l => (Number(l.cantRecibida) || 0) < (Number(l.cantPlan) || 0)).length;
+    ent.factura = acEntregaRecs(ent).map(r => r.factura).join(", "); ent.fechaRecepcion = fecha;
+    if (f === 0 || cerrarEnt) { ent.estado = "Recibida"; ent.cerradaConFaltante = f > 0; } else ent.estado = "Parcial";
+    return f;
+  };
+  Object.keys(porOtra).forEach(oid => {
+    const oe = otras[oid]; const orecs = acEntregaRecs(oe);
+    const tot = porOtra[oid].reduce((s2, x) => s2 + x.cant * (Number((a.items.find(i => i.codigo === x.codigo) || {}).precio) || 0), 0);
+    orecs.push({ id: "R" + (orecs.length + 1) + "-" + Date.now().toString(36), factura, fecha, por: DB.usuario + " · " + DB.role, total: tot, lineas: porOtra[oid], nota: `Llegó adelantado junto con ${e.nombre}` });
+    estadoDe(oe, false);
+  });
+  if (lineasRec.length) recs.push({ id: "R" + (recs.length + 1) + "-" + Date.now().toString(36), factura, fecha, por: DB.usuario + " · " + DB.role, total: lineasRec.reduce((s2, x) => s2 + x.cant * (Number((a.items.find(i => i.codigo === x.codigo) || {}).precio) || 0), 0), lineas: lineasRec });
+  const faltan = estadoDe(e, cerrar);
+  registrarHistorial({ proyecto: "General", accion: "Modificar", detalle: `Acuerdo ${a.nombre}: ${e.nombre} — factura ${factura}: ${ingresados} productos ingresados a Bodega General (${money(total)})${nota.length ? ' · adelantos: ' + nota.join('; ') : ''}${e.estado === "Recibida" ? (faltan ? `; entrega cerrada con ${faltan} producto(s) pendientes como saldo` : "; entrega completa") : `; entrega parcial, faltan ${faltan} producto(s)`}`, usuario: DB.usuario + " · " + DB.role, criticidad: "Media" });
   guardarEstado("Factura de acuerdo");
   closeModal(); renderAll();
-  toast(`Factura ${factura}: ${ingresados} productos ingresados (${money(total)}). ${e.estado === "Recibida" ? (faltan ? `Entrega cerrada; ${faltan} quedan como saldo.` : "Entrega completa ✔") : `La entrega sigue abierta: faltan ${faltan} producto(s).`}`, "ok");
+  toast(`Factura ${factura}: ${ingresados} productos ingresados (${money(total)}).${nota.length ? ` Adelantos: ${nota.length}.` : ''} ${e.estado === "Recibida" ? (faltan ? `Entrega cerrada; ${faltan} quedan como saldo.` : "Entrega completa ✔") : `La entrega sigue abierta: faltan ${faltan} producto(s).`}`, "ok");
 }
-/* ---------- Corregir / anular una factura ya ingresada ---------- */
 function modalCorregirFacturaAcuerdo(aid, eid, ri) {
   const a = (DB.acuerdos || []).find(x => x.id === aid); const e = a && a.entregas.find(x => x.id === eid); if (!e) return;
   if (!puedeGestionarAcuerdo()) { toast(`Tu rol (${DB.role}) no gestiona acuerdos.`, "danger"); return; }
@@ -5093,7 +5144,7 @@ function htmlEntregasAcuerdo(a) {
     const faltan = e.lineas.filter(l => (Number(l.cantRecibida) || 0) < (Number(l.cantPlan) || 0));
     const hayRec = recs.length > 0 || e.estado === "Parcial" || e.estado === "Recibida";
     const pct = plan ? Math.min(100, rec / plan * 100) : 0;
-    const facturas = recs.map((r, ri) => `<div class="small" style="padding:2px 0;">🧾 <b>Factura ${escaparHtml(r.factura)}</b> · ${r.fecha || '—'} · ${r.lineas.length} producto(s)${r.total ? ' · ' + money(r.total) : ''} ${puedeGestionarAcuerdo() ? `<button class="btn btn-sm" style="padding:1px 8px;" onclick="modalCorregirFacturaAcuerdo('${a.id}','${e.id}',${ri})">✏ Corregir</button>` : ''}</div>`).join('');
+    const facturas = recs.map((r, ri) => `<div class="small" style="padding:2px 0;">🧾 <b>Factura ${escaparHtml(r.factura)}</b> · ${r.fecha || '—'} · ${r.lineas.length} producto(s)${r.nota ? ' · <i>' + escaparHtml(r.nota) + '</i>' : ''}${r.total ? ' · ' + money(r.total) : ''} ${puedeGestionarAcuerdo() ? `<button class="btn btn-sm" style="padding:1px 8px;" onclick="modalCorregirFacturaAcuerdo('${a.id}','${e.id}',${ri})">✏ Corregir</button>` : ''}</div>`).join('');
     const detalleFalta = (e.estado !== 'Planificada' && faltan.length && hayRec) ? `<details style="margin-top:6px;"><summary class="small" style="cursor:pointer;">Falta por recibir: ${faltan.length} producto(s)</summary>
       <div class="table-wrap" style="max-height:260px; overflow:auto; margin-top:6px;"><table><tr><th>Código</th><th>Producto</th><th>Planificado</th><th>Recibido</th><th>Falta</th></tr>
       ${faltan.map(l => { const it = a.items.find(x => x.codigo === l.codigo) || {}; const r = Number(l.cantRecibida) || 0; return `<tr><td class="mono small">${l.codigo}</td><td>${it.descripcion || ''}</td><td>${l.cantPlan}</td><td>${r}</td><td style="color:var(--copper-dark)"><b>${l.cantPlan - r}</b></td></tr>`; }).join('')}</table></div></details>` : '';

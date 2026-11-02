@@ -536,7 +536,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.9.0";
+const APP_VERSION = "3.9.1";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -10938,7 +10938,8 @@ function renderFinSemana() {
    ===================================================================== */
 const TP_ROLES = ["Jefe de Taller","Jefe de Proyecto","Jefe de Producción","Jefe de Servicios Eléctricos","Gerencia"];
 function puedeGestionarTaller(){ return esAdministrador() || TP_ROLES.includes(DB.role); }
-const TP_HORAS_DIA = 9;
+const TP_HORAS_DIA = 9;   // tope de un día completo (lun-jue); el viernes sale más temprano: ver tpCap()
+function tpCap(d){ return psCapDia(psCfg(), d); }
 const TP_ARMADO = [   // [etapa, horas, quién (P principal / A ayudante / PA ambos), cuándo (despues / mismo = en paralelo)]
   ["Revisión de planos y lista de materiales",2,"P","despues",1],["Preparar material y herramientas",3,"A","mismo",1],
   ["Montaje de placa de montaje",8,"P","despues",0],["Perforación de gabinete / puerta",6,"A","mismo",0],
@@ -10973,7 +10974,7 @@ function tpCarga(plan){
 }
 function tpSobrecargas(plan){
   const {carga}=tpCarga(plan), out=[];
-  Object.keys(carga).forEach(pid=>Object.keys(carga[pid]).forEach(d=>{ if(carga[pid][d]>TP_HORAS_DIA+0.01) out.push({pid,d,h:carga[pid][d]}); }));
+  Object.keys(carga).forEach(pid=>Object.keys(carga[pid]).forEach(d=>{ if(carga[pid][d]>tpCap(d)+0.01) out.push({pid,d,h:carga[pid][d]}); }));
   return out;
 }
 function tpSincronizarGantt(plan){
@@ -11208,14 +11209,14 @@ function tpNombrePersona(pid){ const p=DB.personal.find(x=>x.id===pid); return p
 /* ¿Cabe la tarea con esas fechas, horas y personas? Devuelve los días en que alguien pasa de la jornada y el primer día donde sí cabe. */
 function tpCabe(plan,d){
   const carga=tpMapaCarga(plan.items.filter(i=>i.id!==d.id)); const dias=tpDias(d.ini,d.fin), h=(Number(d.horas)||0)/dias.length, prob=[];
-  (d.responsables||[]).forEach(pid=>dias.forEach(day=>{ const t=((carga[pid]||{})[day]||0)+h; if(t>TP_HORAS_DIA+0.01) prob.push({pid,day,t}); }));
-  let sug=""; if(prob.length && h<=TP_HORAS_DIA+0.01){ let s=tpSiguienteHabil(d.ini); for(let i=0;i<120;i++){ const ds=tpDiasN(s,dias.length); if(d.responsables.every(pid=>ds.every(day=>((carga[pid]||{})[day]||0)+h<=TP_HORAS_DIA+0.01))){ sug=s; break; } s=tpSiguienteHabil(sumarDias(s,1)); } }
+  (d.responsables||[]).forEach(pid=>dias.forEach(day=>{ const t=((carga[pid]||{})[day]||0)+h; if(t>tpCap(day)+0.01) prob.push({pid,day,t}); }));
+  let sug=""; if(prob.length && h<=TP_HORAS_DIA+0.01){ let s=tpSiguienteHabil(d.ini); for(let i=0;i<120;i++){ const ds=tpDiasN(s,dias.length); if(d.responsables.every(pid=>ds.every(day=>((carga[pid]||{})[day]||0)+h<=tpCap(day)+0.01))){ sug=s; break; } s=tpSiguienteHabil(sumarDias(s,1)); } }
   return { ok:!prob.length, prob, sug, h, n:dias.length };
 }
 function tpTxtCabe(r){
   if(!r.ok){ const p=r.prob[0]; const pers=[...new Set(r.prob.map(x=>tpNombrePersona(x.pid)))].join(", ");
     if(r.h>TP_HORAS_DIA+0.01) return {ok:false,html:`⚠ Son ${Math.round(r.h*10)/10} h por día para cada persona: supera la jornada de ${TP_HORAS_DIA} h. Alarga las fechas o reparte las horas.`};
-    return {ok:false,html:`⚠ No cabe esos días: <b>${escaparHtml(pers)}</b> quedaría con ${Math.round(p.t*10)/10} h el ${distDiaTxt(p.day)} (tope ${TP_HORAS_DIA} h). ${r.sug?`Primer día en que sí cabe: <b>${distDiaTxt(r.sug)}</b> <button class="btn btn-sm" onclick="tpUsarSug('${r.sug}')">Usar ese día</button>`:'No hay un día libre cercano.'}`}; }
+    return {ok:false,html:`⚠ No cabe esos días: <b>${escaparHtml(pers)}</b> quedaría con ${Math.round(p.t*10)/10} h el ${distDiaTxt(p.day)} (tope ${tpCap(p.day)} h). ${r.sug?`Primer día en que sí cabe: <b>${distDiaTxt(r.sug)}</b> <button class="btn btn-sm" onclick="tpUsarSug('${r.sug}')">Usar ese día</button>`:'No hay un día libre cercano.'}`}; }
   return {ok:true,html:`✔ Cabe: ${r.n>1?`${r.n} días`:'el día'} con ${Math.round(r.h*10)/10} h diarias por persona, dentro de las ${TP_HORAS_DIA} h.`};
 }
 function tpHtmlAncla(plan,it){
@@ -11280,7 +11281,7 @@ function tpPlanAjuste(plan){
     if(t.dep){ const g=its.filter(x=>x.key===t.dep); if(g.length){ const m=tpSumarHabiles(g.reduce((x,y)=>y.fin>x?y.fin:x,g[0].fin),1); if(m>req){ req=m; porVinculo="el tablero va después de «"+tpNombreKey(t.dep)+"»"; } } }
     let d=req, bloq0=[];
     if(h<=TP_HORAS_DIA+0.01){
-      for(let k=0;k<150;k++){ const ds=tpDiasN(d,n), bloq=[]; t.resp.forEach(pid=>ds.forEach(day=>{ if(((carga[pid]||{})[day]||0)+h>TP_HORAS_DIA+0.01 && !bloq.includes(pid)) bloq.push(pid); })); if(!bloq.length) break; if(!bloq0.length) bloq0=bloq; d=tpSiguienteHabil(sumarDias(d,1)); }
+      for(let k=0;k<150;k++){ const ds=tpDiasN(d,n), bloq=[]; t.resp.forEach(pid=>ds.forEach(day=>{ if(((carga[pid]||{})[day]||0)+h>tpCap(day)+0.01 && !bloq.includes(pid)) bloq.push(pid); })); if(!bloq.length) break; if(!bloq0.length) bloq0=bloq; d=tpSiguienteHabil(sumarDias(d,1)); }
     } else t.excede=true;
     const ds=tpDiasN(d,n); t.ini=d; t.fin=ds[n-1];
     if(d!==req && bloq0.length) t.razon=bloq0.map(tpNombrePersona).join(", ")+" ya tiene"+(bloq0.length>1?"n":"")+" la jornada completa ese día";
@@ -11434,7 +11435,7 @@ function tpGanttDatos(planes){
   const mapa={}, plOf=new Map();
   planes.forEach(pl=>{ const cont={}; pl.items.forEach(it=>{ if(!it.ini||!it.fin) return; const b=tpKey(it)+"##"+it.tarea; cont[b]=(cont[b]||0)+1; mapa[b+"##"+cont[b]]=it; plOf.set(it,pl); }); });
   const items=Object.values(mapa); if(!items.length) return null;
-  const cg=tpMapaCarga(items), sobreDe=it=>(it.responsables||[]).some(pid=>tpDias(it.ini,it.fin).some(d=>((cg[pid]||{})[d]||0)>TP_HORAS_DIA+0.01));
+  const cg=tpMapaCarga(items), sobreDe=it=>(it.responsables||[]).some(pid=>tpDias(it.ini,it.fin).some(d=>((cg[pid]||{})[d]||0)>tpCap(d)+0.01));
   const g={}, orden=[]; items.sort((a,b)=>a.ini.localeCompare(b.ini)).forEach(it=>{ const k=tpKey(it); if(!g[k]){ g[k]=[]; orden.push(k); } g[k].push(it); });
   const ini=items.reduce((m,i)=>i.ini<m?i.ini:m,items[0].ini); let fin=items.reduce((m,i)=>i.fin>m?i.fin:m,items[0].fin);
   let dias=tpDiasHabiles(ini,fin); if(dias.length>130) dias=dias.slice(0,130);
@@ -11740,7 +11741,7 @@ function tpModalEnviar(planId){
   const sob=tpSobrecargas(plan);
   openModal(`<div class="modal-head"><h3>Enviar programa por WhatsApp</h3><button class="close-x" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
-      ${sob.length?`<div class="mp-alerta" style="margin-bottom:10px;">⚠ Hay ${sob.length} día(s) con más de ${TP_HORAS_DIA} h asignadas a una persona. Puedes enviar igual, pero conviene ajustarlo antes.</div>`:''}
+      ${sob.length?`<div class="mp-alerta" style="margin-bottom:10px;">⚠ Hay ${sob.length} día(s) con más horas asignadas a una persona que su jornada (${TP_HORAS_DIA} h; viernes ${psCapDia(psCfg(),sumarDias(tpLunesDe(hoyISO()),4))} h). Puedes enviar igual, pero conviene ajustarlo antes.</div>`:''}
       <div class="hint" style="margin-bottom:10px;">Se abre WhatsApp con el mensaje escrito; tú pulsas Enviar. Cada persona recibe solo lo suyo.</div>
       ${personas.map(per=>{ const n=plan.items.filter(i=>i.responsables.includes(per.id)).length, tel=fsTelefonoWA(per.telefono), env=plan.enviados.includes(per.id);
         return `<div class="flex-between" style="padding:8px 0;border-top:1px solid var(--line-soft);gap:8px;flex-wrap:wrap;"><div><b>${escaparHtml(per.nombre)}</b> <span class="muted small">· ${n} trabajo(s)</span> ${env?'<span class="badge b-verde"><span class="dot"></span>Enviado</span>':''}${tel?'':'<div class="hint" style="color:var(--danger)">Sin teléfono: se abrirá WhatsApp para elegir el contacto.</div>'}</div>
@@ -11769,10 +11770,10 @@ function renderTallerPrograma(){
   const items=plan.items.slice().sort((a,b)=>a.ini.localeCompare(b.ini)||(a.tablero||"").localeCompare(b.tablero||""));
   const horas=items.reduce((a,i)=>a+tpHorasEf(i),0), listos=items.filter(i=>i.estado==="listo").length;
   const {columnas,carga,semanal}=tpCarga(plan), pids=Object.keys(carga), sob=tpSobrecargas(plan);
-  const grid=pids.length?`<div class="card" style="padding:12px;margin:12px 0;"><b>Carga por persona (horas ${semanal?'por semana':'por día'})</b> <span class="small muted">· rojo = algún día con más de ${TP_HORAS_DIA} h</span>
+  const grid=pids.length?`<div class="card" style="padding:12px;margin:12px 0;"><b>Carga por persona (horas ${semanal?'por semana':'por día'})</b> <span class="small muted">· rojo = algún día sobre su jornada (${TP_HORAS_DIA} h de lunes a jueves, ${psCapDia(psCfg(),sumarDias(tpLunesDe(hoyISO()),4))} h el viernes)</span>
     <div class="tbl-wrap"><table class="tbl" style="margin-top:6px;"><thead><tr><th>Persona</th>${columnas.map(c=>`<th style="text-align:center">${c.label}</th>`).join("")}<th style="text-align:center">Total</th></tr></thead><tbody>
     ${pids.map(pid=>{ const per=DB.personal.find(x=>x.id===pid); const tot=Object.values(carga[pid]).reduce((a,b)=>a+b,0);
-      return `<tr><td class="small"><b>${escaparHtml(per?per.nombre:"?")}</b></td>${columnas.map(c=>{ const h=c.dias.reduce((a,d)=>a+(carga[pid][d]||0),0), sobre=c.dias.some(d=>(carga[pid][d]||0)>TP_HORAS_DIA+0.01); return `<td style="text-align:center;${sobre?'background:rgba(220,60,60,.18);font-weight:700':''}">${h?Math.round(h*10)/10:'·'}</td>`; }).join("")}<td style="text-align:center"><b>${Math.round(tot*10)/10}</b></td></tr>`; }).join("")}
+      return `<tr><td class="small"><b>${escaparHtml(per?per.nombre:"?")}</b></td>${columnas.map(c=>{ const h=c.dias.reduce((a,d)=>a+(carga[pid][d]||0),0), sobre=c.dias.some(d=>(carga[pid][d]||0)>tpCap(d)+0.01); return `<td style="text-align:center;${sobre?'background:rgba(220,60,60,.18);font-weight:700':''}">${h?Math.round(h*10)/10:'·'}</td>`; }).join("")}<td style="text-align:center"><b>${Math.round(tot*10)/10}</b></td></tr>`; }).join("")}
     </tbody></table></div></div>`:'';
   const badgeEst={pendiente:'<span class="badge b-gris"><span class="dot"></span>Pendiente</span>',en_curso:'<span class="badge b-amarillo"><span class="dot"></span>En curso</span>',listo:'<span class="badge b-verde"><span class="dot"></span>Listo</span>',bloqueado:'<span class="badge b-rojo"><span class="dot"></span>Bloqueado</span>'};
   const grupos=tpGrupos(plan); tpGrupoKeys=grupos.map(g=>g.key);
@@ -12535,7 +12536,14 @@ function wmsDragFin() { _wmsDrag = null; document.removeEventListener("pointermo
 const PS_DIAS = ["Lunes","Martes","Miércoles","Jueves","Viernes"];
 let _ps = { lunes:"", texto:"Aseo e inventario" };
 function psPuede(){ return puedeGestionarTaller() || puedeGestionarAsignaciones(); }
-function psCfg(){ if(!DB.jornadaCfg || !DB.jornadaCfg.salida) DB.jornadaCfg = { inicio:"08:00", salida:"18:00" }; return DB.jornadaCfg; }
+function psCfg(){
+  let c=DB.jornadaCfg; if(!c || !c.salida) c=DB.jornadaCfg={ inicio:"08:30", salida:"18:00", salidaViernes:"15:00", colacion:30 };
+  if(!c.salidaViernes){ c.salidaViernes="15:00"; if(c.inicio==="08:00") c.inicio="08:30"; }
+  if(c.colacion===undefined || c.colacion===null) c.colacion=30; return c;
+}
+function psSalidaNormal(cfg,fecha){ return new Date(fecha+"T12:00:00Z").getUTCDay()===5 ? cfg.salidaViernes : cfg.salida; }
+function psCapDia(cfg,fecha){ return Math.max(0,(psHM(psSalidaNormal(cfg,fecha))-psHM(cfg.inicio)-(Number(cfg.colacion)||0))/60); }
+function psHorasSemana(cfg,lunes){ return [0,1,2,3,4].reduce((a,k)=>a+psCapDia(cfg,sumarDias(lunes,k)),0); }
 function psHM(s){ const p=String(s||"0:0").split(":"); return (Number(p[0])||0)*60+(Number(p[1])||0); }
 function psTxtHM(min){ min=Math.round(min/30)*30; const h=Math.floor(min/60)%24, m=((min%60)+60)%60; return String(h).padStart(2,"0")+":"+String(m).padStart(2,"0"); }
 function psLeer(lunes){ const w=(DB.planSemanal||{})[lunes]||{}; return { dias:w.dias||{}, personas:w.personas||{}, generales:exArr(w.generales) }; }
@@ -12559,12 +12567,12 @@ function psNombres(pids){
   return m;
 }
 function psJornada(w,cfg,pid,fecha,hTaller){
-  const norm=cfg.salida, o=(w.personas[pid]||{})[fecha];
+  const norm=psSalidaNormal(cfg,fecha), cap=psCapDia(cfg,fecha), o=(w.personas[pid]||{})[fecha];
   if(o && o.modo) return { modo:o.modo, salida:o.modo==="extra"?(o.salida||norm):norm, origen:"manual" };
   const d=w.dias[fecha];
   if(d && d.modo==="extra") return { modo:"extra", salida:d.salida||norm, origen:"dia" };
   if(d && d.modo==="normal") return { modo:"normal", salida:norm, origen:"dia" };
-  if(hTaller>TP_HORAS_DIA+0.01) return { modo:"extra", salida:psTxtHM(psHM(norm)+(hTaller-TP_HORAS_DIA)*60), origen:"auto" };
+  if(hTaller>cap+0.01) return { modo:"extra", salida:psTxtHM(psHM(norm)+(hTaller-cap)*60), origen:"auto" };
   return { modo:"normal", salida:norm, origen:"auto" };
 }
 function psModelo(lunes){
@@ -12590,7 +12598,7 @@ function psModelo(lunes){
   return { lunes, dias, activos, nom, cfg };
 }
 function psResumenJor(d,nom){
-  const norm=psCfg().salida;
+  const norm=psSalidaNormal(psCfg(),d.fecha);
   if(!d.gente.length) return { tipo:"vacio", txt:"Sin actividades", pdf:"Sin actividades", uniforme:true };
   const ex=d.gente.filter(p=>d.jor[p].modo==="extra");
   if(!ex.length) return { tipo:"normal", txt:`🕗 Horario normal · salida ${norm}`, pdf:`Horario normal - salida ${norm}`, uniforme:true };
@@ -12603,8 +12611,8 @@ function psResumenJor(d,nom){
   return { tipo:"extra", txt:`⏱ Horas extra: ${partes.join(" · ")}${todos?"":` · resto horario normal (salida ${norm})`}`, pdf:`HORAS EXTRA: ${partes.join(" / ")}${todos?"":` - resto salida ${norm}`}`, uniforme:false, multi:true };
 }
 function psHorasExtra(M){
-  const norm=psHM(M.cfg.salida), out={};
-  M.dias.forEach(d=>d.gente.forEach(pid=>{ const j=d.jor[pid]; if(j.modo!=="extra") return; const h=Math.max(0,(psHM(j.salida)-norm)/60); (out[pid]=out[pid]||{ dias:[], h:0 }); out[pid].dias.push(PS_DIAS[M.dias.indexOf(d)].slice(0,3)+" "+j.salida); out[pid].h+=h; }));
+  const out={};
+  M.dias.forEach(d=>d.gente.forEach(pid=>{ const j=d.jor[pid]; if(j.modo!=="extra") return; const norm=psHM(psSalidaNormal(M.cfg,d.fecha)); const h=Math.max(0,(psHM(j.salida)-norm)/60); (out[pid]=out[pid]||{ dias:[], h:0 }); out[pid].dias.push(PS_DIAS[M.dias.indexOf(d)].slice(0,3)+" "+j.salida); out[pid].h+=h; }));
   return Object.entries(out).map(([pid,v])=>({ pid, dias:v.dias, h:Math.round(v.h*10)/10 }));
 }
 function psTitulo(M){ return `Planificación semanal – semana ${distDiaTxt(M.lunes)} al ${distDiaTxt(M.dias[4].fecha)}`; }
@@ -12632,7 +12640,7 @@ function psHtml(M,opt){
   const th="border:1px solid #ddd;background:#f1ece6;padding:3px 6px;font-size:11px;text-align:left", td="border:1px solid #ddd;padding:3px 6px;font-size:12px";
   return `<div style="font-family:Arial,Helvetica,sans-serif;color:#222;font-size:13px;max-width:980px">
     <div style="font-size:17px;font-weight:bold">${escaparHtml(psTitulo(M))}</div>
-    <div style="margin:4px 0 8px;color:#555">${ps.length} proyecto(s) · ${M.activos.length} persona(s) · horario normal ${M.cfg.inicio}–${M.cfg.salida}</div>
+    <div style="margin:4px 0 8px;color:#555">${ps.length} proyecto(s) · ${M.activos.length} persona(s) · horario normal ${M.cfg.inicio}–${M.cfg.salida} (viernes hasta ${M.cfg.salidaViernes}) · ${Math.round(psHorasSemana(M.cfg,M.lunes)*10)/10} h semanales</div>
     <div style="margin-bottom:10px">${ps.map(p=>`<span style="display:inline-block;background:#faf3ea;border:1px solid #e3cdb2;border-radius:10px;padding:2px 8px;margin:0 4px 4px 0;font-size:11.5px"><b>${escaparHtml(psProy(p.pid))}</b> · ${p.n} pers.</span>`).join("")||'<span style="color:#888">Sin proyectos esta semana.</span>'}</div>
     <table style="border-collapse:collapse;width:100%;table-layout:fixed"><tr>${M.dias.map(celda).join("")}</tr></table>
     ${ex.length?`<div style="margin:12px 0 4px;font-weight:bold">Horas extra de la semana</div><table style="border-collapse:collapse"><tr><th style="${th}">Persona</th><th style="${th}">Días y hora de salida</th><th style="${th};text-align:right">Horas extra</th></tr>${ex.map(e=>`<tr><td style="${td}"><b>${escaparHtml(M.nom[e.pid])}</b></td><td style="${td}">${escaparHtml(e.dias.join(" · "))}</td><td style="${td};text-align:right">${e.h} h</td></tr>`).join("")}</table>`:""}
@@ -12651,17 +12659,18 @@ function psTexto(M){
 /* ---- Edición ---- */
 function psGuardar(){ guardarEstado(); psRender(); }
 function psSetCfg(campo,v){ if(!psPuede()||!/^\d\d:\d\d$/.test(v)) return; psCfg()[campo]=v; psGuardar(); }
+function psSetColacion(v){ if(!psPuede()) return; const n=Math.max(0,Math.min(120,Number(v)||0)); psCfg().colacion=n; psGuardar(); }
 function psSetDia(fecha,v){
   if(!psPuede()) return; const w=psEscribir(_ps.lunes);
   if(!v) delete w.dias[fecha]; else if(v==="normal") w.dias[fecha]={ modo:"normal" };
-  else w.dias[fecha]={ modo:"extra", salida:(w.dias[fecha]&&w.dias[fecha].salida)||psTxtHM(psHM(psCfg().salida)+120) };
+  else w.dias[fecha]={ modo:"extra", salida:(w.dias[fecha]&&w.dias[fecha].salida)||psTxtHM(psHM(psSalidaNormal(psCfg(),fecha))+120) };
   psGuardar();
 }
 function psSetDiaSalida(fecha,v){ if(!psPuede()||!/^\d\d:\d\d$/.test(v)) return; psEscribir(_ps.lunes).dias[fecha]={ modo:"extra", salida:v }; psGuardar(); }
 function psSetPers(pid,fecha,v){
   if(!psPuede()) return; const w=psEscribir(_ps.lunes); w.personas[pid]=w.personas[pid]||{};
   if(!v) delete w.personas[pid][fecha]; else if(v==="normal") w.personas[pid][fecha]={ modo:"normal" };
-  else { const M=psModelo(_ps.lunes), d=M.dias.find(x=>x.fecha===fecha), j=d&&d.jor[pid]; w.personas[pid][fecha]={ modo:"extra", salida:(j&&j.modo==="extra"&&j.salida)||psTxtHM(psHM(psCfg().salida)+120) }; }
+  else { const M=psModelo(_ps.lunes), d=M.dias.find(x=>x.fecha===fecha), j=d&&d.jor[pid]; w.personas[pid][fecha]={ modo:"extra", salida:(j&&j.modo==="extra"&&j.salida)||psTxtHM(psHM(psSalidaNormal(psCfg(),fecha))+120) }; }
   psGuardar();
 }
 function psSetSalida(pid,fecha,v){ if(!psPuede()||!/^\d\d:\d\d$/.test(v)) return; const w=psEscribir(_ps.lunes); w.personas[pid]=w.personas[pid]||{}; w.personas[pid][fecha]={ modo:"extra", salida:v }; psGuardar(); }
@@ -12695,11 +12704,14 @@ function psRender(){
       if(!proys.length&&!gens.length) return `<td style="background:#fff8e1;vertical-align:top"><span class="small" style="color:#7a5b00">sin actividad</span>${puede?`<div><button class="btn btn-sm" style="margin-top:3px" onclick="psAddGeneral('${pid}','${d.fecha}')">＋ ${escaparHtml(_ps.texto||"Aseo e inventario")}</button></div>`:""}</td>`;
       const j=d.jor[pid], o=(psLeer(_ps.lunes).personas[pid]||{})[d.fecha];
       return `<td style="vertical-align:top"><div class="small">${proys.map(p=>`<span style="display:inline-block;background:var(--copper-light);border-radius:6px;padding:1px 6px;margin:0 3px 3px 0;font-size:11px">${escaparHtml(psProy(p.pid).split(" · ")[0])}</span>`).join("")}${gens.map(g=>`<span style="display:inline-block;background:var(--ok-bg);border-radius:6px;padding:1px 6px;margin:0 3px 3px 0;font-size:11px">🧹 ${escaparHtml(g.texto)}${puede?` <a href="#" style="color:var(--danger);text-decoration:none" onclick="psQuitarGeneral('${d.fecha}','${pid}');return false;" title="Quitar">×</a>`:""}</span>`).join("")}</div>
-        <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">${modoSel(o?o.modo:"",`psSetPers('${pid}','${d.fecha}',this.value)`)}${j.modo==="extra"?`<input type="time" step="1800" style="${sel}width:92px" value="${j.salida}" ${puede?"":"disabled"} onchange="psSetSalida('${pid}','${d.fecha}',this.value)">`:`<span class="small muted">sale ${cfg.salida}</span>`}</div>${j.origen==="auto"&&j.modo==="extra"?`<div class="small" style="color:var(--warn)">auto: más de ${TP_HORAS_DIA} h de taller</div>`:""}</td>`; }).join("")}</tr>`).join("");
+        <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">${modoSel(o?o.modo:"",`psSetPers('${pid}','${d.fecha}',this.value)`)}${j.modo==="extra"?`<input type="time" step="1800" style="${sel}width:92px" value="${j.salida}" ${puede?"":"disabled"} onchange="psSetSalida('${pid}','${d.fecha}',this.value)">`:`<span class="small muted">sale ${psSalidaNormal(cfg,d.fecha)}</span>`}</div>${j.origen==="auto"&&j.modo==="extra"?`<div class="small" style="color:var(--warn)">auto: más de ${TP_HORAS_DIA} h de taller</div>`:""}</td>`; }).join("")}</tr>`).join("");
   box.innerHTML=`<div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin-bottom:10px">
       <div class="flex-gap"><button class="btn btn-sm" onclick="psCambiarSemana(-1)">◀</button><input type="date" value="${_ps.lunes}" onchange="psIrSemana(this.value)" style="width:auto"><button class="btn btn-sm" onclick="psCambiarSemana(1)">▶</button></div>
       <label class="small muted" style="display:flex;flex-direction:column;gap:3px">Horario normal: entrada<input type="time" value="${cfg.inicio}" ${puede?"":"disabled"} onchange="psSetCfg('inicio',this.value)" style="width:100px"></label>
       <label class="small muted" style="display:flex;flex-direction:column;gap:3px">salida<input type="time" value="${cfg.salida}" ${puede?"":"disabled"} onchange="psSetCfg('salida',this.value)" style="width:100px"></label>
+      <label class="small muted" style="display:flex;flex-direction:column;gap:3px">salida viernes<input type="time" value="${cfg.salidaViernes}" ${puede?"":"disabled"} onchange="psSetCfg('salidaViernes',this.value)" style="width:100px"></label>
+      <label class="small muted" style="display:flex;flex-direction:column;gap:3px">colación (min)<input type="number" min="0" step="5" value="${cfg.colacion}" ${puede?"":"disabled"} onchange="psSetColacion(this.value)" style="width:80px"></label>
+      <div class="small muted" style="align-self:center">Jornada: <b>${Math.round(psHorasSemana(cfg,M.lunes)*10)/10} h/sem</b></div>
       <label class="small muted" style="display:flex;flex-direction:column;gap:3px">Actividad de días libres<input type="text" value="${escaparHtml(_ps.texto)}" oninput="_ps.texto=this.value" style="width:190px"></label>
       ${puede?`<button class="btn btn-sm btn-primary" onclick="psCompletarLibres()" ${nLibres?"":"disabled"}>🧹 Completar ${nLibres||""} día(s) libre(s)</button>`:""}
       <span style="flex:1"></span>
@@ -12708,7 +12720,7 @@ function psRender(){
     ${nLibres?`<div class="mp-alerta" style="margin-bottom:10px">⚠ Hay ${nLibres} día(s) sin actividad (ej. ${escaparHtml(M.dias.find(d=>d.libres.length)?psFechaTxt(M.dias.find(d=>d.libres.length).fecha):"")}). Puedes completarlos con «${escaparHtml(_ps.texto||"Aseo e inventario")}» con un clic.</div>`:""}
     <div id="psPrev" style="border:1px solid var(--line);border-radius:8px;background:#fff;padding:12px;overflow:auto">${psHtml(M,{libres:true})}</div>
     <h4 style="margin:16px 0 6px">Jornada por persona y día</h4>
-    <div class="hint" style="margin-bottom:6px">«Auto» = horario normal, o horas extra si en el taller le caen más de ${TP_HORAS_DIA} h. Elige «Horas extra» y la hora de salida para fijarlo; la fila de arriba (cada día) aplica a todo el equipo.</div>
+    <div class="hint" style="margin-bottom:6px">«Auto» = horario normal, o horas extra si en el taller le caen más horas de las de su jornada (${TP_HORAS_DIA} h de lunes a jueves; viernes ${Math.round(psCapDia(cfg,M.dias[4].fecha)*10)/10} h). Elige «Horas extra» y la hora de salida para fijarlo; la fila de arriba (cada día) aplica a todo el equipo.</div>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Persona</th>${cabDia}</tr></thead><tbody>${filas||`<tr><td colspan="6" class="muted">No hay personas con actividades esta semana.</td></tr>`}</tbody></table></div>`;
 }
 async function psCopiar(silencioso){
@@ -12732,7 +12744,7 @@ async function psPdf(){
   const M=psModelo(_ps.lunes), nom=M.nom, { jsPDF }=window.jspdf, doc=new jsPDF({ orientation:"landscape", unit:"mm", format:"a4" });
   tpPdfLogo(doc,297,10,6); doc.setFontSize(15); doc.setFont(undefined,"bold"); doc.text("ALUTIPO — Planificación semanal",14,15);
   const ps=psProyectosSemana(M); doc.setFontSize(10); doc.setFont(undefined,"normal");
-  doc.text(`Semana ${distDiaTxt(M.lunes)} al ${distDiaTxt(M.dias[4].fecha)} · ${ps.length} proyecto(s) · ${M.activos.length} persona(s) · horario normal ${M.cfg.inicio}-${M.cfg.salida} · Emitido ${hoyISO()}`,14,21);
+  doc.text(`Semana ${distDiaTxt(M.lunes)} al ${distDiaTxt(M.dias[4].fecha)} · ${ps.length} proyecto(s) · ${M.activos.length} persona(s) · horario normal ${M.cfg.inicio}-${M.cfg.salida} (viernes ${M.cfg.salidaViernes}) · Emitido ${hoyISO()}`,14,21);
   const resumen=ps.map(p=>`${psProy(p.pid)} (${p.n})`).join("  |  "); doc.setFontSize(8.5); doc.text(doc.splitTextToSize("Proyectos: "+(resumen||"—"),270),14,26);
   const R=M.dias.map(d=>psResumenJor(d,nom));
   const cuerpo=M.dias.map((d,i)=>{ const suf=p=>(R[i].multi&&d.jor[p].modo==="extra")?` (${d.jor[p].salida})`:"", nj=l=>l.map(p=>nom[p]+suf(p)).join(", "), lin=[];

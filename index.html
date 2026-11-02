@@ -536,7 +536,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.10.1";
+const APP_VERSION = "3.10.2";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -4725,6 +4725,90 @@ function confirmarRecepcionAcuerdo(aid, eid) {
   closeModal(); renderAll();
   toast(`Factura ${factura}: ${ingresados} productos ingresados (${money(total)}). ${e.estado === "Recibida" ? (faltan ? `Entrega cerrada; ${faltan} quedan como saldo.` : "Entrega completa ✔") : `La entrega sigue abierta: faltan ${faltan} producto(s).`}`, "ok");
 }
+/* ---------- Corregir / anular una factura ya ingresada ---------- */
+function modalCorregirFacturaAcuerdo(aid, eid, ri) {
+  const a = (DB.acuerdos || []).find(x => x.id === aid); const e = a && a.entregas.find(x => x.id === eid); if (!e) return;
+  if (!puedeGestionarAcuerdo()) { toast(`Tu rol (${DB.role}) no gestiona acuerdos.`, "danger"); return; }
+  const recs = acEntregaRecs(e); const r = recs[ri]; if (!r) return;
+  const enFac = {}; r.lineas.forEach(x => { enFac[x.codigo] = Number(x.cant) || 0; });
+  const lineas = e.lineas.map(l => ({ l, q: enFac[l.codigo] || 0 }));
+  lineas.sort((x, y) => (y.q > 0) - (x.q > 0));
+  openModal(`
+    <div class="modal-head"><h3>Corregir factura ${escaparHtml(r.factura)}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <p class="small muted">${escaparHtml(e.nombre)}. Cambia las cantidades que realmente llegaron con esta factura: la <strong>Bodega General se corrige sola</strong> con la diferencia y queda registrada en el historial de movimientos.</p>
+      <div class="flex-gap" style="flex-wrap:wrap;">
+        <div style="flex:1; min-width:200px;"><label class="field-label">N° factura / guía</label><input type="text" id="acFixFactura" value="${escaparHtml(r.factura)}"></div>
+        <div style="flex:1; min-width:160px;"><label class="field-label">Fecha</label><input type="date" id="acFixFecha" value="${r.fecha || ''}"></div></div>
+      <div class="table-wrap" style="max-height:52vh; overflow:auto; margin-top:10px;"><table>
+        <tr><th>Código</th><th>Producto</th><th>Planificado</th><th>En otras facturas</th><th style="width:130px">En ESTA factura</th></tr>
+        ${lineas.map(({ l, q }, i) => { const it = a.items.find(x => x.codigo === l.codigo) || {}; const otras = (Number(l.cantRecibida) || 0) - q;
+          return `<tr><td class="mono small">${escaparHtml(l.codigo)}</td><td>${escaparHtml(it.descripcion || '')}</td><td>${l.cantPlan}</td><td>${otras}</td>
+          <td><input type="number" min="0" id="acFix_${i}" data-cod="${escaparHtml(l.codigo)}" data-orig="${q}" value="${q}" style="width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:7px;${q ? ' background:#fff8e6;' : ''}"></td></tr>`; }).join('')}
+      </table></div>
+    </div>
+    <div class="modal-foot" style="justify-content:space-between;">
+      <button class="btn" style="color:var(--red,#b3261e)" onclick="anularFacturaAcuerdo('${aid}','${eid}',${ri})">🗑 Anular esta factura</button>
+      <span><button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="guardarCorreccionFacturaAcuerdo('${aid}','${eid}',${ri})">Guardar corrección</button></span></div>`, 1000);
+}
+function acAplicarFactura(a, e, ri, nuevas, factura, fecha, anular) {
+  const recs = acEntregaRecs(e); const r = recs[ri];
+  // 1) diferencias y validación de stock
+  const dif = [];
+  const codigos = new Set([...r.lineas.map(x => x.codigo), ...Object.keys(nuevas)]);
+  for (const cod of codigos) {
+    const antes = (r.lineas.find(x => x.codigo === cod) || {}).cant || 0, ahora = nuevas[cod] || 0, d = ahora - antes;
+    if (!d) continue;
+    const it = a.items.find(x => x.codigo === cod); const b = buscarBodegaGeneralPorCodigo(cod);
+    if (d < 0 && (!b || (Number(b.stock) || 0) + d < 0)) {
+      toast(`No se puede bajar ${cod} en ${-d}: en Bodega General hay solo ${b ? b.stock : 0} (parte ya se entregó o consumió). Ajusta primero el stock en Bodega.`, "danger"); return false;
+    }
+    dif.push({ cod, d, it, b });
+  }
+  const doc = `${anular ? 'Anulación' : 'Corrección'} factura ${factura} (${e.nombre})`;
+  dif.forEach(({ cod, d, it, b }) => {
+    const l = e.lineas.find(x => x.codigo === cod);
+    if (l) l.cantRecibida = Math.max(0, (Number(l.cantRecibida) || 0) + d);
+    if (d > 0) { if (it) ingresarBodegaGeneralDesdeAcuerdo(a, it, d, 1, doc); }
+    else if (b) {
+      b.stock = (Number(b.stock) || 0) + d; const cu = Number(b.precioUnitario) || Number(it && it.precio) || 0;
+      registrarMovimientoBodega({ tipo: "Corrección de factura de acuerdo", signo: -1, codigo: cod, material: b.material, unidad: b.unidad || "", cantidad: -d, costoUnitario: cu, total: -d * cu, documento: doc, acuerdoId: a.id, origenTipo: "Proveedor", origenDetalle: a.proveedor || "", estadoInforme: "No aplica" });
+    }
+  });
+  // 2) actualizar / quitar la recepción
+  const lineasNuevas = Object.keys(nuevas).filter(c => nuevas[c] > 0).map(c => ({ codigo: c, cant: nuevas[c] }));
+  if (anular || !lineasNuevas.length) recs.splice(ri, 1);
+  else { r.factura = factura; r.fecha = fecha || r.fecha; r.lineas = lineasNuevas; r.total = lineasNuevas.reduce((s, x) => s + x.cant * (Number((a.items.find(i => i.codigo === x.codigo) || {}).precio) || 0), 0); }
+  e.factura = recs.map(x => x.factura).join(", ");
+  // 3) estado de la entrega
+  const faltan = e.lineas.filter(l => (Number(l.cantRecibida) || 0) < (Number(l.cantPlan) || 0)).length;
+  if (!recs.length && e.estado !== "Planificada") { e.estado = e.fechaSolicitud ? "Solicitada" : "Planificada"; e.cerradaConFaltante = false; e.fechaRecepcion = ""; }
+  else if (e.estado === "Recibida" && faltan > 0 && !e.cerradaConFaltante) e.estado = "Parcial";
+  else if (e.estado === "Parcial" && faltan === 0) e.estado = "Recibida";
+  registrarHistorial({ proyecto: "General", accion: "Modificar", detalle: `Acuerdo ${a.nombre}: ${doc} — ${dif.length ? dif.map(x => `${x.cod} ${x.d > 0 ? '+' : ''}${x.d}`).join(', ') : 'sin cambios de cantidad'}`, usuario: DB.usuario + " · " + DB.role, criticidad: "Media" });
+  guardarEstado(anular ? "Factura anulada" : "Factura corregida"); closeModal(); renderAll();
+  toast(anular ? `Factura ${factura} anulada; Bodega General corregida.` : `Factura ${factura} corregida (${dif.length} producto(s) ajustados).`, "ok");
+  return true;
+}
+function guardarCorreccionFacturaAcuerdo(aid, eid, ri) {
+  const a = (DB.acuerdos || []).find(x => x.id === aid); const e = a && a.entregas.find(x => x.id === eid); if (!e) return;
+  const recs = acEntregaRecs(e); if (!recs[ri]) return;
+  const factura = (document.getElementById('acFixFactura').value || "").trim();
+  if (!factura) { toast("Indica el N° de factura.", "danger"); return; }
+  if (recs.some((x, i) => i !== ri && String(x.factura).trim().toLowerCase() === factura.toLowerCase())) { toast(`Ya existe otra factura ${factura} en esta entrega.`, "danger"); return; }
+  const nuevas = {};
+  document.querySelectorAll('#modal input[data-cod], .modal input[data-cod]').forEach(el => { const q = Math.round(Number(el.value)); if (isNaN(q) || q < 0) nuevas.__mal = 1; else if (q > 0) nuevas[el.dataset.cod] = q; });
+  if (nuevas.__mal) { toast("Revisa las cantidades (no pueden ser negativas).", "danger"); return; }
+  if (!Object.keys(nuevas).length) { toast("Todas las cantidades están en 0: usa «Anular esta factura» si quieres eliminarla.", "danger"); return; }
+  acAplicarFactura(a, e, ri, nuevas, factura, document.getElementById('acFixFecha').value, false);
+}
+function anularFacturaAcuerdo(aid, eid, ri) {
+  const a = (DB.acuerdos || []).find(x => x.id === aid); const e = a && a.entregas.find(x => x.id === eid); if (!e) return;
+  const r = acEntregaRecs(e)[ri]; if (!r) return;
+  if (!confirm(`¿Anular la factura ${r.factura}? Se descontarán de Bodega General las cantidades que ingresó y la entrega volverá a mostrar esas cantidades como pendientes.`)) return;
+  acAplicarFactura(a, e, ri, {}, r.factura, r.fecha, true);
+}
 function reabrirEntregaAcuerdo(aid, eid) {
   const a = (DB.acuerdos || []).find(x => x.id === aid); if (!a) return;
   const e = a.entregas.find(x => x.id === eid); if (!e || e.estado !== "Recibida") return;
@@ -5009,7 +5093,7 @@ function htmlEntregasAcuerdo(a) {
     const faltan = e.lineas.filter(l => (Number(l.cantRecibida) || 0) < (Number(l.cantPlan) || 0));
     const hayRec = recs.length > 0 || e.estado === "Parcial" || e.estado === "Recibida";
     const pct = plan ? Math.min(100, rec / plan * 100) : 0;
-    const facturas = recs.map(r => `<div class="small" style="padding:2px 0;">🧾 <b>Factura ${escaparHtml(r.factura)}</b> · ${r.fecha || '—'} · ${r.lineas.length} producto(s)${r.total ? ' · ' + money(r.total) : ''}</div>`).join('');
+    const facturas = recs.map((r, ri) => `<div class="small" style="padding:2px 0;">🧾 <b>Factura ${escaparHtml(r.factura)}</b> · ${r.fecha || '—'} · ${r.lineas.length} producto(s)${r.total ? ' · ' + money(r.total) : ''} ${puedeGestionarAcuerdo() ? `<button class="btn btn-sm" style="padding:1px 8px;" onclick="modalCorregirFacturaAcuerdo('${a.id}','${e.id}',${ri})">✏ Corregir</button>` : ''}</div>`).join('');
     const detalleFalta = (e.estado !== 'Planificada' && faltan.length && hayRec) ? `<details style="margin-top:6px;"><summary class="small" style="cursor:pointer;">Falta por recibir: ${faltan.length} producto(s)</summary>
       <div class="table-wrap" style="max-height:260px; overflow:auto; margin-top:6px;"><table><tr><th>Código</th><th>Producto</th><th>Planificado</th><th>Recibido</th><th>Falta</th></tr>
       ${faltan.map(l => { const it = a.items.find(x => x.codigo === l.codigo) || {}; const r = Number(l.cantRecibida) || 0; return `<tr><td class="mono small">${l.codigo}</td><td>${it.descripcion || ''}</td><td>${l.cantPlan}</td><td>${r}</td><td style="color:var(--copper-dark)"><b>${l.cantPlan - r}</b></td></tr>`; }).join('')}</table></div></details>` : '';

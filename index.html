@@ -536,7 +536,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.9.2";
+const APP_VERSION = "3.10.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -4500,8 +4500,9 @@ function totalesItemAcuerdo(a, it) {
   let pendiente = 0, recibida = 0;
   (a.entregas || []).forEach(e => (e.lineas || []).forEach(l => {
     if (l.codigo !== it.codigo) return;
-    if (e.estado === "Recibida") recibida += Number(l.cantRecibida) || 0;
-    else if (e.estado === "Solicitada") pendiente += Number(l.cantPlan) || 0;
+    const rec = Number(l.cantRecibida) || 0;
+    recibida += rec;
+    if (e.estado === "Solicitada" || e.estado === "Parcial") pendiente += Math.max(0, (Number(l.cantPlan) || 0) - rec);
   }));
   const acordada = Number(it.cantAcordada) || 0;
   return { pendiente, recibida, comprometida: pendiente + recibida, saldo: Math.max(0, acordada - pendiente - recibida), acordada };
@@ -4627,30 +4628,59 @@ async function exportarPedidoEntregaExcel(aid, eid) {
   XLSX.utils.book_append_sheet(wb, hoja, e.id);
   XLSX.writeFile(wb, `Pedido_${a.proveedor}_${e.id}_${hoyISO()}.xlsx`);
 }
+/* Facturas de una entrega: una entrega puede recibirse en varias facturas.
+   e.recepciones = [{id, factura, fecha, por, total, lineas:[{codigo, cant}]}];
+   l.cantRecibida es el acumulado. Estados: Planificada → Solicitada → Parcial → Recibida. */
+function acEntregaRecs(e) {
+  e.recepciones = exArr(e.recepciones);
+  if (!e.recepciones.length && e.estado === "Recibida" && e.factura) {
+    e.recepciones = [{ id: "R0", factura: e.factura, fecha: e.fechaRecepcion || "", por: "", total: 0,
+      lineas: (e.lineas || []).filter(l => Number(l.cantRecibida) > 0).map(l => ({ codigo: l.codigo, cant: Number(l.cantRecibida) })) }];
+  }
+  e.recepciones.forEach(r => { r.lineas = exArr(r.lineas); });
+  return e.recepciones;
+}
 function modalRecepcionEntregaAcuerdo(aid, eid) {
   const a = (DB.acuerdos || []).find(x => x.id === aid); if (!a) return;
   const e = a.entregas.find(x => x.id === eid); if (!e) return;
   if (!puedeGestionarAcuerdo()) { toast(`Tu rol (${DB.role}) no gestiona acuerdos.`, "danger"); return; }
+  const recs = acEntregaRecs(e);
+  const filas = e.lineas.map((l, i) => { const it = a.items.find(x => x.codigo === l.codigo) || {}; const rec = Number(l.cantRecibida) || 0; return { l, i, it, rec, pend: Math.max(0, (Number(l.cantPlan) || 0) - rec) }; });
+  const completas = filas.filter(f => f.pend <= 0).length;
+  const th = 'style="position:sticky;top:0;background:#eef1f4;z-index:1"';
   openModal(`
-    <div class="modal-head"><h3>Registrar recepción — ${e.nombre}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>Registrar factura — ${e.nombre}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
-      <p class="small muted">${a.proveedor} · lo que recibas entra a la <strong>Bodega General</strong> con el precio acordado. Cambia la cantidad si llegó menos (o nada) de algún producto.</p>
-      <div class="flex-gap" style="margin:8px 0;">
-        <div style="flex:1"><label class="field-label">N° de factura / guía *</label><input type="text" id="acFactura" placeholder="Ej: 12345"></div>
-        <div style="flex:1"><label class="field-label">Fecha de recepción</label><input type="date" id="acFechaRec" value="${hoyISO()}"></div>
+      <p class="small muted">${a.proveedor} · lo que llegó en esta factura entra a la <strong>Bodega General</strong> con el precio acordado. Una entrega puede tener <strong>varias facturas</strong>: escribe solo lo que llegó en ésta; lo demás queda pendiente y la entrega sigue abierta.</p>
+      ${recs.length ? `<div class="ai-note" style="margin:8px 0;">Facturas ya ingresadas en esta entrega (${recs.length}): ${recs.map(r => `<b>N° ${escaparHtml(r.factura)}</b> (${r.fecha || '—'})`).join(' · ')} · productos completos: ${completas} de ${filas.length}</div>` : ''}
+      <div class="flex-gap" style="margin:8px 0; align-items:flex-end; flex-wrap:wrap;">
+        <div style="flex:1; min-width:200px"><label class="field-label">N° de factura / guía *</label><input type="text" id="acFactura" placeholder="Ej: 12345"></div>
+        <div><label class="field-label">Fecha de recepción</label><input type="date" id="acFechaRec" value="${hoyISO()}"></div>
+        <div style="flex:1; min-width:180px"><label class="field-label">Buscar producto</label><input type="text" placeholder="código o nombre…" oninput="acRecFiltrar(this.value)"></div>
+        <button class="btn btn-sm" type="button" onclick="acRecPoner('pend')" title="Llegó todo lo que faltaba">Llegó todo lo pendiente</button>
+        <button class="btn btn-sm" type="button" onclick="acRecPoner('cero')">Poner todo en 0</button>
       </div>
-      <div class="table-wrap" style="max-height:max(360px, calc(90vh - 330px)); overflow:auto;"><table>
-        <tr><th style="position:sticky;top:0;background:#eef1f4;z-index:1">Código</th><th style="position:sticky;top:0;background:#eef1f4;z-index:1">Producto</th><th style="position:sticky;top:0;background:#eef1f4;z-index:1">Planificado</th><th style="position:sticky;top:0;background:#eef1f4;z-index:1">Llegó</th></tr>
-        ${e.lineas.map((l, i) => { const it = a.items.find(x => x.codigo === l.codigo) || {}; return `<tr>
-          <td class="mono small">${l.codigo}</td><td>${it.descripcion || ''}</td><td>${l.cantPlan}</td>
-          <td><input type="number" min="0" step="1" id="acRec_${i}" value="${l.cantPlan}" style="width:90px;"></td></tr>`; }).join('')}
+      <div class="table-wrap" style="max-height:max(340px, calc(90vh - 400px)); overflow:auto;"><table id="acRecTabla">
+        <tr><th ${th}>Código</th><th ${th}>Producto</th><th ${th}>Planificado</th><th ${th}>Ya recibido</th><th ${th}>Pendiente</th><th ${th}>Llega con esta factura</th></tr>
+        ${filas.map(f => `<tr data-txt="${escaparHtml(((f.l.codigo || '') + ' ' + (f.it.descripcion || '')).toLowerCase())}">
+          <td class="mono small">${f.l.codigo}</td><td>${f.it.descripcion || ''}</td><td>${f.l.cantPlan}</td><td>${f.rec || '—'}</td>
+          <td style="color:${f.pend > 0 ? 'var(--copper-dark)' : 'var(--ok)'}">${f.pend > 0 ? f.pend : '✔ completo'}</td>
+          <td>${f.pend > 0 ? `<input type="number" min="0" step="1" id="acRec_${f.i}" value="0" data-pend="${f.pend}" data-precio="${Number(f.it.precio) || 0}" oninput="acRecTotal()" style="width:100px;">` : '<span class="hint">—</span>'}</td></tr>`).join('')}
       </table></div>
+      <div class="small" id="acRecResumen" style="margin-top:8px;">Esta factura: 0 productos · $0</div>
+      <label class="small flex-gap" style="margin-top:8px;"><input type="checkbox" id="acCerrarEntrega"> Es la última factura: cerrar la entrega aunque falten productos (lo que falte queda como saldo del acuerdo)</label>
     </div>
     <div class="modal-foot">
       <button class="btn" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-primary" onclick="confirmarRecepcionAcuerdo('${aid}','${eid}')">Ingresar a Bodega General</button>
+      <button class="btn btn-primary" onclick="confirmarRecepcionAcuerdo('${aid}','${eid}')">Ingresar factura a Bodega General</button>
     </div>`, 1180);
-  const mo=document.querySelector("#modalRoot .modal"); if(mo) mo.style.maxHeight="94vh";
+  const mo = document.querySelector("#modalRoot .modal"); if (mo) mo.style.maxHeight = "94vh";
+}
+function acRecFiltrar(v) { v = (v || "").trim().toLowerCase(); document.querySelectorAll("#acRecTabla tr[data-txt]").forEach(tr => { tr.style.display = (!v || tr.dataset.txt.includes(v)) ? "" : "none"; }); }
+function acRecPoner(modo) { document.querySelectorAll("#acRecTabla input[data-pend]").forEach(i => { i.value = modo === "pend" ? i.dataset.pend : 0; }); acRecTotal(); }
+function acRecTotal() {
+  let n = 0, tot = 0; document.querySelectorAll("#acRecTabla input[data-pend]").forEach(i => { const q = Number(i.value) || 0; if (q > 0) { n++; tot += q * (Number(i.dataset.precio) || 0); } });
+  const el = document.getElementById("acRecResumen"); if (el) el.textContent = `Esta factura: ${n} producto(s) · ${money(tot)}`;
 }
 function ingresarBodegaGeneralDesdeAcuerdo(a, it, qty, yaRecibido, documento) {
   let b = buscarBodegaGeneralPorCodigo(it.codigo);
@@ -4662,30 +4692,49 @@ function ingresarBodegaGeneralDesdeAcuerdo(a, it, qty, yaRecibido, documento) {
   b.acuerdoId = a.id; b.marca = a.marca || "";
   // Stock mínimo: % de lo que realmente llegó en la PRIMERA entrega del producto.
   if (yaRecibido === 0 && !Number(b.minimo)) b.minimo = Math.max(1, Math.ceil(qty * (Number(a.minimoPct) || 25) / 100));
-  registrarMovimientoBodega({ tipo:"Ingreso por acuerdo", signo:1, codigo:it.codigo, material:it.descripcion, unidad:it.unidad||"", cantidad:qty, costoUnitario:precio, total:qty*precio, documento: documento||"", acuerdoId:a.id, estadoInforme:"No aplica" });
+  registrarMovimientoBodega({ tipo:"Ingreso por acuerdo", signo:1, codigo:it.codigo, material:it.descripcion, unidad:it.unidad||"", cantidad:qty, costoUnitario:precio, total:qty*precio, documento: documento||"", acuerdoId:a.id, origenTipo:"Proveedor", origenDetalle:a.proveedor||"", ubicDestino:"Por ubicar", estadoInforme:"No aplica" });
   return b;
 }
 function confirmarRecepcionAcuerdo(aid, eid) {
   const a = (DB.acuerdos || []).find(x => x.id === aid); if (!a) return;
   const e = a.entregas.find(x => x.id === eid); if (!e || e.estado === "Recibida") return;
   const factura = (document.getElementById('acFactura').value || "").trim();
-  if (!factura) { toast("Indica el N° de factura o guía de la entrega.", "danger"); return; }
-  const cantidades = e.lineas.map((l, i) => Number(document.getElementById('acRec_' + i).value));
-  if (cantidades.some(q => isNaN(q) || q < 0)) { toast("Revisa las cantidades recibidas.", "danger"); return; }
-  let ingresados = 0, faltantes = 0;
+  if (!factura) { toast("Indica el N° de factura o guía.", "danger"); return; }
+  const recs = acEntregaRecs(e);
+  if (recs.some(r => String(r.factura).trim().toLowerCase() === factura.toLowerCase())) { toast(`La factura ${factura} ya fue ingresada en esta entrega.`, "danger"); return; }
+  const cantidades = e.lineas.map((l, i) => { const el = document.getElementById('acRec_' + i); return el ? Number(el.value) || 0 : 0; });
+  if (cantidades.some(q => q < 0)) { toast("Revisa las cantidades recibidas.", "danger"); return; }
+  const cerrar = !!(document.getElementById('acCerrarEntrega') || {}).checked;
+  if (!cantidades.some(q => q > 0) && !cerrar) { toast("Escribe al menos una cantidad que llegó en esta factura.", "danger"); return; }
+  const fecha = document.getElementById('acFechaRec').value || hoyISO();
+  let ingresados = 0, total = 0; const lineasRec = [];
   e.lineas.forEach((l, i) => {
     const it = a.items.find(x => x.codigo === l.codigo); if (!it) return;
-    const q = cantidades[i];
+    const q = cantidades[i]; if (!(q > 0)) return;
     const ya = totalesItemAcuerdo(a, it).recibida;
-    l.cantRecibida = q;
-    if (q > 0) { ingresarBodegaGeneralDesdeAcuerdo(a, it, q, ya, `Factura ${factura} (${e.nombre})`); ingresados++; }
-    if (q < l.cantPlan) faltantes++;
+    l.cantRecibida = (Number(l.cantRecibida) || 0) + q;
+    ingresarBodegaGeneralDesdeAcuerdo(a, it, q, ya, `Factura ${factura} (${e.nombre})`);
+    lineasRec.push({ codigo: l.codigo, cant: q }); total += q * (Number(it.precio) || 0); ingresados++;
   });
-  e.estado = "Recibida"; e.factura = factura; e.fechaRecepcion = document.getElementById('acFechaRec').value || hoyISO();
-  registrarHistorial({ proyecto: "General", accion: "Modificar", detalle: `Acuerdo ${a.nombre}: ${e.nombre} recibida (factura ${factura}) — ${ingresados} productos ingresados a Bodega General${faltantes ? `, ${faltantes} con diferencia` : ''}`, usuario: DB.usuario + " · " + DB.role, criticidad: "Media" });
-  guardarEstado("Recepción de acuerdo");
+  if (lineasRec.length) recs.push({ id: "R" + (recs.length + 1) + "-" + Date.now().toString(36), factura, fecha, por: DB.usuario + " · " + DB.role, total, lineas: lineasRec });
+  const faltan = e.lineas.filter(l => (Number(l.cantRecibida) || 0) < (Number(l.cantPlan) || 0)).length;
+  e.factura = recs.map(r => r.factura).join(", "); e.fechaRecepcion = fecha;
+  if (faltan === 0 || cerrar) { e.estado = "Recibida"; e.cerradaConFaltante = faltan > 0; } else e.estado = "Parcial";
+  registrarHistorial({ proyecto: "General", accion: "Modificar", detalle: `Acuerdo ${a.nombre}: ${e.nombre} — factura ${factura}: ${ingresados} productos ingresados a Bodega General (${money(total)})${e.estado === "Recibida" ? (faltan ? `; entrega cerrada con ${faltan} producto(s) pendientes como saldo` : "; entrega completa") : `; entrega parcial, faltan ${faltan} producto(s)`}`, usuario: DB.usuario + " · " + DB.role, criticidad: "Media" });
+  guardarEstado("Factura de acuerdo");
   closeModal(); renderAll();
-  toast(`${e.nombre}: ${ingresados} productos ingresados a la Bodega General.${faltantes ? ` ${faltantes} llegaron con diferencia (quedan como saldo).` : ''}`, "ok");
+  toast(`Factura ${factura}: ${ingresados} productos ingresados (${money(total)}). ${e.estado === "Recibida" ? (faltan ? `Entrega cerrada; ${faltan} quedan como saldo.` : "Entrega completa ✔") : `La entrega sigue abierta: faltan ${faltan} producto(s).`}`, "ok");
+}
+function reabrirEntregaAcuerdo(aid, eid) {
+  const a = (DB.acuerdos || []).find(x => x.id === aid); if (!a) return;
+  const e = a.entregas.find(x => x.id === eid); if (!e || e.estado !== "Recibida") return;
+  if (!puedeGestionarAcuerdo()) { toast(`Tu rol (${DB.role}) no gestiona acuerdos.`, "danger"); return; }
+  acEntregaRecs(e);
+  const faltan = e.lineas.filter(l => (Number(l.cantRecibida) || 0) < (Number(l.cantPlan) || 0)).length;
+  e.estado = "Parcial"; e.cerradaConFaltante = false;
+  registrarHistorial({ proyecto: "General", accion: "Modificar", detalle: `Acuerdo ${a.nombre}: ${e.nombre} reabierta para registrar más facturas (faltan ${faltan} producto(s))`, usuario: DB.usuario + " · " + DB.role, criticidad: "Media" });
+  guardarEstado("Entrega reabierta"); renderAll();
+  toast(`${e.nombre} quedó abierta: ya puedes registrar las facturas que faltan.`, "ok");
 }
 
 /* ---------- edición: precio, cantidad, monto ---------- */
@@ -4776,7 +4825,7 @@ function barraAcuerdo(pct, color) {
   return `<div class="progressbar thin"><span style="width:${Math.min(100, pct).toFixed(1)}%; ${color ? 'background:' + color + ';' : ''}"></span></div>`;
 }
 function badgeEntregaAcuerdo(estado) {
-  const map = { "Planificada": "gris", "Solicitada": "transito", "Recibida": "recibido" };
+  const map = { "Planificada": "gris", "Solicitada": "transito", "Parcial": "amarillo", "Recibida": "recibido" };
   return `<span class="badge b-${map[estado] || 'gris'}"><span class="dot"></span>${estado}</span>`;
 }
 function renderAcuerdos() {
@@ -4824,16 +4873,25 @@ function htmlResumenAcuerdo(a) {
 }
 function htmlEntregasAcuerdo(a) {
   return `<div class="stack">${a.entregas.map(e => {
-    const plan = valorLineaEntrega(a, e, false), rec = valorLineaEntrega(a, e, true);
-    const dif = e.estado === "Recibida" ? e.lineas.filter(l => (Number(l.cantRecibida) || 0) < l.cantPlan).length : 0;
+    const plan = valorLineaEntrega(a, e, false), rec = valorLineaEntrega(a, e, true), recs = acEntregaRecs(e);
+    const faltan = e.lineas.filter(l => (Number(l.cantRecibida) || 0) < (Number(l.cantPlan) || 0));
+    const hayRec = recs.length > 0 || e.estado === "Parcial" || e.estado === "Recibida";
+    const pct = plan ? Math.min(100, rec / plan * 100) : 0;
+    const facturas = recs.map(r => `<div class="small" style="padding:2px 0;">🧾 <b>Factura ${escaparHtml(r.factura)}</b> · ${r.fecha || '—'} · ${r.lineas.length} producto(s)${r.total ? ' · ' + money(r.total) : ''}</div>`).join('');
+    const detalleFalta = (e.estado !== 'Planificada' && faltan.length && hayRec) ? `<details style="margin-top:6px;"><summary class="small" style="cursor:pointer;">Falta por recibir: ${faltan.length} producto(s)</summary>
+      <div class="table-wrap" style="max-height:260px; overflow:auto; margin-top:6px;"><table><tr><th>Código</th><th>Producto</th><th>Planificado</th><th>Recibido</th><th>Falta</th></tr>
+      ${faltan.map(l => { const it = a.items.find(x => x.codigo === l.codigo) || {}; const r = Number(l.cantRecibida) || 0; return `<tr><td class="mono small">${l.codigo}</td><td>${it.descripcion || ''}</td><td>${l.cantPlan}</td><td>${r}</td><td style="color:var(--copper-dark)"><b>${l.cantPlan - r}</b></td></tr>`; }).join('')}</table></div></details>` : '';
     return `<div class="card"><div class="flex-between" style="flex-wrap:wrap; gap:8px;">
       <div><h3>${e.nombre}</h3>
-        <p class="hint">${e.lineas.length} productos · planificado ${money(plan)}${e.estado === 'Recibida' ? ` · recibido ${money(rec)} · factura ${e.factura} (${e.fechaRecepcion})${dif ? ` · <span style="color:var(--copper-dark)">${dif} con diferencia</span>` : ''}` : ''}${e.fechaSolicitud ? ` · solicitada ${e.fechaSolicitud}` : ''}</p></div>
+        <p class="hint">${e.lineas.length} productos · planificado ${money(plan)}${hayRec ? ` · recibido ${money(rec)} (${pct.toFixed(0)}%)${e.estado === 'Recibida' && faltan.length ? ` · <span style="color:var(--copper-dark)">cerrada con ${faltan.length} pendiente(s)</span>` : ''}` : ''}${e.fechaSolicitud ? ` · solicitada ${e.fechaSolicitud}` : ''}</p></div>
       <div class="flex-gap">${badgeEntregaAcuerdo(e.estado)}
         <button class="btn btn-sm" onclick="exportarPedidoEntregaExcel('${a.id}','${e.id}')">⬇ Pedido Excel</button>
         ${puedeGestionarAcuerdo() && e.estado === 'Planificada' ? `<button class="btn btn-sm btn-primary" onclick="marcarEntregaSolicitada('${a.id}','${e.id}')">✉ Marcar solicitada</button>` : ''}
-        ${puedeGestionarAcuerdo() && e.estado !== 'Recibida' ? `<button class="btn btn-sm btn-primary" onclick="modalRecepcionEntregaAcuerdo('${a.id}','${e.id}')">📦 Registrar recepción</button>` : ''}
-      </div></div></div>`;
+        ${puedeGestionarAcuerdo() && e.estado !== 'Recibida' ? `<button class="btn btn-sm btn-primary" onclick="modalRecepcionEntregaAcuerdo('${a.id}','${e.id}')">📦 Registrar factura</button>` : ''}
+        ${puedeGestionarAcuerdo() && e.estado === 'Recibida' && faltan.length ? `<button class="btn btn-sm btn-primary" onclick="reabrirEntregaAcuerdo('${a.id}','${e.id}')" title="Volver a abrir para registrar las facturas que faltan">↩ Reabrir (faltan ${faltan.length})</button>` : ''}
+      </div></div>
+      ${hayRec ? `<div class="progressbar thin" style="margin:8px 0 4px;"><span style="width:${pct.toFixed(1)}%"></span></div>` : ''}
+      ${facturas ? `<div style="margin-top:4px;">${facturas}</div>` : ''}${detalleFalta}</div>`;
   }).join('')}</div>`;
 }
 function htmlCompendioAcuerdo(a) {

@@ -536,7 +536,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.11.0";
+const APP_VERSION = "3.11.1";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -4860,6 +4860,66 @@ function anularFacturaAcuerdo(aid, eid, ri) {
   if (!confirm(`¿Anular la factura ${r.factura}? Se descontarán de Bodega General las cantidades que ingresó y la entrega volverá a mostrar esas cantidades como pendientes.`)) return;
   acAplicarFactura(a, e, ri, {}, r.factura, r.fecha, true);
 }
+/* ---------- Editar el pedido (cantidades planificadas de una entrega) ---------- */
+function modalEditarPedidoAcuerdo(aid, eid) {
+  const a = (DB.acuerdos || []).find(x => x.id === aid); const e = a && a.entregas.find(x => x.id === eid); if (!e) return;
+  if (!puedeGestionarAcuerdo()) { toast(`Tu rol (${DB.role}) no gestiona acuerdos.`, "danger"); return; }
+  openModal(`
+    <div class="modal-head"><h3>Editar pedido — ${escaparHtml(e.nombre)}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <p class="small muted">Cambia la cantidad <strong>planificada</strong> de cada producto. Con <strong>0</strong> (y sin nada recibido) el producto sale del pedido. No puedes bajar de lo que ya llegó. Usa «= recibido» para quitar solo lo que falta.</p>
+      <div class="flex-gap" style="flex-wrap:wrap; align-items:flex-end;">
+        <div style="flex:1; min-width:220px;"><label class="field-label">Buscar producto</label><input type="text" placeholder="código o nombre…" oninput="acPedFiltrar(this.value)"></div>
+        <label class="small flex-gap" style="flex:2; min-width:300px;"><input type="checkbox" id="acPedBajarAcordado"> Lo que quito del pedido, quitarlo también de lo <b>acordado</b> (deshace una ampliación). Si no, queda como saldo del acuerdo.</label></div>
+      <div class="table-wrap" style="max-height:55vh; overflow:auto; margin-top:8px;"><table id="acPedTabla">
+        <tr><th>Código</th><th>Producto</th><th>Recibido</th><th style="width:120px">Planificado</th><th></th></tr>
+        ${e.lineas.map((l, i) => { const it = a.items.find(x => x.codigo === l.codigo) || {}; const rec = Number(l.cantRecibida) || 0;
+          return `<tr data-txt="${escaparHtml((l.codigo + ' ' + (it.descripcion || '')).toLowerCase())}"><td class="mono small">${escaparHtml(l.codigo)}</td><td>${escaparHtml(it.descripcion || '')}</td><td>${rec}</td>
+          <td><input type="number" min="${rec}" step="1" id="acPed_${i}" value="${l.cantPlan}" data-rec="${rec}" style="width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:7px;"></td>
+          <td><button class="btn btn-sm" type="button" onclick="document.getElementById('acPed_${i}').value=${rec}">= recibido</button></td></tr>`; }).join('')}
+      </table></div>
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="guardarEditarPedidoAcuerdo('${aid}','${eid}')">Guardar pedido</button></div>`, 1000);
+}
+function acPedFiltrar(v) { v = (v || "").trim().toLowerCase(); document.querySelectorAll("#acPedTabla tr[data-txt]").forEach(tr => { tr.style.display = (!v || tr.dataset.txt.includes(v)) ? "" : "none"; }); }
+function guardarEditarPedidoAcuerdo(aid, eid) {
+  const a = (DB.acuerdos || []).find(x => x.id === aid); const e = a && a.entregas.find(x => x.id === eid); if (!e) return;
+  const bajar = !!document.getElementById('acPedBajarAcordado').checked;
+  const cambios = [];
+  for (let i = 0; i < e.lineas.length; i++) {
+    const l = e.lineas[i]; const el = document.getElementById('acPed_' + i); if (!el) continue;
+    const q = Math.round(Number(el.value)); const rec = Number(l.cantRecibida) || 0;
+    if (isNaN(q) || q < rec) { toast(`${l.codigo}: no puede ser menos de lo ya recibido (${rec}).`, "danger"); return; }
+    if (q !== (Number(l.cantPlan) || 0)) cambios.push({ i, l, q, antes: Number(l.cantPlan) || 0 });
+  }
+  if (!cambios.length) { toast("No hay cambios.", "danger"); return; }
+  if (bajar) {
+    for (const c of cambios) {
+      const red = c.antes - c.q; if (red <= 0) continue;
+      const it = a.items.find(x => x.codigo === c.l.codigo); if (!it) continue;
+      const t = totalesItemAcuerdo(a, it);
+      if ((Number(it.cantAcordada) || 0) - red < t.comprometida - red) { toast(`${c.l.codigo}: no se puede bajar lo acordado bajo lo ya pedido en otras entregas.`, "danger"); return; }
+    }
+  }
+  const det = [];
+  cambios.forEach(c => {
+    const it = a.items.find(x => x.codigo === c.l.codigo); const red = c.antes - c.q;
+    c.l.cantPlan = c.q;
+    if (bajar && red > 0 && it) {
+      const t = totalesItemAcuerdo(a, it); // ya con el pedido reducido
+      const nuevo = Math.max(t.comprometida, (Number(it.cantAcordada) || 0) - red); it.cantAcordada = nuevo;
+    }
+    det.push(`${c.l.codigo} ${c.antes}→${c.q}`);
+  });
+  e.lineas = e.lineas.filter(l => !((Number(l.cantPlan) || 0) === 0 && (Number(l.cantRecibida) || 0) === 0));
+  acEntregaRecs(e);
+  const faltan = e.lineas.filter(l => (Number(l.cantRecibida) || 0) < (Number(l.cantPlan) || 0)).length;
+  if (e.estado === "Parcial" && faltan === 0) e.estado = "Recibida";
+  registrarHistorial({ proyecto: "General", accion: "Modificar", detalle: `Acuerdo ${a.nombre}: pedido «${e.nombre}» editado${bajar ? ' (y bajado de lo acordado)' : ''}: ${det.join(', ')}`, usuario: DB.usuario + " · " + DB.role, criticidad: "Media" });
+  guardarEstado("Pedido editado"); closeModal(); renderAll();
+  toast(`Pedido actualizado: ${cambios.length} producto(s) modificados.${e.estado === "Recibida" ? " La entrega quedó completa." : ""}`, "ok");
+}
 function reabrirEntregaAcuerdo(aid, eid) {
   const a = (DB.acuerdos || []).find(x => x.id === aid); if (!a) return;
   const e = a.entregas.find(x => x.id === eid); if (!e || e.estado !== "Recibida") return;
@@ -5153,6 +5213,7 @@ function htmlEntregasAcuerdo(a) {
         <p class="hint">${e.lineas.length} productos · planificado ${money(plan)}${hayRec ? ` · recibido ${money(rec)} (${pct.toFixed(0)}%)${e.estado === 'Recibida' && faltan.length ? ` · <span style="color:var(--copper-dark)">cerrada con ${faltan.length} pendiente(s)</span>` : ''}` : ''}${e.fechaSolicitud ? ` · solicitada ${e.fechaSolicitud}` : ''}</p></div>
       <div class="flex-gap">${badgeEntregaAcuerdo(e.estado)}
         <button class="btn btn-sm" onclick="exportarPedidoEntregaExcel('${a.id}','${e.id}')">⬇ Pedido Excel</button>
+        ${puedeGestionarAcuerdo() && e.estado !== 'Recibida' ? `<button class="btn btn-sm" onclick="modalEditarPedidoAcuerdo('${a.id}','${e.id}')">✏ Editar pedido</button>` : ''}
         ${puedeGestionarAcuerdo() && e.estado === 'Planificada' ? `<button class="btn btn-sm btn-primary" onclick="marcarEntregaSolicitada('${a.id}','${e.id}')">✉ Marcar solicitada</button>` : ''}
         ${puedeGestionarAcuerdo() && e.estado !== 'Recibida' ? `<button class="btn btn-sm btn-primary" onclick="modalRecepcionEntregaAcuerdo('${a.id}','${e.id}')">📦 Registrar factura</button>` : ''}
         ${puedeGestionarAcuerdo() && e.estado === 'Recibida' && faltan.length ? `<button class="btn btn-sm btn-primary" onclick="reabrirEntregaAcuerdo('${a.id}','${e.id}')" title="Volver a abrir para registrar las facturas que faltan">↩ Reabrir (faltan ${faltan.length})</button>` : ''}

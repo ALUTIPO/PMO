@@ -536,7 +536,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.8.0";
+const APP_VERSION = "3.9.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -1186,6 +1186,8 @@ const DB = {
   ubicaciones: [],
   existencias: [],
   wmsOrigenes: [],
+  planSemanal: {},
+  jornadaCfg: null,
   acuerdos: [],
   usuariosAutorizados: {},
   personal: [],
@@ -1223,6 +1225,8 @@ function aplicarEstadoRemoto(data) {
   DB.ubicaciones = data.ubicaciones && data.ubicaciones.length ? data.ubicaciones : WMS_UB_DEFAULT.map(u => Object.assign({}, u));
   DB.existencias = data.existencias || [];
   DB.wmsOrigenes = data.wmsOrigenes && data.wmsOrigenes.length ? data.wmsOrigenes : WMS_ORIGENES_DEF.slice();
+  DB.planSemanal = data.planSemanal || {};
+  DB.jornadaCfg = data.jornadaCfg || null;
   DB.solicitudesPanol = data.solicitudesPanol || [];
   // Firebase no guarda arrays vacíos: se normalizan al cargar.
   DB.acuerdos = (data.acuerdos || []).map(ac => {
@@ -1251,6 +1255,8 @@ function construirPayloadEstado() {
     ubicaciones: DB.ubicaciones || [],
     existencias: DB.existencias || [],
     wmsOrigenes: DB.wmsOrigenes || [],
+    planSemanal: DB.planSemanal || {},
+    jornadaCfg: DB.jornadaCfg || null,
     solicitudesPanol: DB.solicitudesPanol,
     acuerdos: DB.acuerdos || [],
     versionApp: APP_VERSION,
@@ -6659,6 +6665,7 @@ function renderPersonal() {
       ${DB.proyectos.map(p => `<option value="${p.id}" ${filtroAsignacionProyecto===p.id?'selected':''}>${p.codigo} — ${p.nombre}</option>`).join('')}
     </select>
     ${puedeAsig ? `<button class="btn btn-primary btn-sm" onclick="modalAsignacionForm()">+ Nueva asignación</button>` : ''}
+    <button class="btn btn-sm btn-primary" onclick="psAbrir()">📅 Plan semanal general</button>
     ${puedeAsig ? `<button class="btn btn-sm" onclick="modalDistribucionSemana()">📋 Cargar distribución de la semana</button>` : ''}
     ${(puedeAsig && distSemanaReciente()) ? `<button class="btn btn-sm" onclick="modalMensajesDistribucion()">💬 Mensajes de la semana</button>` : ''}
   </div>
@@ -11756,7 +11763,7 @@ function renderTallerPrograma(){
   if(!planes.find(x=>x.id===tpPlanId)) tpPlanId=planes.length?planes[0].id:"";
   const plan=planes.find(x=>x.id===tpPlanId);
   const head=`<div class="page-head"><div><h1>Programa de taller</h1><div class="page-desc">Armado de tableros: programa la semana, revisa la carga de cada persona y envíalo por WhatsApp. Lo que tiene proyecto queda también en su Gantt.</div></div>
-    <div class="flex-gap">${gest?`<button class="btn btn-primary" onclick="tpModalSemana()">+ Nueva semana</button>`:''}</div></div>`;
+    <div class="flex-gap"><button class="btn" onclick="psAbrir()">📅 Plan semanal general</button>${gest?`<button class="btn btn-primary" onclick="tpModalSemana()">+ Nueva semana</button>`:''}</div></div>`;
   const chips=planes.length>1?`<div class="mp-chips">${planes.map(x=>`<button class="mp-chip ${x.id===tpPlanId?'on':''}" onclick="tpPlanId='${x.id}'; renderAll();">${distDiaTxt(x.lunes)}${x.estado==='enviado'?' ✓':''}</button>`).join("")}</div>`:'';
   if(!plan) return head+`<div class="empty-state card">Aún no hay semanas programadas.${gest?' Crea la primera con «+ Nueva semana».':''}</div>`;
   const items=plan.items.slice().sort((a,b)=>a.ini.localeCompare(b.ini)||(a.tablero||"").localeCompare(b.tablero||""));
@@ -12513,6 +12520,232 @@ function wmsDragMov(e) {
   w.setAttribute("style", wms.pos);
 }
 function wmsDragFin() { _wmsDrag = null; document.removeEventListener("pointermove", wmsDragMov); document.removeEventListener("pointerup", wmsDragFin); }
+
+/* =====================================================================
+   PLANIFICACIÓN SEMANAL GENERAL (V3.9.0)
+   Una sola vista por semana con TODOS los proyectos: terreno (asignaciones
+   de la distribución semanal) + armado de tableros del programa de taller.
+   - Jornada por día y por persona: horario normal u horas extra con hora de
+     salida (automático si en el taller pasa de 9 h; se puede fijar a mano).
+   - Días libres: se completan con aseo e inventario con un clic.
+   - Datos: DB.planSemanal[lunes] = {dias:{fecha:{modo,salida}},
+     personas:{pid:{fecha:{modo,salida}}}, generales:[{id,fecha,pid,texto}]}
+     y DB.jornadaCfg = {inicio, salida} (horario normal).
+   ===================================================================== */
+const PS_DIAS = ["Lunes","Martes","Miércoles","Jueves","Viernes"];
+let _ps = { lunes:"", texto:"Aseo e inventario" };
+function psPuede(){ return puedeGestionarTaller() || puedeGestionarAsignaciones(); }
+function psCfg(){ if(!DB.jornadaCfg || !DB.jornadaCfg.salida) DB.jornadaCfg = { inicio:"08:00", salida:"18:00" }; return DB.jornadaCfg; }
+function psHM(s){ const p=String(s||"0:0").split(":"); return (Number(p[0])||0)*60+(Number(p[1])||0); }
+function psTxtHM(min){ min=Math.round(min/30)*30; const h=Math.floor(min/60)%24, m=((min%60)+60)%60; return String(h).padStart(2,"0")+":"+String(m).padStart(2,"0"); }
+function psLeer(lunes){ const w=(DB.planSemanal||{})[lunes]||{}; return { dias:w.dias||{}, personas:w.personas||{}, generales:exArr(w.generales) }; }
+function psEscribir(lunes){ if(!DB.planSemanal||typeof DB.planSemanal!=="object") DB.planSemanal={}; const w=DB.planSemanal[lunes]=DB.planSemanal[lunes]||{}; w.dias=w.dias||{}; w.personas=w.personas||{}; w.generales=exArr(w.generales); return w; }
+function psLunesInicial(){ const hoy=hoyISO(), w=new Date(hoy+"T12:00:00Z").getUTCDay(); return tpLunesDe(sumarDias(hoy, w===6?2:(w===0?1:0))); }
+function psFechaTxt(f){ const d=new Date(f+"T12:00:00Z"); return PS_DIAS[d.getUTCDay()-1]+" "+d.getUTCDate()+" "+DIST_MESES[d.getUTCMonth()]; }
+function psProy(pid){ const p=pid?proy(pid):null; return p?((p.codigo&&p.codigo!=="SIN-CODIGO"?p.codigo+" · ":"")+p.nombre):"Sin proyecto"; }
+
+/* Lo que hay cada día: terreno (asignaciones) + taller (tareas de armado) */
+function psDatos(lunes){
+  const dias=[0,1,2,3,4].map(k=>sumarDias(lunes,k)), ent={}; dias.forEach(d=>{ ent[d]=[]; });
+  (DB.asignaciones||[]).forEach(a=>{ if(!a.fechaInicio||!a.fechaFin) return; dias.forEach(d=>{ if(a.fechaInicio<=d && d<=a.fechaFin) ent[d].push({ pid:a.personaId, proyectoId:a.proyectoId||"", origen:a.enTerreno===false?"taller":"terreno", det:a.disciplina||"", extras:a.horasExtra||"", h:0 }); }); });
+  tpPlanes().forEach(pl=>pl.items.forEach(it=>{ if(!it.ini||!it.fin) return; const ds=tpDias(it.ini,it.fin), h=tpHorasEf(it)/ds.length;
+    ds.forEach(d=>{ if(!ent[d]) return; it.responsables.forEach(pid=>ent[d].push({ pid, proyectoId:it.proyectoId||"", origen:"taller", det:it.tablero||"Trabajos varios", h })); }); }));
+  return { dias, ent };
+}
+function psNombres(pids){
+  const per=pids.map(id=>DB.personal.find(p=>p.id===id)).filter(Boolean), cnt={}, m={};
+  per.forEach(p=>{ const f=tpPrimerNombre(p.nombre); cnt[f]=(cnt[f]||0)+1; });
+  per.forEach(p=>{ const f=tpPrimerNombre(p.nombre), pt=p.nombre.split(" "); m[p.id]=(p.tipo==="Externo")?p.nombre:(cnt[f]>1&&pt.length>1?f+" "+pt[1][0]+".":f); });
+  return m;
+}
+function psJornada(w,cfg,pid,fecha,hTaller){
+  const norm=cfg.salida, o=(w.personas[pid]||{})[fecha];
+  if(o && o.modo) return { modo:o.modo, salida:o.modo==="extra"?(o.salida||norm):norm, origen:"manual" };
+  const d=w.dias[fecha];
+  if(d && d.modo==="extra") return { modo:"extra", salida:d.salida||norm, origen:"dia" };
+  if(d && d.modo==="normal") return { modo:"normal", salida:norm, origen:"dia" };
+  if(hTaller>TP_HORAS_DIA+0.01) return { modo:"extra", salida:psTxtHM(psHM(norm)+(hTaller-TP_HORAS_DIA)*60), origen:"auto" };
+  return { modo:"normal", salida:norm, origen:"auto" };
+}
+function psModelo(lunes){
+  const D=psDatos(lunes), w=psLeer(lunes), cfg=psCfg(), todos=new Set();
+  D.dias.forEach(d=>D.ent[d].forEach(e=>todos.add(e.pid))); w.generales.forEach(g=>{ if(D.dias.includes(g.fecha)) todos.add(g.pid); });
+  const activos=[...todos].filter(id=>DB.personal.some(p=>p.id===id)), nom=psNombres(activos);
+  activos.sort((a,b)=>nom[a].localeCompare(nom[b]));
+  const dias=D.dias.map(fecha=>{
+    const es=D.ent[fecha].filter(e=>nom[e.pid]), gens=w.generales.filter(g=>g.fecha===fecha&&nom[g.pid]), hT={};
+    es.forEach(e=>{ if(e.origen==="taller") hT[e.pid]=(hT[e.pid]||0)+e.h; });
+    const gente=[...new Set(es.map(e=>e.pid).concat(gens.map(g=>g.pid)))], jor={};
+    gente.forEach(pid=>{ jor[pid]=psJornada(w,cfg,pid,fecha,hT[pid]||0); });
+    const pm={}, orden=[];
+    es.forEach(e=>{ const k=e.proyectoId||""; if(!pm[k]){ pm[k]={ terreno:{}, taller:{} }; orden.push(k); }
+      const b=e.origen==="taller"?pm[k].taller:pm[k].terreno, kk=e.det||""; b[kk]=b[kk]||[]; if(!b[kk].includes(e.pid)) b[kk].push(e.pid); });
+    orden.sort((a,b)=>psProy(a).localeCompare(psProy(b)));
+    const proys=orden.map(k=>({ pid:k, terreno:Object.entries(pm[k].terreno).map(([det,personas])=>({det,personas})), taller:Object.entries(pm[k].taller).map(([det,personas])=>({det,personas})) }));
+    const gm={}; gens.forEach(g=>{ const t=g.texto||"Aseo e inventario"; gm[t]=gm[t]||[]; if(!gm[t].includes(g.pid)) gm[t].push(g.pid); });
+    const generales=Object.entries(gm).map(([texto,personas])=>({texto,personas}));
+    const libres=activos.filter(id=>!gente.includes(id) && (DB.personal.find(p=>p.id===id)||{}).tipo!=="Externo");
+    return { fecha, proys, generales, libres, gente, jor, hT };
+  });
+  return { lunes, dias, activos, nom, cfg };
+}
+function psResumenJor(d,nom){
+  const norm=psCfg().salida;
+  if(!d.gente.length) return { tipo:"vacio", txt:"Sin actividades", pdf:"Sin actividades", uniforme:true };
+  const ex=d.gente.filter(p=>d.jor[p].modo==="extra");
+  if(!ex.length) return { tipo:"normal", txt:`🕗 Horario normal · salida ${norm}`, pdf:`Horario normal - salida ${norm}`, uniforme:true };
+  const por={}; ex.forEach(p=>{ const s=d.jor[p].salida; (por[s]=por[s]||[]).push(nom[p]); });
+  const salidas=Object.keys(por), todos=ex.length===d.gente.length;
+  if(todos && salidas.length===1) return { tipo:"extra", txt:`⏱ Horas extra · salida ${salidas[0]}`, pdf:`HORAS EXTRA - salida ${salidas[0]}`, uniforme:true };
+  if(salidas.length===1){ const s0=salidas[0], resto=d.gente.filter(p=>d.jor[p].modo!=="extra").map(p=>nom[p]);
+    if(ex.length>=resto.length) return { tipo:"extra", txt:`⏱ Horas extra · salida ${s0} · excepto ${resto.join(", ")} (horario normal, salida ${norm})`, pdf:`HORAS EXTRA - salida ${s0} - excepto ${resto.join(", ")} (salida ${norm})`, uniforme:false, multi:false }; }
+  const partes=salidas.map(s=>`${por[s].join(", ")} hasta ${s}`);
+  return { tipo:"extra", txt:`⏱ Horas extra: ${partes.join(" · ")}${todos?"":` · resto horario normal (salida ${norm})`}`, pdf:`HORAS EXTRA: ${partes.join(" / ")}${todos?"":` - resto salida ${norm}`}`, uniforme:false, multi:true };
+}
+function psHorasExtra(M){
+  const norm=psHM(M.cfg.salida), out={};
+  M.dias.forEach(d=>d.gente.forEach(pid=>{ const j=d.jor[pid]; if(j.modo!=="extra") return; const h=Math.max(0,(psHM(j.salida)-norm)/60); (out[pid]=out[pid]||{ dias:[], h:0 }); out[pid].dias.push(PS_DIAS[M.dias.indexOf(d)].slice(0,3)+" "+j.salida); out[pid].h+=h; }));
+  return Object.entries(out).map(([pid,v])=>({ pid, dias:v.dias, h:Math.round(v.h*10)/10 }));
+}
+function psTitulo(M){ return `Planificación semanal – semana ${distDiaTxt(M.lunes)} al ${distDiaTxt(M.dias[4].fecha)}`; }
+function psProyectosSemana(M){
+  const m={}; M.dias.forEach(d=>d.proys.forEach(p=>{ const k=p.pid; m[k]=m[k]||new Set(); p.terreno.concat(p.taller).forEach(x=>x.personas.forEach(id=>m[k].add(id))); }));
+  return Object.entries(m).map(([pid,s])=>({ pid, n:s.size })).sort((a,b)=>psProy(a.pid).localeCompare(psProy(b.pid)));
+}
+
+/* ---- Versión para correo / vista previa ---- */
+function psHtml(M,opt){
+  opt=opt||{}; const nom=M.nom, ps=psProyectosSemana(M), ex=psHorasExtra(M);
+  const celda=d=>{
+    const r=psResumenJor(d,nom), suf=(p)=> (r.multi&&d.jor[p]&&d.jor[p].modo==="extra") ? ` <span style="color:#a15a1d">⏱${d.jor[p].salida}</span>` : "";
+    const nj=l=>l.map(p=>escaparHtml(nom[p])+suf(p)).join(", ");
+    const fondo=r.tipo==="extra"?"#fde6c8":(r.tipo==="normal"?"#eef1f4":"#f6f6f6"), color=r.tipo==="extra"?"#8a4b0f":"#555";
+    const cuerpo=d.proys.map(p=>`<div style="font-size:10.5px;font-weight:bold;color:#a15a1d;margin:5px 0 2px">${escaparHtml(psProy(p.pid))}</div>`
+      +p.taller.map(x=>`<div style="margin-bottom:4px"><b>🛠 Taller · ${escaparHtml(x.det)}</b><br><span style="color:#444">${nj(x.personas)}</span></div>`).join("")
+      +p.terreno.map(x=>`<div style="margin-bottom:4px"><b>📍 ${escaparHtml(x.det||"Terreno")}</b><br><span style="color:#444">${nj(x.personas)}</span></div>`).join("")).join("")
+      +d.generales.map(g=>`<div style="background:#e6f3ec;border-radius:3px;padding:3px 5px;margin:5px 0"><b>🧹 ${escaparHtml(g.texto)}</b><br><span style="color:#444">${nj(g.personas)}</span></div>`).join("")
+      +(opt.libres&&d.libres.length?`<div style="background:#fff3cd;color:#7a5b00;border-radius:3px;padding:3px 5px;margin:5px 0">⚠ Sin actividad: ${d.libres.map(p=>escaparHtml(nom[p])).join(", ")}</div>`:"");
+    const dt=new Date(d.fecha+"T12:00:00Z");
+    return `<td style="width:20%;vertical-align:top;border:1px solid #d9d2c9;padding:0;font-family:Arial,Helvetica,sans-serif"><div style="background:#c1712e;color:#fff;font-size:11.5px;font-weight:bold;padding:3px 6px">${PS_DIAS[dt.getUTCDay()-1]} ${dt.getUTCDate()} ${DIST_MESES[dt.getUTCMonth()]}</div>
+      <div style="background:${fondo};color:${color};font-size:10.5px;font-weight:bold;padding:3px 6px;border-bottom:1px solid #d9d2c9">${escaparHtml(r.txt)}</div>
+      <div style="padding:5px 6px;font-size:12px;min-height:60px">${cuerpo||'<span style="color:#aaa">—</span>'}</div></td>`; };
+  const th="border:1px solid #ddd;background:#f1ece6;padding:3px 6px;font-size:11px;text-align:left", td="border:1px solid #ddd;padding:3px 6px;font-size:12px";
+  return `<div style="font-family:Arial,Helvetica,sans-serif;color:#222;font-size:13px;max-width:980px">
+    <div style="font-size:17px;font-weight:bold">${escaparHtml(psTitulo(M))}</div>
+    <div style="margin:4px 0 8px;color:#555">${ps.length} proyecto(s) · ${M.activos.length} persona(s) · horario normal ${M.cfg.inicio}–${M.cfg.salida}</div>
+    <div style="margin-bottom:10px">${ps.map(p=>`<span style="display:inline-block;background:#faf3ea;border:1px solid #e3cdb2;border-radius:10px;padding:2px 8px;margin:0 4px 4px 0;font-size:11.5px"><b>${escaparHtml(psProy(p.pid))}</b> · ${p.n} pers.</span>`).join("")||'<span style="color:#888">Sin proyectos esta semana.</span>'}</div>
+    <table style="border-collapse:collapse;width:100%;table-layout:fixed"><tr>${M.dias.map(celda).join("")}</tr></table>
+    ${ex.length?`<div style="margin:12px 0 4px;font-weight:bold">Horas extra de la semana</div><table style="border-collapse:collapse"><tr><th style="${th}">Persona</th><th style="${th}">Días y hora de salida</th><th style="${th};text-align:right">Horas extra</th></tr>${ex.map(e=>`<tr><td style="${td}"><b>${escaparHtml(M.nom[e.pid])}</b></td><td style="${td}">${escaparHtml(e.dias.join(" · "))}</td><td style="${td};text-align:right">${e.h} h</td></tr>`).join("")}</table>`:""}
+    <div style="margin-top:10px;color:#666;font-size:11px">🛠 Taller = armado de tableros · 📍 = trabajo en terreno u obra (con su disciplina) · 🧹 actividades generales de los días sin proyecto.</div></div>`;
+}
+function psTexto(M){
+  const nom=M.nom; let t=psTitulo(M)+"\n";
+  M.dias.forEach(d=>{ const r=psResumenJor(d,nom); t+=`\n${psFechaTxt(d.fecha)} — ${r.txt.replace(/^[^\wÁÉÍÓÚáéíóúÑñ]+/u,"")}\n`;
+    const suf=p=>(r.multi&&d.jor[p].modo==="extra")?` (${d.jor[p].salida})`:"", nj=l=>l.map(p=>nom[p]+suf(p)).join(", ");
+    d.proys.forEach(p=>{ t+=`  ${psProy(p.pid)}\n`; p.taller.forEach(x=>{ t+=`    • Taller · ${x.det}: ${nj(x.personas)}\n`; }); p.terreno.forEach(x=>{ t+=`    • ${x.det||"Terreno"}: ${nj(x.personas)}\n`; }); });
+    d.generales.forEach(g=>{ t+=`  • ${g.texto}: ${nj(g.personas)}\n`; }); if(!d.gente.length) t+="  —\n"; });
+  const ex=psHorasExtra(M); if(ex.length) t+=`\nHoras extra: `+ex.map(e=>`${nom[e.pid]} ${e.h} h (${e.dias.join(", ")})`).join(" · ")+"\n";
+  return t;
+}
+
+/* ---- Edición ---- */
+function psGuardar(){ guardarEstado(); psRender(); }
+function psSetCfg(campo,v){ if(!psPuede()||!/^\d\d:\d\d$/.test(v)) return; psCfg()[campo]=v; psGuardar(); }
+function psSetDia(fecha,v){
+  if(!psPuede()) return; const w=psEscribir(_ps.lunes);
+  if(!v) delete w.dias[fecha]; else if(v==="normal") w.dias[fecha]={ modo:"normal" };
+  else w.dias[fecha]={ modo:"extra", salida:(w.dias[fecha]&&w.dias[fecha].salida)||psTxtHM(psHM(psCfg().salida)+120) };
+  psGuardar();
+}
+function psSetDiaSalida(fecha,v){ if(!psPuede()||!/^\d\d:\d\d$/.test(v)) return; psEscribir(_ps.lunes).dias[fecha]={ modo:"extra", salida:v }; psGuardar(); }
+function psSetPers(pid,fecha,v){
+  if(!psPuede()) return; const w=psEscribir(_ps.lunes); w.personas[pid]=w.personas[pid]||{};
+  if(!v) delete w.personas[pid][fecha]; else if(v==="normal") w.personas[pid][fecha]={ modo:"normal" };
+  else { const M=psModelo(_ps.lunes), d=M.dias.find(x=>x.fecha===fecha), j=d&&d.jor[pid]; w.personas[pid][fecha]={ modo:"extra", salida:(j&&j.modo==="extra"&&j.salida)||psTxtHM(psHM(psCfg().salida)+120) }; }
+  psGuardar();
+}
+function psSetSalida(pid,fecha,v){ if(!psPuede()||!/^\d\d:\d\d$/.test(v)) return; const w=psEscribir(_ps.lunes); w.personas[pid]=w.personas[pid]||{}; w.personas[pid][fecha]={ modo:"extra", salida:v }; psGuardar(); }
+function psAddGeneral(pid,fecha){ if(!psPuede()) return; const w=psEscribir(_ps.lunes); w.generales.push({ id:"GEN-"+Math.random().toString(36).slice(2,8), fecha, pid, texto:(_ps.texto||"").trim()||"Aseo e inventario" }); psGuardar(); }
+function psQuitarGeneral(fecha,pid){ if(!psPuede()) return; const w=psEscribir(_ps.lunes); w.generales=w.generales.filter(g=>!(g.fecha===fecha&&g.pid===pid)); psGuardar(); }
+function psCompletarLibres(){
+  if(!psPuede()){ toast("Tu rol no puede editar la planificación.","danger"); return; }
+  const M=psModelo(_ps.lunes), w=psEscribir(_ps.lunes), texto=(_ps.texto||"").trim()||"Aseo e inventario"; let n=0;
+  M.dias.forEach(d=>d.libres.forEach(pid=>{ w.generales.push({ id:"GEN-"+Math.random().toString(36).slice(2,8), fecha:d.fecha, pid, texto }); n++; }));
+  toast(n?`${n} día(s)-persona completados con «${texto}».`:"No hay días libres que completar.", n?"ok":"danger");
+  if(n) psGuardar();
+}
+function psCambiarSemana(delta){ _ps.lunes=sumarDias(_ps.lunes,delta*7); psRender(); }
+function psIrSemana(v){ if(!v) return; _ps.lunes=tpLunesDe(v); psRender(); }
+
+/* ---- Pantalla ---- */
+function psAbrir(){
+  _ps.lunes=_ps.lunes||psLunesInicial();
+  openModal(`<div class="modal-head"><h3>📅 Planificación semanal general</h3><button class="close-x" onclick="closeModal()">✕</button></div><div class="modal-body" id="psBox"></div>`, 1240);
+  psRender();
+}
+function psRender(){
+  const box=document.getElementById("psBox"); if(!box) return;
+  const M=psModelo(_ps.lunes), cfg=M.cfg, puede=psPuede(), nLibres=M.dias.reduce((a,d)=>a+d.libres.length,0);
+  const sel="font-size:12px;padding:4px 6px;border-radius:6px;border:1px solid var(--line);background:var(--card);";
+  const modoSel=(valor,onch)=>`<select style="${sel}" ${puede?"":"disabled"} onchange="${onch}"><option value="" ${!valor?"selected":""}>Auto</option><option value="normal" ${valor==="normal"?"selected":""}>Normal</option><option value="extra" ${valor==="extra"?"selected":""}>Horas extra</option></select>`;
+  const cabDia=M.dias.map((d,i)=>{ const o=psLeer(_ps.lunes).dias[d.fecha]; const dt=new Date(d.fecha+"T12:00:00Z");
+    return `<th style="min-width:150px;vertical-align:top"><div>${PS_DIAS[i]} ${dt.getUTCDate()}</div><div style="margin-top:4px;display:flex;gap:4px;align-items:center;flex-wrap:wrap">${modoSel(o?o.modo:"",`psSetDia('${d.fecha}',this.value)`)}${o&&o.modo==="extra"?`<input type="time" step="1800" style="${sel}width:92px" value="${o.salida||""}" ${puede?"":"disabled"} onchange="psSetDiaSalida('${d.fecha}',this.value)">`:""}</div></th>`; }).join("");
+  const filas=M.activos.map(pid=>`<tr><td><b>${escaparHtml(M.nom[pid])}</b></td>${M.dias.map(d=>{
+      const proys=d.proys.filter(p=>p.terreno.concat(p.taller).some(x=>x.personas.includes(pid))), gens=d.generales.filter(g=>g.personas.includes(pid));
+      if(!proys.length&&!gens.length) return `<td style="background:#fff8e1;vertical-align:top"><span class="small" style="color:#7a5b00">sin actividad</span>${puede?`<div><button class="btn btn-sm" style="margin-top:3px" onclick="psAddGeneral('${pid}','${d.fecha}')">＋ ${escaparHtml(_ps.texto||"Aseo e inventario")}</button></div>`:""}</td>`;
+      const j=d.jor[pid], o=(psLeer(_ps.lunes).personas[pid]||{})[d.fecha];
+      return `<td style="vertical-align:top"><div class="small">${proys.map(p=>`<span style="display:inline-block;background:var(--copper-light);border-radius:6px;padding:1px 6px;margin:0 3px 3px 0;font-size:11px">${escaparHtml(psProy(p.pid).split(" · ")[0])}</span>`).join("")}${gens.map(g=>`<span style="display:inline-block;background:var(--ok-bg);border-radius:6px;padding:1px 6px;margin:0 3px 3px 0;font-size:11px">🧹 ${escaparHtml(g.texto)}${puede?` <a href="#" style="color:var(--danger);text-decoration:none" onclick="psQuitarGeneral('${d.fecha}','${pid}');return false;" title="Quitar">×</a>`:""}</span>`).join("")}</div>
+        <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">${modoSel(o?o.modo:"",`psSetPers('${pid}','${d.fecha}',this.value)`)}${j.modo==="extra"?`<input type="time" step="1800" style="${sel}width:92px" value="${j.salida}" ${puede?"":"disabled"} onchange="psSetSalida('${pid}','${d.fecha}',this.value)">`:`<span class="small muted">sale ${cfg.salida}</span>`}</div>${j.origen==="auto"&&j.modo==="extra"?`<div class="small" style="color:var(--warn)">auto: más de ${TP_HORAS_DIA} h de taller</div>`:""}</td>`; }).join("")}</tr>`).join("");
+  box.innerHTML=`<div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin-bottom:10px">
+      <div class="flex-gap"><button class="btn btn-sm" onclick="psCambiarSemana(-1)">◀</button><input type="date" value="${_ps.lunes}" onchange="psIrSemana(this.value)" style="width:auto"><button class="btn btn-sm" onclick="psCambiarSemana(1)">▶</button></div>
+      <label class="small muted" style="display:flex;flex-direction:column;gap:3px">Horario normal: entrada<input type="time" value="${cfg.inicio}" ${puede?"":"disabled"} onchange="psSetCfg('inicio',this.value)" style="width:100px"></label>
+      <label class="small muted" style="display:flex;flex-direction:column;gap:3px">salida<input type="time" value="${cfg.salida}" ${puede?"":"disabled"} onchange="psSetCfg('salida',this.value)" style="width:100px"></label>
+      <label class="small muted" style="display:flex;flex-direction:column;gap:3px">Actividad de días libres<input type="text" value="${escaparHtml(_ps.texto)}" oninput="_ps.texto=this.value" style="width:190px"></label>
+      ${puede?`<button class="btn btn-sm btn-primary" onclick="psCompletarLibres()" ${nLibres?"":"disabled"}>🧹 Completar ${nLibres||""} día(s) libre(s)</button>`:""}
+      <span style="flex:1"></span>
+      <input type="text" id="psPara" placeholder="Para (correos)" value="${escaparHtml(tpCorreoPara)}" oninput="tpCorreoPara=this.value" style="width:190px">
+      <button class="btn btn-sm" onclick="psPdf()">📄 PDF</button><button class="btn btn-sm" onclick="psCorreo('web')">✉ Outlook web</button><button class="btn btn-sm" onclick="psCorreo('app')">✉ Outlook</button><button class="btn btn-sm btn-primary" onclick="psCopiar()">📋 Copiar con formato</button></div>
+    ${nLibres?`<div class="mp-alerta" style="margin-bottom:10px">⚠ Hay ${nLibres} día(s) sin actividad (ej. ${escaparHtml(M.dias.find(d=>d.libres.length)?psFechaTxt(M.dias.find(d=>d.libres.length).fecha):"")}). Puedes completarlos con «${escaparHtml(_ps.texto||"Aseo e inventario")}» con un clic.</div>`:""}
+    <div id="psPrev" style="border:1px solid var(--line);border-radius:8px;background:#fff;padding:12px;overflow:auto">${psHtml(M,{libres:true})}</div>
+    <h4 style="margin:16px 0 6px">Jornada por persona y día</h4>
+    <div class="hint" style="margin-bottom:6px">«Auto» = horario normal, o horas extra si en el taller le caen más de ${TP_HORAS_DIA} h. Elige «Horas extra» y la hora de salida para fijarlo; la fila de arriba (cada día) aplica a todo el equipo.</div>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Persona</th>${cabDia}</tr></thead><tbody>${filas||`<tr><td colspan="6" class="muted">No hay personas con actividades esta semana.</td></tr>`}</tbody></table></div>`;
+}
+async function psCopiar(silencioso){
+  const M=psModelo(_ps.lunes), html=psHtml(M,{}), texto=psTexto(M);
+  try{ if(!(navigator.clipboard&&window.ClipboardItem)) throw new Error("sin ClipboardItem");
+    await navigator.clipboard.write([new ClipboardItem({ "text/html":new Blob([html],{type:"text/html"}), "text/plain":new Blob([texto],{type:"text/plain"}) })]);
+    if(!silencioso) toast("Copiado con formato. Pégalo en el correo con Ctrl+V.","ok"); return true;
+  }catch(err){ try{ const el=document.getElementById("psPrev"), r=document.createRange(); r.selectNodeContents(el); const s=window.getSelection(); s.removeAllRanges(); s.addRange(r); const ok=document.execCommand("copy"); s.removeAllRanges(); if(!silencioso) toast(ok?"Copiado con formato.":"No se pudo copiar.",ok?"ok":"danger"); return ok; }catch(e2){ if(!silencioso) toast("No se pudo copiar.","danger"); return false; } }
+}
+async function psCorreo(modo){
+  const M=psModelo(_ps.lunes), texto=psTexto(M), asunto=psTitulo(M), para=((document.getElementById("psPara")||{}).value||"").trim();
+  await psCopiar(true);
+  if(modo==="app") window.location.href=`mailto:${para}?subject=${encodeURIComponent(asunto)}&body=${encodeURIComponent(texto.replace(/\r?\n/g,"\r\n"))}`;
+  else { let cuerpo=texto; const base=`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(para)}&subject=${encodeURIComponent(asunto)}&body=`;
+    if(base.length+encodeURIComponent(cuerpo).length>1900) cuerpo=cuerpo.slice(0,700)+"\n\n[...] Pega aquí la planificación completa con Ctrl+V.";
+    window.open(base+encodeURIComponent(cuerpo),"_blank"); }
+  toast("Listo. La planificación con formato quedó copiada: en el correo, pega con Ctrl+V.","ok");
+}
+async function psPdf(){
+  if(!(await asegurarPDF())){ toast("No se pudo cargar el generador de PDF. Revisa tu conexión.","danger"); return; }
+  const M=psModelo(_ps.lunes), nom=M.nom, { jsPDF }=window.jspdf, doc=new jsPDF({ orientation:"landscape", unit:"mm", format:"a4" });
+  tpPdfLogo(doc,297,10,6); doc.setFontSize(15); doc.setFont(undefined,"bold"); doc.text("ALUTIPO — Planificación semanal",14,15);
+  const ps=psProyectosSemana(M); doc.setFontSize(10); doc.setFont(undefined,"normal");
+  doc.text(`Semana ${distDiaTxt(M.lunes)} al ${distDiaTxt(M.dias[4].fecha)} · ${ps.length} proyecto(s) · ${M.activos.length} persona(s) · horario normal ${M.cfg.inicio}-${M.cfg.salida} · Emitido ${hoyISO()}`,14,21);
+  const resumen=ps.map(p=>`${psProy(p.pid)} (${p.n})`).join("  |  "); doc.setFontSize(8.5); doc.text(doc.splitTextToSize("Proyectos: "+(resumen||"—"),270),14,26);
+  const R=M.dias.map(d=>psResumenJor(d,nom));
+  const cuerpo=M.dias.map((d,i)=>{ const suf=p=>(R[i].multi&&d.jor[p].modo==="extra")?` (${d.jor[p].salida})`:"", nj=l=>l.map(p=>nom[p]+suf(p)).join(", "), lin=[];
+    d.proys.forEach(p=>{ lin.push(psProy(p.pid)); p.taller.forEach(x=>lin.push(`  Taller - ${x.det}: ${nj(x.personas)}`)); p.terreno.forEach(x=>lin.push(`  ${x.det||"Terreno"}: ${nj(x.personas)}`)); lin.push(""); });
+    d.generales.forEach(g=>lin.push(`${g.texto}: ${nj(g.personas)}`));
+    if(d.libres.length) lin.push(`(Sin actividad: ${d.libres.map(p=>nom[p]).join(", ")})`);
+    return lin.join("\n").trim()||"-"; });
+  doc.autoTable({ startY:32, head:[M.dias.map(d=>psFechaTxt(d.fecha))], body:[R.map(r=>r.pdf), cuerpo], theme:"grid", styles:{ fontSize:8.5, cellPadding:2, overflow:"linebreak", valign:"top" }, headStyles:{ fillColor:[193,113,46] }, margin:{ left:10, right:10 }, tableWidth:277,
+    didParseCell:function(h){ if(h.section==="body"&&h.row.index===0){ const r=R[h.column.index]; h.cell.styles.fontStyle="bold"; h.cell.styles.fillColor=r.tipo==="extra"?[253,230,200]:[238,241,244]; h.cell.styles.textColor=r.tipo==="extra"?[138,75,15]:[85,85,85]; } } });
+  const ex=psHorasExtra(M);
+  if(ex.length) doc.autoTable({ startY:doc.lastAutoTable.finalY+5, head:[["Horas extra de la semana","Días y hora de salida","Horas"]], body:ex.map(e=>[nom[e.pid],e.dias.join(" · "),e.h+" h"]), theme:"grid", styles:{ fontSize:8.5, cellPadding:1.5 }, headStyles:{ fillColor:[100,100,100] }, margin:{ left:10, right:10 }, tableWidth:180 });
+  doc.save(`Planificacion_semanal_${M.lunes}.pdf`);
+}
 
 function shellCargando() {
   document.getElementById("app").innerHTML = `

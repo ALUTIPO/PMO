@@ -536,7 +536,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.9.1";
+const APP_VERSION = "3.9.2";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -4639,8 +4639,8 @@ function modalRecepcionEntregaAcuerdo(aid, eid) {
         <div style="flex:1"><label class="field-label">N° de factura / guía *</label><input type="text" id="acFactura" placeholder="Ej: 12345"></div>
         <div style="flex:1"><label class="field-label">Fecha de recepción</label><input type="date" id="acFechaRec" value="${hoyISO()}"></div>
       </div>
-      <div class="table-wrap" style="max-height:340px; overflow:auto;"><table>
-        <tr><th>Código</th><th>Producto</th><th>Planificado</th><th>Llegó</th></tr>
+      <div class="table-wrap" style="max-height:max(360px, calc(90vh - 330px)); overflow:auto;"><table>
+        <tr><th style="position:sticky;top:0;background:#eef1f4;z-index:1">Código</th><th style="position:sticky;top:0;background:#eef1f4;z-index:1">Producto</th><th style="position:sticky;top:0;background:#eef1f4;z-index:1">Planificado</th><th style="position:sticky;top:0;background:#eef1f4;z-index:1">Llegó</th></tr>
         ${e.lineas.map((l, i) => { const it = a.items.find(x => x.codigo === l.codigo) || {}; return `<tr>
           <td class="mono small">${l.codigo}</td><td>${it.descripcion || ''}</td><td>${l.cantPlan}</td>
           <td><input type="number" min="0" step="1" id="acRec_${i}" value="${l.cantPlan}" style="width:90px;"></td></tr>`; }).join('')}
@@ -4649,7 +4649,8 @@ function modalRecepcionEntregaAcuerdo(aid, eid) {
     <div class="modal-foot">
       <button class="btn" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-primary" onclick="confirmarRecepcionAcuerdo('${aid}','${eid}')">Ingresar a Bodega General</button>
-    </div>`);
+    </div>`, 1180);
+  const mo=document.querySelector("#modalRoot .modal"); if(mo) mo.style.maxHeight="94vh";
 }
 function ingresarBodegaGeneralDesdeAcuerdo(a, it, qty, yaRecibido, documento) {
   let b = buscarBodegaGeneralPorCodigo(it.codigo);

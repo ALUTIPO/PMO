@@ -536,7 +536,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.11.1";
+const APP_VERSION = "3.11.2";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -5116,6 +5116,64 @@ function guardarAgregarProductosAcuerdo() {
   guardarEstado("Compendio ampliado"); closeModal(); renderAll();
   toast(`Compendio actualizado: ${nuevos} nuevos, ${ampl} ampliados.`, "ok");
 }
+/* ---------- Ajustar un producto desde el compendio (acordado + pedidos) ---------- */
+function modalAjustarCantidadAcuerdo(aid, codigo) {
+  const a = (DB.acuerdos || []).find(x => x.id === aid); const it = a && a.items.find(x => x.codigo === codigo); if (!it) return;
+  if (!puedeGestionarAcuerdo()) { toast(`Tu rol (${DB.role}) no gestiona acuerdos.`, "danger"); return; }
+  const t = totalesItemAcuerdo(a, it);
+  const filas = [];
+  a.entregas.forEach(e => e.lineas.forEach((l, li) => { if (l.codigo === codigo) filas.push({ e, l }); }));
+  openModal(`
+    <div class="modal-head"><h3>Ajustar cantidades — ${escaparHtml(it.descripcion)}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <p class="small muted mono">${escaparHtml(it.codigo)} · acordado ${t.acordada} · pedido pendiente ${t.pendiente} · recibido ${t.recibida} · saldo ${t.saldo}</p>
+      <label class="field-label">Cantidad acordada (total del compendio)</label>
+      <input type="number" step="1" id="acAjAcordado" value="${t.acordada}" data-min="${t.recibida}" style="max-width:200px;">
+      <h4 style="margin:14px 0 6px;">En los pedidos</h4>
+      ${filas.length ? `<div class="table-wrap"><table><tr><th>Entrega</th><th>Estado</th><th>Recibido</th><th style="width:130px">Planificado</th></tr>
+      ${filas.map((f, j) => { const rec = Number(f.l.cantRecibida) || 0; const editable = f.e.estado !== 'Recibida';
+        return `<tr><td>${escaparHtml(f.e.nombre)}</td><td>${f.e.estado}</td><td>${rec}</td>
+        <td>${editable ? `<input type="number" min="${rec}" step="1" id="acAjPed_${j}" value="${f.l.cantPlan}" data-rec="${rec}" style="width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:7px;">` : f.l.cantPlan + ' <span class="hint">(cerrada)</span>'}</td></tr>`; }).join('')}</table></div>` : '<p class="hint">Este producto no está en ningún pedido.</p>'}
+      <div class="flex-gap" style="margin-top:10px; flex-wrap:wrap;">
+        <button class="btn btn-sm" type="button" onclick="acAjQuitarPendiente(${t.recibida})">Quitar lo pendiente de los pedidos y dejar acordado = recibido</button></div>
+      <p class="small muted" style="margin-top:8px;">Lo acordado no puede ser menor a lo recibido más lo que siga pedido. Si dejas lo acordado y quitas del pedido, la diferencia queda como saldo.</p>
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="guardarAjusteCantidadAcuerdo('${aid}','${escaparHtml(codigo)}')">Guardar</button></div>`, 760);
+}
+function acAjQuitarPendiente(rec) {
+  document.querySelectorAll('[id^=acAjPed_]').forEach(i => { i.value = i.dataset.rec; });
+  document.getElementById('acAjAcordado').value = rec;
+}
+function guardarAjusteCantidadAcuerdo(aid, codigo) {
+  const a = (DB.acuerdos || []).find(x => x.id === aid); const it = a && a.items.find(x => x.codigo === codigo); if (!it) return;
+  const filas = []; a.entregas.forEach(e => e.lineas.forEach(l => { if (l.codigo === codigo) filas.push({ e, l }); }));
+  const nuevoAc = Math.round(Number(document.getElementById('acAjAcordado').value));
+  if (isNaN(nuevoAc) || nuevoAc < 0) { toast("Cantidad acordada inválida.", "danger"); return; }
+  const nuevosPlan = [];
+  let recTot = 0, pend = 0;
+  for (let j = 0; j < filas.length; j++) {
+    const { e, l } = filas[j]; const rec = Number(l.cantRecibida) || 0; recTot += rec;
+    const el = document.getElementById('acAjPed_' + j); const q = el ? Math.round(Number(el.value)) : Number(l.cantPlan) || 0;
+    if (isNaN(q) || q < rec) { toast(`${e.nombre}: no puede ser menos de lo recibido (${rec}).`, "danger"); return; }
+    nuevosPlan.push(q);
+    if (e.estado === "Solicitada" || e.estado === "Parcial") pend += q - rec;
+  }
+  if (nuevoAc < recTot + pend) { toast(`Lo acordado (${nuevoAc}) no puede ser menor a lo recibido + lo que sigue pedido (${recTot + pend}). Quita antes del pedido o sube lo acordado.`, "danger"); return; }
+  const antesAc = Number(it.cantAcordada) || 0; const det = [];
+  filas.forEach(({ e, l }, j) => { if (nuevosPlan[j] !== (Number(l.cantPlan) || 0)) { det.push(`${e.nombre}: ${l.cantPlan}→${nuevosPlan[j]}`); l.cantPlan = nuevosPlan[j]; } });
+  a.entregas.forEach(e => {
+    e.lineas = e.lineas.filter(l => !((Number(l.cantPlan) || 0) === 0 && (Number(l.cantRecibida) || 0) === 0));
+    if (e.estado === "Parcial" && !e.lineas.some(l => (Number(l.cantRecibida) || 0) < (Number(l.cantPlan) || 0))) e.estado = "Recibida";
+  });
+  it.cantAcordada = nuevoAc;
+  if (nuevoAc === antesAc && !det.length) { toast("No hay cambios.", "danger"); return; }
+  a.ampliaciones = a.ampliaciones || [];
+  a.ampliaciones.push({ fecha: hoyISO(), por: DB.usuario + " · " + DB.role, tipo: "cantidad", codigo, descripcion: it.descripcion, cantidad: nuevoAc - antesAc, entrega: det.length ? det.join('; ') : "compendio", motivo: "Ajuste de cantidades" });
+  registrarHistorial({ proyecto: "General", accion: "Modificar", detalle: `Acuerdo ${a.nombre}: ajuste de ${it.descripcion} — acordado ${antesAc}→${nuevoAc}${det.length ? '; pedidos ' + det.join(', ') : ''}`, usuario: DB.usuario + " · " + DB.role, criticidad: "Media" });
+  guardarEstado("Cantidades ajustadas"); closeModal(); renderAll();
+  toast(`${it.descripcion}: acordado ${antesAc}→${nuevoAc}.`, "ok");
+}
 function modalEditarAcuerdo(aid) {
   const a = (DB.acuerdos || []).find(x => x.id === aid); if (!a) return;
   if (!puedeGestionarAcuerdo()) { toast(`Tu rol (${DB.role}) no gestiona acuerdos.`, "danger"); return; }
@@ -5264,7 +5322,7 @@ function tablaCompendioAcuerdo(a, filas) {
       <td>${s.sinPrecio ? '<span style="color:var(--copper-dark)">pendiente</span>' : money(it.precio)}</td>
       <td>${s.b ? `${s.b.stock} / ${s.b.minimo || '—'}` : '—'}</td>
       <td>${s.agotado ? '<span class="badge b-rojo"><span class="dot"></span>Máximo alcanzado</span>' : (s.bajoMinimo ? '<span class="badge b-amarillo"><span class="dot"></span>En mínimo</span>' : '')}</td>
-      <td style="white-space:nowrap;">${puedeGestionarAcuerdo() ? `<button class="btn btn-sm" onclick="modalPrecioItemAcuerdo('${a.id}','${it.codigo}')">$</button> <button class="btn btn-sm" onclick="modalAmpliarCantidadAcuerdo('${a.id}','${it.codigo}')">＋ Cantidad</button>` : ''}</td>
+      <td style="white-space:nowrap;">${puedeGestionarAcuerdo() ? `<button class="btn btn-sm" onclick="modalPrecioItemAcuerdo('${a.id}','${it.codigo}')">$</button> <button class="btn btn-sm" onclick="modalAmpliarCantidadAcuerdo('${a.id}','${it.codigo}')">＋ Cantidad</button> <button class="btn btn-sm" onclick="modalAjustarCantidadAcuerdo('${a.id}','${it.codigo}')">✏ Ajustar</button>` : ''}</td>
     </tr>`).join('')}
   </table></div></div>`;
 }

@@ -536,7 +536,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.16.0";
+const APP_VERSION = "3.16.1";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -6126,6 +6126,10 @@ function modalEscaner(tab) {
       <div style="background:#0b0e13; border-radius:10px; padding:8px; text-align:center;">
         <video id="escVideo" playsinline muted style="width:100%; max-height:34vh; border-radius:8px; background:#000; display:none;"></video>
         <button class="btn btn-primary" id="escBtnCam" onclick="escActivarCamara()">📷 Activar cámara y escanear</button>
+        <div class="flex-gap" id="escBtnsCam" style="display:none; justify-content:center; margin-top:8px; flex-wrap:wrap;">
+          <button class="btn btn-primary" onclick="escCapturar()">📸 Capturar y leer</button>
+          <button class="btn btn-sm" id="escBtnLuz" style="display:none;" onclick="escLinterna()">💡 Linterna</button></div>
+        <div style="margin-top:8px;"><label class="btn btn-sm" style="cursor:pointer;">📁 Sacar foto / elegir imagen<input type="file" accept="image/*" capture="environment" style="display:none;" onchange="escFoto(this)"></label></div>
         <div class="small" id="escEstadoCam" style="color:#cbd5e1; margin-top:6px;">Apunta al código de barras. También sirve un lector USB: escanea con el cursor en el cuadro de abajo.</div></div>
       <div class="flex-gap" style="margin-top:10px;"><input type="text" id="escManual" placeholder="Escribe o escanea el código y pulsa Enter" style="flex:1;" onkeydown="if(event.key==='Enter'){escBuscar(this.value); this.select();}">
         <button class="btn" onclick="escBuscar(document.getElementById('escManual').value)">Buscar</button></div>
@@ -6134,6 +6138,10 @@ function modalEscaner(tab) {
       <div style="background:#0b0e13; border-radius:10px; padding:8px; text-align:center;">
         <video id="escVideo" playsinline muted style="width:100%; max-height:30vh; border-radius:8px; background:#000; display:none;"></video>
         <button class="btn btn-primary" id="escBtnCam" onclick="escActivarCamara()">📷 Activar cámara y escanear</button>
+        <div class="flex-gap" id="escBtnsCam" style="display:none; justify-content:center; margin-top:8px; flex-wrap:wrap;">
+          <button class="btn btn-primary" onclick="escCapturar()">📸 Capturar y leer</button>
+          <button class="btn btn-sm" id="escBtnLuz" style="display:none;" onclick="escLinterna()">💡 Linterna</button></div>
+        <div style="margin-top:8px;"><label class="btn btn-sm" style="cursor:pointer;">📁 Sacar foto / elegir imagen<input type="file" accept="image/*" capture="environment" style="display:none;" onchange="escFoto(this)"></label></div>
         <div class="small" id="escEstadoCam" style="color:#cbd5e1; margin-top:6px;"></div></div>
       <datalist id="escSkuList">${[...escSkusConocidos()].map(([k, v]) => `<option value="${escaparHtml(k)}">${escaparHtml(v)}</option>`).join('')}</datalist>
       <div class="flex-gap" style="margin-top:10px; flex-wrap:wrap; align-items:flex-end;">
@@ -6154,9 +6162,13 @@ async function escActivarCamara() {
   const video = document.getElementById('escVideo'), est = document.getElementById('escEstadoCam'), btn = document.getElementById('escBtnCam'); if (!video) return;
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { toast("Este navegador no permite usar la cámara desde la web.", "danger"); return; }
   escStop();
-  try { esc.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false }); }
+  try { esc.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false }); }
   catch (err) { toast(err.name === "NotAllowedError" ? "Permiso de cámara denegado — habilítalo en la configuración del navegador." : "No se pudo abrir la cámara: " + (err.message || err.name), "danger"); return; }
   video.srcObject = esc.stream; video.style.display = "block"; await video.play().catch(() => { }); if (btn) btn.style.display = "none";
+  const bc = document.getElementById('escBtnsCam'); if (bc) bc.style.display = "flex";
+  try { const tr = esc.stream.getVideoTracks()[0]; const cap = (tr.getCapabilities && tr.getCapabilities()) || {};
+    if (cap.focusMode && cap.focusMode.includes("continuous")) await tr.applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(() => { });
+    if (cap.torch) { const l = document.getElementById('escBtnLuz'); if (l) l.style.display = "inline-block"; } } catch (e) { }
   if (est) est.textContent = "Escaneando… apunta al código de barras.";
   if ("BarcodeDetector" in window) {
     let det; try { det = new BarcodeDetector({ formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "code_93", "itf", "codabar", "qr_code", "data_matrix"] }); } catch (e) { det = new BarcodeDetector(); }
@@ -6168,6 +6180,39 @@ async function escActivarCamara() {
     try { esc.reader = new ZXing.BrowserMultiFormatReader(); esc.reader.decodeFromVideoElement(video, (res) => { if (res) escDetectado(res.getText()); }); if (est) est.textContent = "Escaneando… apunta al código de barras."; }
     catch (e) { if (est) est.textContent = "No se pudo iniciar el lector: " + e.message; }
   }
+}
+let _escLuz = false;
+async function escLinterna() { try { const tr = esc.stream.getVideoTracks()[0]; _escLuz = !_escLuz; await tr.applyConstraints({ advanced: [{ torch: _escLuz }] }); } catch (e) { toast("Esta cámara no permite usar la linterna desde el navegador.", "danger"); } }
+function escCanvasDe(src, rot) {
+  const w = src.videoWidth || src.naturalWidth || src.width, h = src.videoHeight || src.naturalHeight || src.height; if (!w || !h) return null;
+  const k = Math.min(1, 2000 / Math.max(w, h)), cw = Math.round(w * k), ch = Math.round(h * k);
+  const c = document.createElement("canvas"); c.width = rot ? ch : cw; c.height = rot ? cw : ch; const ctx = c.getContext("2d");
+  if (rot) { ctx.translate(c.width, 0); ctx.rotate(Math.PI / 2); } ctx.drawImage(src, 0, 0, cw, ch); return c;
+}
+async function escDecodificar(src) {
+  for (const rot of [false, true]) {
+    const c = escCanvasDe(src, rot); if (!c) return null;
+    if ("BarcodeDetector" in window) { try { const det = new BarcodeDetector(); const r = await det.detect(c); if (r && r.length) return r[0].rawValue; } catch (e) { } }
+    const ok = window.ZXing || (await cargarScriptExterno("https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js") && window.ZXing);
+    if (ok) { try {
+      const hints = new Map(); hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+      const rd = new ZXing.BrowserMultiFormatReader(hints); const img = new Image(); img.src = c.toDataURL("image/png"); await new Promise(r => { img.onload = r; img.onerror = r; });
+      const res = await rd.decodeFromImageElement(img); if (res) return res.getText(); } catch (e) { } }
+  }
+  return null;
+}
+async function escCapturar() {
+  const video = document.getElementById('escVideo'), est = document.getElementById('escEstadoCam'); if (!video || video.readyState < 2) { toast("Activa primero la cámara.", "danger"); return; }
+  if (est) est.textContent = "Leyendo la imagen…"; const txt = await escDecodificar(video);
+  if (txt) { esc.ultimo = ""; escDetectado(txt); if (est) est.textContent = "Código leído: " + txt; }
+  else { if (est) est.textContent = "No se detectó ningún código. Acércate, centra las barras, mejora la luz (💡) y vuelve a capturar; o escríbelo abajo."; toast("No se pudo leer el código en la imagen.", "danger"); }
+}
+async function escFoto(inp) {
+  const f = inp.files && inp.files[0]; inp.value = ""; if (!f) return; const est = document.getElementById('escEstadoCam'); if (est) est.textContent = "Leyendo la foto…";
+  let img; try { img = await createImageBitmap(f); } catch (e) { toast("No se pudo abrir la imagen.", "danger"); return; }
+  const txt = await escDecodificar(img);
+  if (txt) { esc.ultimo = ""; escDetectado(txt); if (est) est.textContent = "Código leído: " + txt; }
+  else { if (est) est.textContent = "No se detectó código en la foto. Intenta de nuevo más cerca y con buena luz, o escríbelo."; toast("No se encontró código de barras en la foto.", "danger"); }
 }
 function escDetectado(txt) {
   txt = String(txt || "").trim(); if (!txt) return;

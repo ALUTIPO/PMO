@@ -536,7 +536,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.14.0";
+const APP_VERSION = "3.15.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -5819,6 +5819,85 @@ function renderPresupuesto() {
 
 
 // --- Bodega ---
+/* ---------- Consolidar la bodega de un proyecto: instalado vs. sobrante a Bodega General ---------- */
+function modalConsolidarBodegaProyecto(pid) {
+  const p = proy(pid); if (!p) return;
+  if (!puedeGestionarBodega()) { toast(`Tu rol (${DB.role}) no gestiona bodega.`, "danger"); return; }
+  const filas = (p.bodega || []).map((b, i) => ({ b, i })).filter(x => Number(x.b.stock) > 0);
+  if (!filas.length) { toast("Esta bodega no tiene stock por consolidar.", "ok"); return; }
+  openModal(`
+    <div class="modal-head"><h3>Consolidar bodega — ${escaparHtml(p.codigo)}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <p class="small muted">Para cada material con stock indica cuánto <strong>quedó instalado y montado</strong> (sale de la bodega y queda registrado como instalado) y cuánto <strong>vuelve a Bodega General</strong>. Lo que no asignes sigue en la bodega del proyecto.</p>
+      <div class="flex-gap" style="flex-wrap:wrap; align-items:flex-end; margin-bottom:8px;">
+        <div style="flex:1; min-width:200px;"><label class="field-label">Buscar</label><input type="text" placeholder="código o material…" oninput="consFiltrar(this.value)"></div>
+        <button class="btn btn-sm" onclick="consPoner('inst')">Todo lo que hay quedó instalado</button>
+        <button class="btn btn-sm" onclick="consPoner('dev')">Todo vuelve a Bodega General</button>
+        <button class="btn btn-sm" onclick="consPoner('cero')">Limpiar</button></div>
+      <div class="table-wrap" style="max-height:50vh; overflow:auto;"><table id="consTabla">
+        <tr><th>Código</th><th>Material</th><th>Stock en bodega</th><th>Ya instalado</th><th style="width:110px">Instalado ahora</th><th style="width:110px">A Bodega General</th><th style="width:110px">Precio unit.</th><th>Quedan</th></tr>
+        ${filas.map(({ b, i }) => { const g = buscarBodegaGeneralPorNombre(b.material); const pr = b.precioUnitario || (g && g.precioUnitario) || "";
+          return `<tr data-txt="${escaparHtml(((b.codigo || '') + ' ' + (b.material || '')).toLowerCase())}"><td class="mono small">${escaparHtml(b.codigo)}</td><td>${escaparHtml(b.material)}</td><td><b>${b.stock}</b> ${escaparHtml(b.unidad || '')}</td><td>${b.instalado || '—'}</td>
+          <td><input type="number" min="0" step="1" value="0" id="consI_${i}" data-stock="${b.stock}" oninput="consCalc()" style="width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:7px;"></td>
+          <td><input type="number" min="0" step="1" value="0" id="consD_${i}" oninput="consCalc()" style="width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:7px;"></td>
+          <td><input type="number" min="0" id="consP_${i}" value="${pr}" placeholder="requerido" style="width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:7px;"></td>
+          <td id="consQ_${i}">${b.stock}</td></tr>`; }).join('')}
+      </table></div>
+      <div class="small" id="consResumen" style="margin-top:8px;"></div>
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="consAplicar('${pid}')">Aplicar consolidación</button></div>`, 1150);
+  consCalc();
+}
+function consFiltrar(v) { v = (v || "").trim().toLowerCase(); document.querySelectorAll('#consTabla tr[data-txt]').forEach(tr => { tr.style.display = (!v || tr.dataset.txt.includes(v)) ? "" : "none"; }); }
+function consPoner(modo) {
+  document.querySelectorAll('#consTabla input[id^=consI_]').forEach(el => {
+    const i = el.id.slice(6), st = el.dataset.stock, d = document.getElementById('consD_' + i);
+    el.value = modo === 'inst' ? st : 0; d.value = modo === 'dev' ? st : 0;
+  });
+  consCalc();
+}
+function consCalc() {
+  let ni = 0, nd = 0, nq = 0;
+  document.querySelectorAll('#consTabla input[id^=consI_]').forEach(el => {
+    const i = el.id.slice(6), st = Number(el.dataset.stock), a = Number(el.value) || 0, d = Number(document.getElementById('consD_' + i).value) || 0;
+    const q = st - a - d; const c = document.getElementById('consQ_' + i);
+    c.innerHTML = q < 0 ? `<b style="color:var(--red,#b3261e)">${q}</b>` : q; if (a > 0) ni++; if (d > 0) nd++; if (q > 0) nq++;
+  });
+  const el = document.getElementById('consResumen'); if (el) el.textContent = `${ni} material(es) instalado(s) · ${nd} vuelven a Bodega General · ${nq} siguen en la bodega del proyecto`;
+}
+function consAplicar(pid) {
+  const p = proy(pid); if (!p) return;
+  if (!puedeGestionarBodega()) { toast(`Tu rol (${DB.role}) no gestiona bodega.`, "danger"); return; }
+  const ops = [];
+  for (const el of document.querySelectorAll('#consTabla input[id^=consI_]')) {
+    const i = Number(el.id.slice(6)), b = p.bodega[i]; if (!b) continue;
+    const a = Math.round(Number(el.value) || 0), d = Math.round(Number(document.getElementById('consD_' + i).value) || 0), pr = Number(document.getElementById('consP_' + i).value) || 0;
+    if (a < 0 || d < 0) { toast(`${b.material}: cantidades inválidas.`, "danger"); return; }
+    if (a + d > Number(b.stock)) { toast(`${b.material}: instalado + a Bodega General (${a + d}) supera el stock (${b.stock}).`, "danger"); return; }
+    if (d > 0 && pr <= 0) { toast(`${b.material}: indica el precio unitario para enviarlo a Bodega General.`, "danger"); return; }
+    if (a > 0 || d > 0) ops.push({ b, a, d, pr });
+  }
+  if (!ops.length) { toast("No indicaste ninguna cantidad.", "danger"); return; }
+  if (!confirm(`Se consolidarán ${ops.length} material(es) de ${p.codigo}. ¿Aplicar?`)) return;
+  let ni = 0, nd = 0;
+  ops.forEach(({ b, a, d, pr }) => {
+    if (a > 0) {
+      const cu = Number(b.precioUnitario) || pr || 0;
+      b.stock = Number(b.stock) - a; b.instalado = (Number(b.instalado) || 0) + a; ni++;
+      registrarMovimientoBodega({ tipo: "Instalado en proyecto", signo: -1, codigo: b.codigo, material: b.material, unidad: b.unidad || "", cantidad: a, costoUnitario: cu, total: a * cu, proyectoId: p.id, proyectoCodigo: p.codigo, proyectoNombre: p.nombre, documento: "Consolidación de bodega: instalado y montado", estadoInforme: "No aplica" });
+      registrarHistorial({ proyecto: p.codigo, accion: "Modificar", detalle: `Bodega ${p.codigo}: ${a} ${b.unidad || ''} de «${b.material}» instalados y montados (total instalado ${b.instalado})`, usuario: DB.usuario + " · " + DB.role, criticidad: "Media" });
+    }
+    if (d > 0) {
+      const eraStock = Number(b.stock);
+      if (enviarABodegaGeneral(p.id, b.codigo, d, b.material, pr)) {
+        nd++; registrarMovimientoBodega({ tipo: "Devolución de proyecto a Bodega General", signo: 1, codigo: b.codigo, material: b.material, unidad: b.unidad || "", cantidad: d, costoUnitario: pr, total: d * pr, proyectoId: p.id, proyectoCodigo: p.codigo, proyectoNombre: p.nombre, documento: "Consolidación de bodega: sobrante", origenTipo: "Terreno", origenDetalle: p.codigo, ubicDestino: "Por ubicar", estadoInforme: "No aplica" });
+      }
+    }
+  });
+  guardarEstado("Bodega consolidada"); closeModal(); renderAll();
+  toast(`Bodega ${p.codigo} consolidada: ${ni} instalado(s), ${nd} devuelto(s) a Bodega General.`, "ok");
+}
 function marcaDeProductoProyecto(b) {
   const g = (DB.bodegaGeneral || []).find(x => x.codigo === b.codigo || (x.material || "").trim().toLowerCase() === (b.material || "").trim().toLowerCase());
   return marcaDeProducto(g);
@@ -5826,8 +5905,8 @@ function marcaDeProductoProyecto(b) {
 function bgBuscarProy(v) { bgBusqueda = v || ""; const el = document.getElementById('bgTabla'); if (el) el.innerHTML = htmlTablaBodegaProyecto(); }
 function htmlTablaBodegaProyecto() {
   const p = proy(); const puede = puedeGestionarBodega();
-  const thead = `<tr><th>Código</th><th>Material</th><th>Stock</th><th>Mínimo</th><th>Estado</th>${puede ? '<th></th>' : ''}</tr>`;
-  const fila = b => `<tr><td class="mono">${b.codigo}</td><td>${b.material}</td><td class="mono">${b.stock} ${b.unidad}</td><td class="mono muted small">${b.minimo} ${b.unidad}</td><td>${badgeStock(calcularEstadoStock(b))}</td>
+  const thead = `<tr><th>Código</th><th>Material</th><th>Stock en bodega</th><th>Instalado y montado</th><th>Mínimo</th><th>Estado</th>${puede ? '<th></th>' : ''}</tr>`;
+  const fila = b => `<tr><td class="mono">${b.codigo}</td><td>${b.material}</td><td class="mono">${b.stock} ${b.unidad}</td><td class="mono">${b.instalado ? '✔ ' + b.instalado + ' ' + b.unidad : '—'}</td><td class="mono muted small">${b.minimo} ${b.unidad}</td><td>${badgeStock(calcularEstadoStock(b))}</td>
     ${puede ? `<td class="flex-gap"><button class="btn btn-sm" onclick="modalAjustarStock('${p.id}','${b.codigo}')">Actualizar stock</button>
       <button class="btn btn-sm" onclick="modalEnviarABodegaGeneral('${p.id}','${b.codigo}')" ${b.stock <= 0 ? 'disabled' : ''} title="Enviar sobrante a Bodega General, con precio unitario, para la base de Bsale">→ Bodega General</button></td>` : ''}</tr>`;
   if (!p.bodega.length) return `<div class="empty-state card">Sin registros de bodega para este proyecto. ${puede ? 'Se crean automáticamente al registrar una recepción de compra, o puedes agregar uno manualmente.' : ''}</div>`;
@@ -5847,6 +5926,7 @@ function renderBodega() {
       <div class="page-desc">Stock ya asignado a este proyecto. Las recepciones de compras ingresan acá automáticamente; también puedes traer material desde la <a href="#" onclick="goTo('bodegaGeneral'); return false;">Bodega General</a>.</div>
     </div>
     <div class="flex-gap">${selectorProyectos()}
+      ${puede ? `<button class="btn" onclick="modalConsolidarBodegaProyecto('${p.id}')" title="Indicar qué quedó instalado y montado y qué vuelve a Bodega General">✅ Consolidar bodega</button>` : ''}
       ${puede ? `<button class="btn btn-primary" onclick="modalProductoBodega('${p.id}')">+ Agregar producto</button>` : ''}
     </div>
   </div>

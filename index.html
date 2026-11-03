@@ -536,7 +536,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.12.0";
+const APP_VERSION = "3.12.1";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -6333,7 +6333,7 @@ const CR_DESTINOS = [
   ["proyecto", "Cargado a proyecto…", -1], ["panol", "Está en pañol / taller", -1], ["consumo", "Consumo o merma", -1],
   ["ingreso", "Ingreso no registrado", 1], ["devolucion", "Devolución de terreno", 1], ["sin", "Sin explicar (solo ajustar)", 0]
 ];
-function crFilaVacia() { return { codigo: "", contado: "", destino: "sin", proyectoId: "", nota: "", ok: true }; }
+function crFilaVacia() { return { codigo: "", contado: "", destino: "sin", reparto: [{ proyectoId: "", cant: "" }], nota: "", ok: true }; }
 function modalCruceStock() {
   if (!puedeGestionarBodega()) { toast(`Tu rol (${DB.role}) no gestiona bodega.`, "danger"); return; }
   acCr = { filas: [crFilaVacia()] };
@@ -6363,11 +6363,13 @@ function crLeer() {
     if (g('codigo')) f.codigo = g('codigo').value;
     if (g('contado')) f.contado = g('contado').value;
     if (g('destino')) f.destino = g('destino').value;
-    if (g('proy')) f.proyectoId = g('proy').value;
+    (f.reparto || []).forEach((r, k) => { const a1 = document.getElementById('acCr_rp_' + i + '_' + k), a2 = document.getElementById('acCr_rq_' + i + '_' + k); if (a1) r.proyectoId = a1.value; if (a2) r.cant = a2.value; });
     if (g('nota')) f.nota = g('nota').value;
     if (g('ok')) f.ok = g('ok').checked;
   });
 }
+function crAddProy(i) { crLeer(); acCr.filas[i].reparto.push({ proyectoId: "", cant: "" }); crPintar(); }
+function crDelProy(i, k) { crLeer(); const r = acCr.filas[i].reparto; r.splice(k, 1); if (!r.length) r.push({ proyectoId: "", cant: "" }); crPintar(); }
 function crAgregarFila() { crLeer(); acCr.filas.push(crFilaVacia()); crPintar(); }
 function crQuitar(i) { crLeer(); acCr.filas.splice(i, 1); if (!acCr.filas.length) acCr.filas.push(crFilaVacia()); crPintar(); }
 function crTraerTodo() {
@@ -6397,7 +6399,7 @@ function crPintar() {
   const box = document.getElementById('acCrTabla'); if (!box) return;
   const inp = 'width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:7px;';
   box.innerHTML = `<div class="table-wrap"><table>
-    <tr><th style="width:140px">Código</th><th>Material</th><th style="width:70px">Sistema</th><th style="width:90px">Contado</th><th style="width:80px">Diferencia</th><th style="width:190px">Motivo de la diferencia</th><th style="width:170px">Proyecto</th><th>Nota (pañol, quién, etc.)</th><th style="width:60px">Aprobar</th><th style="width:30px"></th></tr>
+    <tr><th style="width:140px">Código</th><th>Material</th><th style="width:70px">Sistema</th><th style="width:90px">Contado</th><th style="width:80px">Diferencia</th><th style="width:190px">Motivo de la diferencia</th><th style="width:300px">Repartir entre proyectos</th><th>Nota (pañol, quién, etc.)</th><th style="width:60px">Aprobar</th><th style="width:30px"></th></tr>
     ${acCr.filas.map((f, i) => { const { b } = crDiff(f);
       return `<tr data-txt="${escaparHtml(((f.codigo || '') + ' ' + (b ? b.material : '')).toLowerCase())}">
         <td><input style="${inp}" list="crCodigos" id="acCr_codigo_${i}" value="${escaparHtml(f.codigo)}" onchange="crCambio()"></td>
@@ -6405,7 +6407,7 @@ function crPintar() {
         <td><input type="number" min="0" style="${inp}" id="acCr_contado_${i}" value="${escaparHtml(f.contado)}" oninput="crCambio()"></td>
         <td id="acCr_dif_${i}"></td>
         <td><select style="${inp}" id="acCr_destino_${i}" onchange="crCambio()">${CR_DESTINOS.map(([v, l]) => `<option value="${v}" ${f.destino === v ? 'selected' : ''}>${l}</option>`).join('')}</select></td>
-        <td><select style="${inp}" id="acCr_proy_${i}" onchange="crCambio()"><option value="">—</option>${(DB.proyectos || []).map(p => `<option value="${p.id}" ${f.proyectoId === p.id ? 'selected' : ''}>${escaparHtml(p.codigo || p.nombre)}</option>`).join('')}</select></td>
+        <td><div id="acCr_rep_${i}">${(f.reparto || []).map((r, k) => `<div class="flex-gap" style="margin-bottom:4px; gap:4px;"><select style="${inp}" id="acCr_rp_${i}_${k}" onchange="crCambio()"><option value="">Proyecto…</option>${(DB.proyectos || []).map(p => `<option value="${p.id}" ${r.proyectoId === p.id ? 'selected' : ''}>${escaparHtml(p.codigo || p.nombre)}</option>`).join('')}</select><input type="number" min="0" placeholder="cant." style="${inp} width:70px;" id="acCr_rq_${i}_${k}" value="${escaparHtml(r.cant)}" oninput="crCambio()"><button class="btn btn-sm" onclick="crDelProy(${i},${k})">✕</button></div>`).join('')}<button class="btn btn-sm" onclick="crAddProy(${i})">＋ otro proyecto</button><div class="small" id="acCr_rs_${i}"></div></div></td>
         <td><input style="${inp}" id="acCr_nota_${i}" value="${escaparHtml(f.nota)}" oninput="crCambio(true)"></td>
         <td style="text-align:center;"><input type="checkbox" id="acCr_ok_${i}" ${f.ok ? 'checked' : ''} onchange="crCambio(true)"></td>
         <td><button class="btn btn-sm" onclick="crQuitar(${i})">✕</button></td></tr>`; }).join('')}</table></div>`;
@@ -6419,7 +6421,10 @@ function crCambio(sinLeer) {
     set('acCr_mat_' + i, b ? escaparHtml(b.material) : (f.codigo.trim() ? '<span style="color:var(--copper-dark)">código no está en Bodega General</span>' : ''));
     set('acCr_sis_' + i, b ? b.stock : '');
     set('acCr_dif_' + i, d === null ? '' : (d === 0 ? '<span style="color:var(--ok)">✔ igual</span>' : `<b style="color:${d < 0 ? 'var(--red,#b3261e)' : 'var(--copper-dark)'}">${d > 0 ? '+' : ''}${d}</b>`));
-    const pr = document.getElementById('acCr_proy_' + i); if (pr) pr.style.visibility = f.destino === 'proyecto' ? 'visible' : 'hidden';
+    const pr = document.getElementById('acCr_rep_' + i); if (pr) pr.style.display = (f.destino === 'proyecto' && d < 0) ? 'block' : 'none';
+    const rs = document.getElementById('acCr_rs_' + i);
+    if (rs && f.destino === 'proyecto' && d < 0) { const sum = (f.reparto || []).reduce((t, r) => t + (Math.round(Number(r.cant)) || 0), 0); const resto = -d - sum;
+      rs.innerHTML = resto === 0 ? `<span style="color:var(--ok)">✔ repartido ${sum} de ${-d}</span>` : (resto > 0 ? `Repartido ${sum} de ${-d} · <b>${resto}</b> se ajustan sin explicar` : `<b style="color:var(--red,#b3261e)">Te pasaste por ${-resto}</b>`); }
     const dsel = document.getElementById('acCr_destino_' + i); if (dsel) dsel.disabled = (d === 0 || d === null);
   });
   const dif = acCr.filas.map(f => ({ f, ...crDiff(f) })).filter(x => x.b && x.d);
@@ -6438,23 +6443,37 @@ function crAplicar() {
   for (const x of dif) {
     const f = x.f, d = x.d; const info = CR_DESTINOS.find(c => c[0] === f.destino);
     if (f.destino === "proyecto" && d > 0) { toast(`${f.codigo}: sobra material, no puede ser «cargado a proyecto».`, "danger"); return; }
+    if (f.destino === "proyecto") {
+      const rp = (f.reparto || []).filter(r => Math.round(Number(r.cant)) > 0);
+      if (!rp.length) { toast(`${f.codigo}: indica a qué proyecto(s) se cargó y cuánto.`, "danger"); return; }
+      if (rp.some(r => !r.proyectoId)) { toast(`${f.codigo}: falta elegir el proyecto en alguna línea del reparto.`, "danger"); return; }
+      if (new Set(rp.map(r => r.proyectoId)).size !== rp.length) { toast(`${f.codigo}: un proyecto está repetido en el reparto.`, "danger"); return; }
+      const sum = rp.reduce((t, r) => t + Math.round(Number(r.cant)), 0);
+      if (sum > -d) { toast(`${f.codigo}: repartiste ${sum} pero solo faltan ${-d}.`, "danger"); return; }
+      if (sum > Number(x.b.stock)) { toast(`${f.codigo}: en bodega solo hay ${x.b.stock}.`, "danger"); return; }
+    }
     if (info && info[2] > 0 && d < 0) { toast(`${f.codigo}: faltan unidades, el motivo no puede ser «${info[1]}».`, "danger"); return; }
     if (info && info[2] < 0 && d > 0) { toast(`${f.codigo}: sobran unidades, el motivo no puede ser «${info[1]}».`, "danger"); return; }
-    if (f.destino === "proyecto" && !f.proyectoId) { toast(`${f.codigo}: elige a qué proyecto se cargó.`, "danger"); return; }
   }
   if (!confirm(`Se ajustarán ${dif.length} producto(s) en Bodega General. ¿Aplicar?`)) return;
   const fecha = hoyISO(); const resumen = []; let n = 0;
   dif.forEach(x => {
     const f = x.f, d = x.d, b = x.b; const mot = (CR_DESTINOS.find(c => c[0] === f.destino) || [])[1] || "";
     const nota = f.nota.trim();
+    let dRest = d;
     if (f.destino === "proyecto" && d < 0) {
-      if (asignarBodegaGeneralAProyecto(b.codigo, f.proyectoId, -d)) { n++; resumen.push(`${b.codigo} ${d} → proyecto ${(proy(f.proyectoId) || {}).codigo || ''}`); }
-    } else {
+      (f.reparto || []).filter(r => Math.round(Number(r.cant)) > 0).forEach(r => {
+        const q = Math.round(Number(r.cant));
+        if (asignarBodegaGeneralAProyecto(b.codigo, r.proyectoId, q)) { dRest += q; n++; resumen.push(`${b.codigo} -${q} → ${(proy(r.proyectoId) || {}).codigo || ''}`); }
+      });
+    }
+    if (dRest !== 0) {
+      const mot2 = (f.destino === "proyecto") ? "Sin explicar (resto del reparto)" : mot;
       const antes = b.stock; const cu = Number(b.precioUnitario) || 0;
-      b.stock = Math.max(0, Number(b.stock) + d);
-      registrarMovimientoBodega({ tipo: "Ajuste por cruce de stock", signo: d > 0 ? 1 : -1, codigo: b.codigo, material: b.material, unidad: b.unidad || "", cantidad: Math.abs(d), costoUnitario: cu, total: Math.abs(d) * cu, documento: `Cruce de stock ${fecha} — ${mot}${nota ? ': ' + nota : ''}`, origenTipo: d > 0 ? (f.destino === "devolucion" ? "Terreno" : "Otro") : "", origenDetalle: nota, ubicDestino: d > 0 ? "Por ubicar" : "", estadoInforme: "No aplica" });
-      registrarHistorial({ proyecto: "General", accion: "Modificar", detalle: `Cruce de stock ${b.codigo} (${b.material}): ${antes} → ${b.stock} — ${mot}${nota ? ': ' + nota : ''}`, usuario: DB.usuario + " · " + DB.role, criticidad: "Media" });
-      n++; resumen.push(`${b.codigo} ${d > 0 ? '+' : ''}${d} (${mot})`);
+      b.stock = Math.max(0, Number(b.stock) + dRest);
+      registrarMovimientoBodega({ tipo: "Ajuste por cruce de stock", signo: dRest > 0 ? 1 : -1, codigo: b.codigo, material: b.material, unidad: b.unidad || "", cantidad: Math.abs(dRest), costoUnitario: cu, total: Math.abs(dRest) * cu, documento: `Cruce de stock ${fecha} — ${mot2}${nota ? ': ' + nota : ''}`, origenTipo: dRest > 0 ? (f.destino === "devolucion" ? "Terreno" : "Otro") : "", origenDetalle: nota, ubicDestino: dRest > 0 ? "Por ubicar" : "", estadoInforme: "No aplica" });
+      registrarHistorial({ proyecto: "General", accion: "Modificar", detalle: `Cruce de stock ${b.codigo} (${b.material}): ${antes} → ${b.stock} — ${mot2}${nota ? ': ' + nota : ''}`, usuario: DB.usuario + " · " + DB.role, criticidad: "Media" });
+      n++; resumen.push(`${b.codigo} ${dRest > 0 ? '+' : ''}${dRest} (${mot2})`);
     }
   });
   registrarHistorial({ proyecto: "General", accion: "Modificar", detalle: `Cruce de stock aplicado: ${n} ajustes — ${resumen.join('; ')}`, usuario: DB.usuario + " · " + DB.role, criticidad: "Media" });

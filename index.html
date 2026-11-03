@@ -536,7 +536,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.16.1";
+const APP_VERSION = "3.17.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -6093,7 +6093,7 @@ async function impExcel() {
    ===================================================================== */
 const ROLES_ESCANER = ["Asistente Administrativo", "Jefe de Taller"];
 function puedeUsarEscaner() { return esAdministrador() || ROLES_ESCANER.includes(DB.role); }
-let esc = { stream: null, timer: null, reader: null, ultimo: "", ultimoT: 0, tab: "buscar", pendiente: "" };
+let esc = { stream: null, timer: null, reader: null, ultimo: "", ultimoT: 0, tab: "buscar", pendiente: "", ret: { id: "", cont: {} }, pid: "" };
 function escNormBar(s) { return String(s || "").replace(/\s+/g, "").replace(/^0+/, "").toLowerCase(); }
 function escSkusConocidos() {
   const m = new Map();
@@ -6113,7 +6113,8 @@ function escStop() {
   try { if (esc.stream) esc.stream.getTracks().forEach(t => t.stop()); } catch (e) { }
   esc.timer = null; esc.reader = null; esc.stream = null;
 }
-function modalEscaner(tab) {
+function modalEscaner(tab, solId) {
+  if (solId !== undefined) esc.ret = { id: solId, cont: {} };
   if (!puedeUsarEscaner()) { toast(`Tu rol (${DB.role}) no tiene acceso al escáner.`, "danger"); return; }
   escStop(); esc.tab = tab || "buscar"; esc.pendiente = "";
   openModal(`
@@ -6121,8 +6122,9 @@ function modalEscaner(tab) {
     <div class="modal-body">
       <div class="flex-gap" style="margin-bottom:10px;">
         <button class="btn btn-sm ${esc.tab === 'buscar' ? 'btn-primary' : ''}" onclick="modalEscaner('buscar')">🔎 Buscar material</button>
+        <button class="btn btn-sm ${esc.tab === 'retiro' ? 'btn-primary' : ''}" onclick="modalEscaner('retiro')">📦 Retiro Pañol (${escSolicitudesAbiertas().length})</button>
         <button class="btn btn-sm ${esc.tab === 'enlaces' ? 'btn-primary' : ''}" onclick="modalEscaner('enlaces')">🔗 Enlazar código de barras ↔ SKU (${(DB.codigosBarra || []).length})</button></div>
-      ${esc.tab === 'buscar' ? `
+      ${esc.tab === 'retiro' ? escHtmlRetiro() : esc.tab === 'buscar' ? `
       <div style="background:#0b0e13; border-radius:10px; padding:8px; text-align:center;">
         <video id="escVideo" playsinline muted style="width:100%; max-height:34vh; border-radius:8px; background:#000; display:none;"></video>
         <button class="btn btn-primary" id="escBtnCam" onclick="escActivarCamara()">📷 Activar cámara y escanear</button>
@@ -6218,8 +6220,76 @@ function escDetectado(txt) {
   txt = String(txt || "").trim(); if (!txt) return;
   const ahora = Date.now(); if (txt === esc.ultimo && ahora - esc.ultimoT < 2500) return;
   esc.ultimo = txt; esc.ultimoT = ahora; try { navigator.vibrate && navigator.vibrate(60); } catch (e) { }
+  if (esc.tab === 'retiro') { escRetiroEscaneado(txt); return; }
   if (esc.tab === 'enlaces') { const el = document.getElementById('escEnlBarra'); if (el) { el.value = txt; escPrevSku(); const s = document.getElementById('escEnlSku'); if (s) s.focus(); } }
   else { const m = document.getElementById('escManual'); if (m) m.value = txt; escBuscar(txt); }
+}
+function escSolicitudesAbiertas() { return (DB.solicitudesPanol || []).filter(s => s.estado === "Pendiente" && s.items.some(it => it.enStock && !it.entregado)); }
+function escSolicitudesConMaterial(sku) { const out = []; escSolicitudesAbiertas().forEach(s => s.items.forEach(it => { if (it.enStock && !it.entregado && String(it.codigo) === String(sku)) out.push({ s, it }); })); return out; }
+function escEnviarProyecto(sku) {
+  if (!puedeGestionarBodega()) { toast(`Tu rol (${DB.role}) no gestiona bodega.`, "danger"); return; }
+  const pid = document.getElementById('escEnvProy').value, cant = Math.round(Number(document.getElementById('escEnvCant').value));
+  if (!(cant > 0)) { toast("Indica la cantidad.", "danger"); return; }
+  esc.pid = pid;
+  if (asignarBodegaGeneralAProyecto(sku, pid, cant)) { renderAll(); escBuscar(esc.ultimo || sku); }
+}
+function escHtmlRetiro() {
+  const abiertas = escSolicitudesAbiertas();
+  if (!abiertas.length) return '<div class="empty-state card">No hay órdenes de retiro pendientes en Pañol.</div>';
+  if (!abiertas.find(s => s.id === esc.ret.id)) esc.ret = { id: abiertas[0].id, cont: {} };
+  const s = abiertas.find(x => x.id === esc.ret.id);
+  return `<p class="small muted">Elige la orden y escanea cada material al sacarlo de la bodega. Cuando todo coincide, cierra la orden: se descuenta de Bodega General y queda registrada como entregada.</p>
+    <select onchange="modalEscaner('retiro', this.value)" style="width:100%; margin-bottom:8px;">${abiertas.map(x => `<option value="${x.id}" ${x.id === s.id ? 'selected' : ''}>N° ${x.numero} · ${escaparHtml(x.proyectoCodigo)} · ${escaparHtml(x.solicitante)} · ${x.fecha}${x.urgencia === 'Urgente' ? ' · URGENTE' : ''}</option>`).join('')}</select>
+    <div style="background:#0b0e13; border-radius:10px; padding:8px; text-align:center;">
+      <video id="escVideo" playsinline muted style="width:100%; max-height:26vh; border-radius:8px; background:#000; display:none;"></video>
+      <button class="btn btn-primary" id="escBtnCam" onclick="escActivarCamara()">📷 Activar cámara y escanear</button>
+      <div class="flex-gap" id="escBtnsCam" style="display:none; justify-content:center; margin-top:8px; flex-wrap:wrap;"><button class="btn btn-primary" onclick="escCapturar()">📸 Capturar y leer</button><button class="btn btn-sm" id="escBtnLuz" style="display:none;" onclick="escLinterna()">💡 Linterna</button></div>
+      <div style="margin-top:8px;"><label class="btn btn-sm" style="cursor:pointer;">📁 Sacar foto / elegir imagen<input type="file" accept="image/*" capture="environment" style="display:none;" onchange="escFoto(this)"></label></div>
+      <div class="small" id="escEstadoCam" style="color:#cbd5e1; margin-top:6px;"></div></div>
+    <div class="flex-gap" style="margin-top:8px;"><input type="text" id="escManual" placeholder="O escribe / escanea con lector y Enter" style="flex:1;" onkeydown="if(event.key==='Enter'){escRetiroEscaneado(this.value); this.value='';}"></div>
+    <div id="escRetTabla" style="margin-top:10px;">${escHtmlRetiroTabla(s)}</div>`;
+}
+function escHtmlRetiroTabla(s) {
+  const entregables = s.items.filter(it => it.enStock && !it.entregado);
+  const ok = entregables.every(it => (esc.ret.cont[it.id] || 0) === Number(it.cantidad));
+  return `<div class="table-wrap"><table><tr><th>Material</th><th>Pedido</th><th style="width:110px">Escaneado</th><th></th></tr>
+    ${s.items.map(it => { if (!it.enStock || it.entregado) return `<tr><td class="small">${escaparHtml(it.material)}</td><td>${it.cantidad}</td><td colspan="2" class="small muted">${it.entregado ? '✅ ya entregado' : '⚠ sin stock — queda pendiente'}</td></tr>`;
+      const n = esc.ret.cont[it.id] || 0, ped = Number(it.cantidad) || 0;
+      return `<tr><td class="small">${it.codigo ? `<span class="mono muted">${escaparHtml(it.codigo)}</span> ` : ''}${escaparHtml(it.material)}</td><td><b>${ped}</b> ${escaparHtml(it.unidad || '')}</td>
+      <td><input type="number" min="0" value="${n}" style="width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:7px;" onchange="escRetFijar('${it.id}', this.value)"></td>
+      <td>${n === ped ? '<span style="color:var(--ok)">✔ completo</span>' : n > ped ? '<b style="color:var(--red,#b3261e)">de más</b>' : `<span class="small" style="color:var(--copper-dark)">faltan ${ped - n}</span>`}</td></tr>`; }).join('')}</table></div>
+    <div class="flex-gap" style="margin-top:8px; flex-wrap:wrap;"><button class="btn btn-sm" onclick="escRetTodo()">Marcar todo según lo pedido</button>
+      <label class="small flex-gap"><input type="checkbox" id="escRetABodegaProy" checked> También sumar a la bodega de ${escaparHtml(s.proyectoCodigo)} (para consolidar después)</label></div>
+    <div style="margin-top:10px;"><button class="btn btn-primary" onclick="escRetCerrar()" ${entregables.length ? '' : 'disabled'}>📦 Entregar y cerrar orden N° ${s.numero}${ok ? '' : ' (hay diferencias)'}</button></div>`;
+}
+function escRetRefrescar() { const s = escSolicitudesAbiertas().find(x => x.id === esc.ret.id); const el = document.getElementById('escRetTabla'); if (s && el) { const keep = document.getElementById('escRetABodegaProy'); const v = keep ? keep.checked : true; el.innerHTML = escHtmlRetiroTabla(s); const k2 = document.getElementById('escRetABodegaProy'); if (k2) k2.checked = v; } }
+function escRetFijar(itemId, v) { esc.ret.cont[itemId] = Math.max(0, Math.round(Number(v) || 0)); escRetRefrescar(); }
+function escRetTodo() { const s = escSolicitudesAbiertas().find(x => x.id === esc.ret.id); if (!s) return; s.items.forEach(it => { if (it.enStock && !it.entregado) esc.ret.cont[it.id] = Number(it.cantidad) || 0; }); escRetRefrescar(); }
+function escRetiroEscaneado(txt) {
+  txt = String(txt || "").trim(); if (!txt) return; const s = escSolicitudesAbiertas().find(x => x.id === esc.ret.id); if (!s) return;
+  const r = escSkuDeBarra(txt); if (!r) { toast(`Código ${txt} sin enlazar a un SKU. Enlázalo en la pestaña 🔗.`, "danger"); return; }
+  const it = s.items.find(x => x.enStock && !x.entregado && String(x.codigo) === String(r.sku));
+  if (!it) { toast(`El SKU ${r.sku} no está en la orden N° ${s.numero}.`, "danger"); return; }
+  esc.ret.cont[it.id] = (esc.ret.cont[it.id] || 0) + 1; escRetRefrescar();
+  if (esc.ret.cont[it.id] > Number(it.cantidad)) toast(`${it.material}: escaneaste más de lo pedido (${it.cantidad}).`, "danger");
+}
+function escRetCerrar() {
+  if (!puedeGestionarBodega()) { toast(`Tu rol (${DB.role}) no gestiona bodega.`, "danger"); return; }
+  const s = escSolicitudesAbiertas().find(x => x.id === esc.ret.id); if (!s) return;
+  const ent = s.items.filter(it => it.enStock && !it.entregado); const dif = [];
+  for (const it of ent) { const n = esc.ret.cont[it.id] || 0, ped = Number(it.cantidad) || 0;
+    if (n <= 0) { toast(`Falta escanear «${it.material}».`, "danger"); return; }
+    if (n > ped) { toast(`«${it.material}»: escaneaste ${n} y se pidieron ${ped}. Corrige la cantidad.`, "danger"); return; }
+    if (n < ped) dif.push(`${it.material}: ${n} de ${ped}`); }
+  if (dif.length && !confirm(`Hay diferencias (${dif.join('; ')}). Se entregará lo escaneado y la orden quedará con esas cantidades. ¿Cerrar igual?`)) return;
+  const aBod = !!(document.getElementById('escRetABodegaProy') || {}).checked; const p = proy(s.proyectoId);
+  ent.forEach(it => { it.cantidad = esc.ret.cont[it.id]; });
+  if (aBod && p) ent.forEach(it => { p.bodega = p.bodega || []; let d = buscarBodegaPorNombre(p, it.material); const g = DB.bodegaGeneral.find(b => b.codigo === it.codigo);
+    if (!d) { d = { codigo: "MAT-" + String(1000 + p.bodega.length + Math.floor(Math.random() * 900)), material: it.material, stock: 0, unidad: it.unidad || (g && g.unidad) || "un", minimo: 0, precioUnitario: g ? (g.precioUnitario || 0) : 0 }; p.bodega.push(d); }
+    d.stock = (Number(d.stock) || 0) + Number(it.cantidad); });
+  esc.ret = { id: "", cont: {} };
+  marcarSolicitudPanolEntregada(s.id);
+  modalEscaner('retiro');
 }
 function escDondeEsta(sku) {
   const b = (DB.bodegaGeneral || []).find(x => String(x.codigo) === String(sku));
@@ -6262,7 +6332,14 @@ function escBuscar(codigo) {
       ${d.ubic.map(u => `<li>📍 ${escaparHtml(u.nombre)}${u.pos ? ' · <b>' + escaparHtml(u.pos) + '</b>' : ''}: <b>${u.cant}</b> ${escaparHtml(unidad)}</li>`).join('')}
       ${d.porUbicar > 0 ? `<li>⚠ Por ubicar (en Bodega General sin posición): <b>${d.porUbicar}</b> ${escaparHtml(unidad)}</li>` : ''}
       ${d.proyectos.map(x => `<li>🏗 Bodega de <b>${escaparHtml(x.cod)}</b>: ${x.stock} ${escaparHtml(x.unidad)}${x.inst ? ` · instalado ${x.inst}` : ''}</li>`).join('')}
-      ${!d.ubic.length && !(d.porUbicar > 0) && !d.proyectos.length ? '<li>No hay existencias de este material en ninguna bodega.</li>' : ''}</ul></div>`;
+      ${!d.ubic.length && !(d.porUbicar > 0) && !d.proyectos.length ? '<li>No hay existencias de este material en ninguna bodega.</li>' : ''}</ul>
+    ${g && g.stock > 0 ? `<div class="card" style="margin-top:12px; background:var(--bg-soft,#f6f4ef);"><b class="small">→ Enviar a la bodega de un proyecto</b>
+      <div class="flex-gap" style="flex-wrap:wrap; margin-top:6px; align-items:flex-end;">
+        <select id="escEnvProy" style="flex:1; min-width:180px;">${(DB.proyectos || []).map(p => `<option value="${p.id}" ${p.id === esc.pid ? 'selected' : ''}>${escaparHtml(p.codigo)} — ${escaparHtml(p.nombre || '')}</option>`).join('')}</select>
+        <input type="number" id="escEnvCant" min="1" max="${g.stock}" value="1" style="width:100px;" onkeydown="if(event.key==='Enter')escEnviarProyecto('${escaparHtml(d.sku)}')">
+        <button class="btn btn-primary" onclick="escEnviarProyecto('${escaparHtml(d.sku)}')">Enviar</button></div></div>` : ''}
+    ${escSolicitudesConMaterial(d.sku).length ? `<div class="card" style="margin-top:10px; border-left:4px solid var(--copper-dark);"><b class="small">📦 Retiros de Pañol pendientes con este material</b>
+      ${escSolicitudesConMaterial(d.sku).map(x => `<div class="flex-gap small" style="margin-top:6px; flex-wrap:wrap;"><span>N° ${x.s.numero} · ${escaparHtml(x.s.proyectoCodigo)} · ${escaparHtml(x.s.solicitante)} · pide <b>${x.it.cantidad}</b></span><button class="btn btn-sm btn-primary" onclick="modalEscaner('retiro','${x.s.id}')">Cerrar esta orden</button></div>`).join('')}</div>` : ''}</div>`;
 }
 function escPrevSku() {
   const b = (document.getElementById('escEnlBarra') || {}).value || "", s = (document.getElementById('escEnlSku') || {}).value || "", el = document.getElementById('escEnlPrev'); if (!el) return;

@@ -536,7 +536,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.13.0";
+const APP_VERSION = "3.14.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -5923,6 +5923,83 @@ function guardarMarcaBodega() {
   registrarHistorial({ proyecto: "General", accion: "Modificar", detalle: `Marca «${m || 'Sin marca'}» asignada a ${n} producto(s) de Bodega General`, usuario: DB.usuario + " · " + DB.role, criticidad: "Baja" });
   bgSel.clear(); guardarEstado("Marca asignada"); closeModal(); renderAll(); toast(`Marca asignada a ${n} producto(s).`, "ok");
 }
+const IMPORT_COTIZ = [{"id":"807-02-Q-A","lineas":[{"c":"5069-IB16","d":"Módulo expansión PLC Compact 5000 I/O Digital 16-point S","q":8,"p":200.6},{"c":"5069-L340ER","d":"PLC CompactLogix 5380 Controller, 4 MB User Memory, 40","q":1,"p":5366.0},{"c":"5069-OB16","d":"Módulo expansión PLC Compact 5000 I/O Digital 16-point S","q":8,"p":223.0},{"c":"5069-RTB18-SPRING","d":"Terminal block Removable Terminal Block, 18-pin Spring, fo","q":16,"p":53.8},{"c":"5069-RTB64-SPRING","d":"Terminal block Removable Terminal Block Kit, 6-pin and 4-p","q":1,"p":27.9},{"c":"700-HLT22Z24","d":"Relay GP Terminal Block Relay, 24V DC, Electromechanical","q":25,"p":26.9},{"c":"855P-B30ME22","d":"Sounder device Panel Mount Sounder, 12-24V AC/DC, 45 m","q":2,"p":92.9},{"c":"28903","d":"Switch disconnector Compact INS63, 63A, standard version","q":1,"p":56.0},{"c":"ATV320U04N4B","d":"Variable speed drive Altivar Machine ATV320, 0.37 kW, 380","q":4,"p":165.5},{"c":"ATV320U06N4B","d":"Variable speed drive Altivar Machine ATV320, 0.55 kW, 380","q":4,"p":178.7},{"c":"ATV320U07N4B","d":"Variable speed drive Altivar Machine ATV320, 0.75 kW, 380","q":20,"p":179.4},{"c":"ATV320U15N4B","d":"Variable speed drive Altivar Machine ATV320, 1.5 kW, 380..","q":8,"p":207.5},{"c":"ATV320U22N4B","d":"Variable speed drive Altivar Machine ATV320, 2.2 kW, 380..","q":2,"p":255.4},{"c":"ATV320U30N4B","d":"Variable speed drive Altivar Machine ATV320, 3 kW, 380...5","q":3,"p":298.4},{"c":"ATV340D18N4E","d":"Variable speed drive Altivar Machine ATV340, 18 kW, 380 to","q":1,"p":996.3},{"c":"C080N420FM","d":"Circuit breaker ComPacT NS800N, 50kA/415VAC, 4 poles, M","q":1,"p":1287.2},{"c":"GV1G09","d":"Terminal block TeSys GV terminal block, 3 phases, 63A/690","q":25,"p":6.7},{"c":"GV2G454","d":"Comb busbar Linergy FT, Comb busbar, 63A, 4 tap-offs, 54","q":25,"p":9.9},{"c":"GV2G554","d":"Comb busbar Linergy FT, Comb busbar, 63A, 5 tap-offs, 54","q":25,"p":11.0},{"c":"GV2ME07","d":"Motor circuit breaker TeSys Deca, 3P, 1.6-2.5 A, thermal m","q":10,"p":36.8},{"c":"GV2ME08","d":"Motor circuit breaker TeSys Deca, 3P, 2.5-4 A, thermal mag","q":22,"p":36.8},{"c":"GV2ME10","d":"Motor circuit breaker TeSys Deca, 3P, 4-6.3 A, thermal mag","q":9,"p":36.8},{"c":"GV2ME14","d":"Motor circuit breaker TeSys Deca, 3P, 6-10 A, thermal mag","q":7,"p":36.8},{"c":"GV2ME20","d":"Motor circuit breaker TeSys Deca, 3P, 13-18 A, thermal mag","q":4,"p":39.5},{"c":"GV3P25","d":"Motor circuit breaker TeSys GV3, 3P, 17-25 A, thermal mag","q":10,"p":82.7},{"c":"GV3P40","d":"Motor circuit breaker TeSys GV3, 3P, 30-40 A, thermal mag","q":4,"p":92.8},{"c":"GV3P50","d":"Motor circuit breaker TeSys GV3, 3P, 37-50 A, thermal mag","q":8,"p":102.1},{"c":"GV3P65","d":"Motor circuit breaker TeSys GV3, 3P, 48-65 A, thermal mag","q":6,"p":104.5},{"c":"LC1D09BNE","d":"Contactor Contactor, TeSys Deca, 3P(3NO), AC-3/AC-3e, <","q":70,"p":117.9},{"c":"LC1D12BNE","d":"Contactor Contactor, TeSys Deca, 3P(3NO), AC-3/AC-3e, <","q":10,"p":133.7},{"c":"LRD06","d":"Relay TeSys Deca thermal overload relays - 1…1.6 A - class","q":35,"p":21.1},{"c":"LRD07","d":"Relay TeSys Deca thermal overload relays - 1.6...2.5 A - cla","q":13,"p":21.1},{"c":"LRD08","d":"Relay TeSys Deca thermal overload relays - 2.5...4 A - class","q":10,"p":21.1},{"c":"LRD10","d":"Relay TeSys Deca thermal overload relays - 4…6 A - class 1","q":5,"p":23.4},{"c":"LRD12","d":"Relay TeSys Deca thermal overload relays - 5.5…8 A - class","q":9,"p":23.4},{"c":"LRD16","d":"Relay TeSys Deca thermal overload relays - 9…13 A - class","q":8,"p":23.4},{"c":"METSECT5DA080","d":"Current transformer Current transformer tropicalised 800 5","q":4,"p":77.7},{"c":"METSEPM5100","d":"Power meter Power meter PowerLogic PM5100, without com","q":1,"p":417.9},{"c":"VW3A3616","d":"Communication module Modbus TCP and Ethernet IP, Altiva","q":38,"p":197.3},{"c":"1044072","d":"Safety controllers Flexi Soft FX0-GENT00000","q":1,"p":235.9},{"c":"1044125","d":"Safety controllers Flexi Soft FX3-XTIO84002","q":1,"p":216.3},{"c":"1047162","d":"System plugs and extension modules System plugs Flexi So","q":1,"p":26.4},{"c":"1059305","d":"Safety controllers Flexi Soft FX3-CPU320002","q":1,"p":216.3},{"c":"1061711","d":"Safe series connection Flexi Loop FLN-EMSS0000105","q":38,"p":49.1},{"c":"1061716","d":"Safe series connection Flexi Loop FLT-TERM00001","q":2,"p":29.4},{"c":"2068830","d":"Mounting systems Brackets C-Fix bracket","q":38,"p":11.7}],"fecha":"2026-05-26","marcas":"Schneider / Rockwell / SICK","proy":"CL457","total":49037.3,"pack":290.0,"plazo":"6-8 semanas tras el anticipo"},{"id":"807-03-Q-A","lineas":[{"c":"TDR-240-24","d":"MEAN WELL Power Supply 240W Three Phase Industrial DIN","q":3,"p":58.8},{"c":"TDR-480-24","d":"MEAN WELL Power Supply 480W Three Phase Industrial DIN","q":2,"p":91.9},{"c":"1099973","d":"SICK Safety relays ReLy RLY3-EMSS300","q":1,"p":108.2},{"c":"3RT2015-1BB41","d":"SIEMENS Contactor Power contactor, AC-3e/AC-3, 7 A, 3 kW","q":22,"p":54.3},{"c":"3RT2037-1KB40","d":"SIEMENS Contactor Power contactor, AC-3e/AC-3, 65 A, 30","q":6,"p":347.9},{"c":"3RU2116-0HB0","d":"SIEMENS Relay Overload relay 0.55...0.80 A Thermal For m","q":4,"p":41.5},{"c":"3RU2116-1CB0","d":"SIEMENS Relay Overload relay 1.8...2.5 A Thermal For moto","q":14,"p":39.8},{"c":"3RU2116-1EB0","d":"SIEMENS Relay Overload relay 2.8...4.0 A Thermal For moto","q":4,"p":39.8},{"c":"3RV2011-1EA10","d":"SIEMENS Circuit breaker Circuit breaker size S00 for motor","q":3,"p":75.4},{"c":"3RV2011-1JA10","d":"SIEMENS Circuit breaker Circuit breaker size S00 for motor","q":3,"p":84.4},{"c":"3RV2011-1KA10","d":"SIEMENS Circuit breaker Circuit breaker size S00 for motor","q":2,"p":84.4},{"c":"3RV2011-1GA10","d":"SIEMENS Circuit breaker Circuit breaker size S00 for motor","q":3,"p":75.4},{"c":"3RV2031-4TA10","d":"SIEMENS Circuit breaker Circuit breaker size S2 for motor p","q":2,"p":216.3},{"c":"3RV2031-4WA10","d":"SIEMENS Circuit breaker Circuit breaker size S2 for motor p","q":2,"p":347.9},{"c":"5SY6202-7","d":"SIEMENS Circuit breaker Miniature circuit breaker 400 V 6kA","q":5,"p":46.5},{"c":"5SY6204-7","d":"SIEMENS Circuit breaker Miniature circuit breaker 400 V 6kA","q":3,"p":46.5},{"c":"5SY6206-7","d":"SIEMENS Circuit breaker Miniature circuit breaker 400 V 6kA","q":4,"p":39.5},{"c":"5SY6401-7","d":"SIEMENS Circuit breaker Miniature circuit breaker 400 V 6kA","q":5,"p":111.3},{"c":"5SY6402-7","d":"SIEMENS Circuit breaker Miniature circuit breaker 400 V 6kA","q":6,"p":111.3},{"c":"5SY6404-7","d":"SIEMENS Circuit breaker Miniature circuit breaker 400 V 6kA","q":4,"p":111.3},{"c":"6SL3210-1KE11-8AF2","d":"SIEMENS Variable speed drive SINAMICS G120C PROFINET","q":2,"p":478.1}],"fecha":"2026-05-27","marcas":"Siemens / Mean Well / SICK","proy":"CL405","total":9911.3,"pack":120.0,"plazo":"4-6 semanas tras el anticipo"}];
+
+/* ---------- Verificar compras al extranjero (cotizaciones Alutipo SRL) contra las bodegas ---------- */
+let impCot = null;
+function impNorm(s) { return String(s || "").toLowerCase().replace(/[^a-z0-9]/g, ""); }
+function impProyectoSugerido(cod) { return (DB.proyectos || []).find(p => String(p.codigo || "").toUpperCase().startsWith(cod)) || null; }
+function impBuscar(l, pidDestino) {
+  const n = impNorm(l.c); const r = { dest: 0, otros: [], general: 0, cots: [] };
+  if (!n) return r;
+  (DB.proyectos || []).forEach(p => {
+    (p.bodega || []).forEach(b => { if (impNorm((b.codigo || "") + " " + (b.material || "")).includes(n)) { const st = Number(b.stock) || 0; if (p.id === pidDestino) r.dest += st; else r.otros.push({ cod: p.codigo, st }); } });
+    (p.cotizaciones || []).forEach(c => (c.items || []).forEach(it => { if (impNorm((it.codigo || "") + " " + (it.descripcion || "")).includes(n)) r.cots.push({ cod: p.codigo, id: c.id, estado: c.estado, oc: c.numeroOC || "", cant: Number(it.cantidad) || 0, rec: Number(it.cantidadRecibida) || 0 }); }));
+  });
+  (DB.bodegaGeneral || []).forEach(b => { if (impNorm((b.codigo || "") + " " + (b.material || "")).includes(n)) r.general += Number(b.stock) || 0; });
+  return r;
+}
+function impEstado(l, r) {
+  if (r.dest >= l.q) return ["ok", "✔ Está en la bodega del proyecto"];
+  if (r.dest > 0) return ["parcial", `◐ Faltan ${l.q - r.dest} en el proyecto`];
+  if (r.cots.some(c => c.rec > 0)) return ["rec", "◐ Recibido en una OC pero no está en la bodega del proyecto"];
+  if (r.otros.length || r.general > 0) return ["otra", "↔ Está en otra bodega"];
+  if (r.cots.length) return ["cot", "✉ Solo cotizado, sin recepción"];
+  return ["no", "✖ No está cargado"];
+}
+function modalVerificarImportacion(cotId) {
+  const cot = IMPORT_COTIZ.find(x => x.id === (cotId || (impCot && impCot.cot)) ) || IMPORT_COTIZ[0];
+  const sug = impProyectoSugerido(cot.proy);
+  const pid = (impCot && impCot.cot === cot.id && impCot.pid) || (sug ? sug.id : ((DB.proyectos || [])[0] || {}).id);
+  impCot = { cot: cot.id, pid };
+  const filas = cot.lineas.map(l => { const r = impBuscar(l, pid); return { l, r, e: impEstado(l, r) }; });
+  const cnt = k => filas.filter(f => f.e[0] === k).length;
+  const col = { ok: "var(--ok)", parcial: "var(--copper-dark)", rec: "var(--copper-dark)", otra: "var(--copper-dark)", cot: "#8a6d00", no: "var(--red,#b3261e)" };
+  openModal(`
+    <div class="modal-head"><h3>🌎 Verificar compra al extranjero</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="flex-gap" style="flex-wrap:wrap; margin-bottom:8px;">
+        ${IMPORT_COTIZ.map(c => `<button class="btn btn-sm ${c.id === cot.id ? 'btn-primary' : ''}" onclick="impCot.pid=null; modalVerificarImportacion('${c.id}')">Cot. ${c.id} · ${c.marcas}</button>`).join('')}</div>
+      <p class="small muted">Alutipo SRL → Alutipo Chile · ${cot.fecha} · EXW ${cot.total.toLocaleString('en-US', { minimumFractionDigits: 2 })} USD · plazo ${cot.plazo}. Se busca el código de cada producto en las bodegas de proyecto, la Bodega General y las cotizaciones/OC.</p>
+      <div class="flex-gap" style="flex-wrap:wrap; align-items:flex-end; margin-bottom:8px;">
+        <div style="min-width:260px;"><label class="field-label">Proyecto destino de esta compra</label>
+          <select onchange="impCot.pid=this.value; modalVerificarImportacion(impCot.cot)">${(DB.proyectos || []).map(p => `<option value="${p.id}" ${p.id === pid ? 'selected' : ''}>${escaparHtml(p.codigo)} — ${escaparHtml(p.nombre || '')}</option>`).join('')}</select></div>
+        ${sug ? '' : `<span class="small" style="color:var(--red,#b3261e)">No encontré un proyecto ${cot.proy} en la app; elige el destino.</span>`}
+        <button class="btn btn-sm" onclick="impExcel()">⬇ Excel del cruce</button></div>
+      <div class="card" style="background:var(--bg-soft,#f6f4ef); margin-bottom:8px;"><div class="small">
+        ${filas.length} productos · <b style="color:${col.ok}">${cnt('ok')} ya están</b> · <b style="color:${col.parcial}">${cnt('parcial') + cnt('rec')} incompletos</b> · <b style="color:${col.otra}">${cnt('otra')} en otra bodega</b> · <b style="color:${col.cot}">${cnt('cot')} solo cotizados</b> · <b style="color:${col.no}">${cnt('no')} no cargados</b></div></div>
+      <div class="table-wrap" style="max-height:48vh; overflow:auto;"><table>
+        <tr><th>Código</th><th>Descripción</th><th>Compra</th><th>En proyecto destino</th><th>Otras bodegas de proyecto</th><th>Bodega General</th><th>Cotización / OC</th><th>Estado</th></tr>
+        ${filas.map(({ l, r, e }) => `<tr><td class="mono small">${escaparHtml(l.c)}</td><td class="small">${escaparHtml(l.d)}</td><td><b>${l.q}</b></td><td>${r.dest || '—'}</td>
+          <td class="small">${r.otros.length ? r.otros.map(o => `${escaparHtml(o.cod)}: ${o.st}`).join('<br>') : '—'}</td><td>${r.general || '—'}</td>
+          <td class="small">${r.cots.length ? r.cots.map(c => `${escaparHtml(c.cod)} ${escaparHtml(c.id)}${c.oc ? ' · OC ' + escaparHtml(c.oc) : ''}: ${c.rec}/${c.cant} (${escaparHtml(c.estado || '')})`).join('<br>') : '—'}</td>
+          <td class="small" style="color:${col[e[0]]}">${e[1]}</td></tr>`).join('')}</table></div>
+      <p class="hint" style="margin-top:8px;">La búsqueda compara el código del fabricante contenido en el código o en el nombre del producto de cada bodega. Si en la bodega lo cargaste con otro nombre, saldrá como «no cargado»: revísalo antes de cargar.</p>
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cerrar</button>
+      ${puedeGestionarBodega() ? `<button class="btn btn-primary" onclick="impCargarFaltantes()">Cargar a la bodega de ${escaparHtml((proy(pid) || {}).codigo || 'proyecto')} lo que falta (${cnt('parcial') + cnt('rec') + cnt('cot') + cnt('no')} líneas)</button>` : ''}</div>`, 1280);
+}
+function impCargarFaltantes() {
+  if (!puedeGestionarBodega()) { toast(`Tu rol (${DB.role}) no gestiona bodega.`, "danger"); return; }
+  const cot = IMPORT_COTIZ.find(x => x.id === impCot.cot); const p = proy(impCot.pid); if (!cot || !p) return;
+  const plan = [];
+  cot.lineas.forEach(l => { const r = impBuscar(l, p.id); const falta = l.q - r.dest; if (falta > 0 && !(r.dest === 0 && (r.otros.length || r.general > 0))) plan.push({ l, falta }); });
+  if (!plan.length) { toast("No falta nada por cargar en ese proyecto.", "ok"); return; }
+  if (!confirm(`Se cargarán ${plan.length} línea(s) a la bodega de ${p.codigo} (solo la cantidad que falta; no se tocan las que ya están ni las que están en otra bodega). Úsalo solo si el material ya llegó. ¿Continuar?`)) return;
+  plan.forEach(({ l, falta }) => {
+    let b = (p.bodega || []).find(x => impNorm((x.codigo || "") + " " + (x.material || "")).includes(impNorm(l.c)));
+    if (b) b.stock = (Number(b.stock) || 0) + falta;
+    else { p.bodega = p.bodega || []; p.bodega.push({ codigo: l.c, material: `${l.c} — ${l.d}`, stock: falta, unidad: "set", minimo: 0 }); }
+  });
+  registrarHistorial({ proyecto: p.codigo, accion: "Modificar", detalle: `Bodega ${p.codigo} actualizada desde cotización ${cot.id}: ${plan.length} línea(s) cargadas (${plan.reduce((s, x) => s + x.falta, 0)} unidades)`, usuario: DB.usuario + " · " + DB.role, criticidad: "Media" });
+  guardarEstado("Carga de compra importada"); toast(`Bodega de ${p.codigo} actualizada: ${plan.length} línea(s).`, "ok"); modalVerificarImportacion(cot.id); renderAll();
+}
+async function impExcel() {
+  if (!(await asegurarXLSX())) { toast("No se pudo cargar el generador de Excel.", "danger"); return; }
+  const cot = IMPORT_COTIZ.find(x => x.id === impCot.cot); const pid = impCot.pid;
+  const rows = cot.lineas.map(l => { const r = impBuscar(l, pid); return { "Código": l.c, "Descripción": l.d, "Cant. compra": l.q, "USD unit.": l.p, "En proyecto destino": r.dest, "Otras bodegas proyecto": r.otros.map(o => `${o.cod}: ${o.st}`).join("; "), "Bodega General": r.general, "Cotización/OC": r.cots.map(c => `${c.cod} ${c.id} ${c.rec}/${c.cant}`).join("; "), "Estado": impEstado(l, r)[1] }; });
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Cruce"); XLSX.writeFile(wb, `Cruce_${cot.id}_${hoyISO()}.xlsx`);
+}
 function renderBodegaGeneral() {
   const puede = puedeGestionarBodega();
   return `
@@ -5932,6 +6009,7 @@ function renderBodegaGeneral() {
       <div class="page-desc">Material disponible de la empresa, sin asignar todavía a ningún proyecto. Desde acá se asigna a un proyecto específico cuando corresponda.</div>
     </div>
     <div class="flex-gap">
+      <button class="btn" onclick="modalVerificarImportacion()" title="Cruzar las cotizaciones 807-02 y 807-03 (compras al extranjero) con las bodegas">🌎 Verificar compras importadas</button>
       <button class="btn" onclick="wmsAbrir()" title="Dónde está cada material, traspasos Central/Taller/Estante y trazabilidad">📍 Ubicaciones</button>
       <button class="btn" onclick="goTo('panol')" title="Solicitar material de esta bodega para un proyecto">📦 Ir al Pañol</button>
       ${puede ? `<button class="btn" onclick="modalCruceStock()" title="Contar lo que hay y cruzarlo con el sistema, indicando a qué proyecto se cargó la diferencia">⚖ Cruce de stock</button>` : ''}

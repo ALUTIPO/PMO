@@ -536,7 +536,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.15.0";
+const APP_VERSION = "3.16.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -1185,6 +1185,7 @@ const DB = {
   bodegaGeneral: [],
   ubicaciones: [],
   existencias: [],
+  codigosBarra: [],
   wmsOrigenes: [],
   planSemanal: {},
   jornadaCfg: null,
@@ -1224,6 +1225,7 @@ function aplicarEstadoRemoto(data) {
   DB.bodegaGeneral = data.bodegaGeneral || [];
   DB.ubicaciones = data.ubicaciones && data.ubicaciones.length ? data.ubicaciones : WMS_UB_DEFAULT.map(u => Object.assign({}, u));
   DB.existencias = data.existencias || [];
+  DB.codigosBarra = exArr(data.codigosBarra);
   DB.wmsOrigenes = data.wmsOrigenes && data.wmsOrigenes.length ? data.wmsOrigenes : WMS_ORIGENES_DEF.slice();
   DB.planSemanal = data.planSemanal || {};
   DB.jornadaCfg = data.jornadaCfg || null;
@@ -1254,6 +1256,7 @@ function construirPayloadEstado() {
     bodegaGeneral: DB.bodegaGeneral,
     ubicaciones: DB.ubicaciones || [],
     existencias: DB.existencias || [],
+    codigosBarra: DB.codigosBarra || [],
     wmsOrigenes: DB.wmsOrigenes || [],
     planSemanal: DB.planSemanal || {},
     jornadaCfg: DB.jornadaCfg || null,
@@ -1711,7 +1714,7 @@ function toast(msg, kind) {
   setTimeout(() => { el.style.transition="opacity .3s ease"; el.style.opacity="0"; setTimeout(() => el.remove(), 300); }, 5200);
 }
 
-function closeModal() { document.getElementById("modalRoot").innerHTML=""; modalAbierto=false; }
+function closeModal() { if (typeof escStop === "function") escStop(); document.getElementById("modalRoot").innerHTML=""; modalAbierto=false; }
 
 function openModal(html, ancho) {
   modalAbierto = true;
@@ -5926,6 +5929,7 @@ function renderBodega() {
       <div class="page-desc">Stock ya asignado a este proyecto. Las recepciones de compras ingresan acá automáticamente; también puedes traer material desde la <a href="#" onclick="goTo('bodegaGeneral'); return false;">Bodega General</a>.</div>
     </div>
     <div class="flex-gap">${selectorProyectos()}
+      ${puedeUsarEscaner() ? `<button class="btn btn-primary" onclick="modalEscaner()" title="Escanear el código de barras con la cámara">📷 Escanear</button>` : ''}
       ${puede ? `<button class="btn" onclick="modalConsolidarBodegaProyecto('${p.id}')" title="Indicar qué quedó instalado y montado y qué vuelve a Bodega General">✅ Consolidar bodega</button>` : ''}
       ${puede ? `<button class="btn btn-primary" onclick="modalProductoBodega('${p.id}')">+ Agregar producto</button>` : ''}
     </div>
@@ -6080,6 +6084,173 @@ async function impExcel() {
   const rows = cot.lineas.map(l => { const r = impBuscar(l, pid); return { "Código": l.c, "Descripción": l.d, "Cant. compra": l.q, "USD unit.": l.p, "En proyecto destino": r.dest, "Otras bodegas proyecto": r.otros.map(o => `${o.cod}: ${o.st}`).join("; "), "Bodega General": r.general, "Cotización/OC": r.cots.map(c => `${c.cod} ${c.id} ${c.rec}/${c.cant}`).join("; "), "Estado": impEstado(l, r)[1] }; });
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Cruce"); XLSX.writeFile(wb, `Cruce_${cot.id}_${hoyISO()}.xlsx`);
 }
+/* =====================================================================
+   ESCÁNER DE CÓDIGO DE BARRAS (cámara del celular) — buscar material y
+   ver cuánto hay y en qué bodega está. Primero se enlaza cada código de
+   barras con su SKU (código del compendio / de Bodega General); desde
+   entonces escanear el código muestra el material. Solo Administración
+   y Jefe de Taller (Eduardo).
+   ===================================================================== */
+const ROLES_ESCANER = ["Asistente Administrativo", "Jefe de Taller"];
+function puedeUsarEscaner() { return esAdministrador() || ROLES_ESCANER.includes(DB.role); }
+let esc = { stream: null, timer: null, reader: null, ultimo: "", ultimoT: 0, tab: "buscar", pendiente: "" };
+function escNormBar(s) { return String(s || "").replace(/\s+/g, "").replace(/^0+/, "").toLowerCase(); }
+function escSkusConocidos() {
+  const m = new Map();
+  (DB.bodegaGeneral || []).forEach(b => m.set(String(b.codigo), b.material));
+  (DB.acuerdos || []).forEach(a => (a.items || []).forEach(i => { if (!m.has(String(i.codigo))) m.set(String(i.codigo), i.descripcion); }));
+  return m;
+}
+function escSkuDeBarra(codigo) {
+  const n = escNormBar(codigo); if (!n) return null;
+  const e = (DB.codigosBarra || []).find(x => escNormBar(x.b) === n); if (e) return { sku: e.sku, via: "barra" };
+  const skus = escSkusConocidos(); for (const k of skus.keys()) if (String(k).trim().toLowerCase() === String(codigo).trim().toLowerCase()) return { sku: k, via: "sku" };
+  return null;
+}
+function escStop() {
+  try { if (esc.timer) clearInterval(esc.timer); } catch (e) { }
+  try { if (esc.reader) esc.reader.reset(); } catch (e) { }
+  try { if (esc.stream) esc.stream.getTracks().forEach(t => t.stop()); } catch (e) { }
+  esc.timer = null; esc.reader = null; esc.stream = null;
+}
+function modalEscaner(tab) {
+  if (!puedeUsarEscaner()) { toast(`Tu rol (${DB.role}) no tiene acceso al escáner.`, "danger"); return; }
+  escStop(); esc.tab = tab || "buscar"; esc.pendiente = "";
+  openModal(`
+    <div class="modal-head"><h3>📷 Escáner de materiales</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="flex-gap" style="margin-bottom:10px;">
+        <button class="btn btn-sm ${esc.tab === 'buscar' ? 'btn-primary' : ''}" onclick="modalEscaner('buscar')">🔎 Buscar material</button>
+        <button class="btn btn-sm ${esc.tab === 'enlaces' ? 'btn-primary' : ''}" onclick="modalEscaner('enlaces')">🔗 Enlazar código de barras ↔ SKU (${(DB.codigosBarra || []).length})</button></div>
+      ${esc.tab === 'buscar' ? `
+      <div style="background:#0b0e13; border-radius:10px; padding:8px; text-align:center;">
+        <video id="escVideo" playsinline muted style="width:100%; max-height:34vh; border-radius:8px; background:#000; display:none;"></video>
+        <button class="btn btn-primary" id="escBtnCam" onclick="escActivarCamara()">📷 Activar cámara y escanear</button>
+        <div class="small" id="escEstadoCam" style="color:#cbd5e1; margin-top:6px;">Apunta al código de barras. También sirve un lector USB: escanea con el cursor en el cuadro de abajo.</div></div>
+      <div class="flex-gap" style="margin-top:10px;"><input type="text" id="escManual" placeholder="Escribe o escanea el código y pulsa Enter" style="flex:1;" onkeydown="if(event.key==='Enter'){escBuscar(this.value); this.select();}">
+        <button class="btn" onclick="escBuscar(document.getElementById('escManual').value)">Buscar</button></div>
+      <div id="escResultado" style="margin-top:12px;"></div>` : `
+      <p class="small muted">Enlaza el código de barras impreso en el producto con su SKU. Escanéalo (o escríbelo), elige el SKU y guarda. Un SKU puede tener varios códigos de barras (unidad, caja…).</p>
+      <div style="background:#0b0e13; border-radius:10px; padding:8px; text-align:center;">
+        <video id="escVideo" playsinline muted style="width:100%; max-height:30vh; border-radius:8px; background:#000; display:none;"></video>
+        <button class="btn btn-primary" id="escBtnCam" onclick="escActivarCamara()">📷 Activar cámara y escanear</button>
+        <div class="small" id="escEstadoCam" style="color:#cbd5e1; margin-top:6px;"></div></div>
+      <datalist id="escSkuList">${[...escSkusConocidos()].map(([k, v]) => `<option value="${escaparHtml(k)}">${escaparHtml(v)}</option>`).join('')}</datalist>
+      <div class="flex-gap" style="margin-top:10px; flex-wrap:wrap; align-items:flex-end;">
+        <div style="flex:1; min-width:200px;"><label class="field-label">Código de barras</label><input type="text" id="escEnlBarra" oninput="escPrevSku()"></div>
+        <div style="flex:1; min-width:200px;"><label class="field-label">SKU (código del compendio)</label><input type="text" id="escEnlSku" list="escSkuList" oninput="escPrevSku()"></div>
+        <button class="btn btn-primary" onclick="escGuardarEnlace()">Enlazar</button></div>
+      <div class="small" id="escEnlPrev" style="margin:6px 0;"></div>
+      <details style="margin:8px 0;"><summary class="small" style="cursor:pointer;">Cargar varios desde una lista (barra ⇥ SKU)</summary>
+        <textarea id="escEnlMasivo" rows="4" style="width:100%; margin-top:6px;" placeholder="7790001234567&#9;1315180000"></textarea>
+        <button class="btn btn-sm" style="margin-top:6px;" onclick="escEnlazarMasivo()">Enlazar lista</button></details>
+      <div class="table-wrap" style="max-height:30vh; overflow:auto;"><table><tr><th>Código de barras</th><th>SKU</th><th>Material</th><th>Enlazado</th><th></th></tr>
+        ${(DB.codigosBarra || []).length ? (DB.codigosBarra || []).map((e, i) => { const nm = escSkusConocidos().get(String(e.sku)); return `<tr><td class="mono">${escaparHtml(e.b)}</td><td class="mono">${escaparHtml(e.sku)}</td><td class="small">${escaparHtml(nm || '— (SKU ya no existe)')}</td><td class="small muted">${escaparHtml(e.fecha || '')} ${escaparHtml(e.por || '')}</td><td><button class="btn btn-sm" onclick="escQuitarEnlace(${i})">✕</button></td></tr>`; }).join('') : '<tr><td colspan="5" class="small muted">Aún no hay códigos enlazados.</td></tr>'}</table></div>`}
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cerrar</button></div>`, 760);
+  setTimeout(() => { const m = document.getElementById('escManual') || document.getElementById('escEnlBarra'); if (m && !/Android|iPhone|iPad/i.test(navigator.userAgent)) m.focus(); }, 50);
+}
+async function escActivarCamara() {
+  const video = document.getElementById('escVideo'), est = document.getElementById('escEstadoCam'), btn = document.getElementById('escBtnCam'); if (!video) return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { toast("Este navegador no permite usar la cámara desde la web.", "danger"); return; }
+  escStop();
+  try { esc.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false }); }
+  catch (err) { toast(err.name === "NotAllowedError" ? "Permiso de cámara denegado — habilítalo en la configuración del navegador." : "No se pudo abrir la cámara: " + (err.message || err.name), "danger"); return; }
+  video.srcObject = esc.stream; video.style.display = "block"; await video.play().catch(() => { }); if (btn) btn.style.display = "none";
+  if (est) est.textContent = "Escaneando… apunta al código de barras.";
+  if ("BarcodeDetector" in window) {
+    let det; try { det = new BarcodeDetector({ formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "code_93", "itf", "codabar", "qr_code", "data_matrix"] }); } catch (e) { det = new BarcodeDetector(); }
+    esc.timer = setInterval(async () => { try { if (video.readyState < 2) return; const r = await det.detect(video); if (r && r.length) escDetectado(r[0].rawValue); } catch (e) { } }, 250);
+  } else {
+    if (est) est.textContent = "Cargando lector de códigos…";
+    const ok = await cargarScriptExterno("https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js");
+    if (!ok || !window.ZXing) { if (est) est.textContent = "No se pudo cargar el lector. Escribe el código a mano."; return; }
+    try { esc.reader = new ZXing.BrowserMultiFormatReader(); esc.reader.decodeFromVideoElement(video, (res) => { if (res) escDetectado(res.getText()); }); if (est) est.textContent = "Escaneando… apunta al código de barras."; }
+    catch (e) { if (est) est.textContent = "No se pudo iniciar el lector: " + e.message; }
+  }
+}
+function escDetectado(txt) {
+  txt = String(txt || "").trim(); if (!txt) return;
+  const ahora = Date.now(); if (txt === esc.ultimo && ahora - esc.ultimoT < 2500) return;
+  esc.ultimo = txt; esc.ultimoT = ahora; try { navigator.vibrate && navigator.vibrate(60); } catch (e) { }
+  if (esc.tab === 'enlaces') { const el = document.getElementById('escEnlBarra'); if (el) { el.value = txt; escPrevSku(); const s = document.getElementById('escEnlSku'); if (s) s.focus(); } }
+  else { const m = document.getElementById('escManual'); if (m) m.value = txt; escBuscar(txt); }
+}
+function escDondeEsta(sku) {
+  const b = (DB.bodegaGeneral || []).find(x => String(x.codigo) === String(sku));
+  const nm = (escSkusConocidos().get(String(sku)) || (b && b.material) || "");
+  const out = { sku, material: nm, general: b || null, ubic: [], porUbicar: 0, proyectos: [], pedido: 0, marca: b ? (b.marca || "") : "" };
+  if (b) {
+    (DB.existencias || []).filter(e => e.codigo === b.codigo).forEach(e => { const u = (DB.ubicaciones || []).find(x => x.id === e.ubicId); out.ubic.push({ nombre: u ? u.nombre : "—", pos: e.pos || "", cant: e.cant, tipo: u ? u.tipo : "" }); });
+    try { out.porUbicar = wmsSinUbicar(b); } catch (e) { out.porUbicar = 0; }
+  }
+  const nombreN = impNorm(nm), skuN = impNorm(sku);
+  (DB.proyectos || []).forEach(p => (p.bodega || []).forEach(x => {
+    const igual = impNorm(x.codigo) === skuN || (nombreN && impNorm(x.material) === nombreN) || (skuN.length >= 5 && impNorm((x.codigo || "") + " " + (x.material || "")).includes(skuN));
+    if (igual && ((Number(x.stock) || 0) > 0 || x.instalado)) out.proyectos.push({ cod: p.codigo, stock: Number(x.stock) || 0, inst: Number(x.instalado) || 0, unidad: x.unidad || "" });
+  }));
+  (DB.acuerdos || []).forEach(a => { const it = (a.items || []).find(i => String(i.codigo) === String(sku)); if (it) { out.pedido += totalesItemAcuerdo(a, it).pendiente; if (!out.marca) out.marca = a.marca || ""; } });
+  return out;
+}
+function escBuscar(codigo) {
+  codigo = String(codigo || "").trim(); const box = document.getElementById('escResultado'); if (!box || !codigo) return;
+  const r = escSkuDeBarra(codigo);
+  if (!r) {
+    box.innerHTML = `<div class="card" style="border-left:4px solid var(--copper-dark);"><b>Código no enlazado:</b> <span class="mono">${escaparHtml(codigo)}</span>
+      <p class="small muted" style="margin:6px 0;">Todavía no está enlazado a ningún SKU. Enlázalo ahora para que la próxima vez se reconozca.</p>
+      <datalist id="escSkuList">${[...escSkusConocidos()].map(([k, v]) => `<option value="${escaparHtml(k)}">${escaparHtml(v)}</option>`).join('')}</datalist>
+      <div class="flex-gap" style="flex-wrap:wrap;"><input type="text" id="escEnlSku" list="escSkuList" placeholder="SKU o nombre…" style="flex:1; min-width:200px;" oninput="escPrevSku()"><input type="hidden" id="escEnlBarra" value="${escaparHtml(codigo)}">
+        <button class="btn btn-primary" onclick="escGuardarEnlace(true)">Enlazar y ver</button></div><div class="small" id="escEnlPrev" style="margin-top:6px;"></div></div>`;
+    return;
+  }
+  const d = escDondeEsta(r.sku); const g = d.general; const unidad = g ? (g.unidad || "") : "";
+  const totalProy = d.proyectos.reduce((s, x) => s + x.stock, 0);
+  box.innerHTML = `<div class="card" style="border-left:4px solid var(--ok);">
+    <div style="font-size:16px;"><b>${escaparHtml(d.material || '(sin nombre)')}</b></div>
+    <div class="mono small muted">SKU ${escaparHtml(d.sku)}${d.marca ? ' · ' + escaparHtml(d.marca) : ''} · leído: ${escaparHtml(codigo)}${r.via === 'sku' ? ' (coincide directo con el SKU)' : ''}</div>
+    <div style="display:flex; gap:12px; flex-wrap:wrap; margin:10px 0;">
+      <div class="card" style="padding:10px 16px; text-align:center;"><div class="small muted">Bodega General</div><div style="font-size:26px; font-weight:700;">${g ? g.stock : 0}</div><div class="small muted">${escaparHtml(unidad)}</div></div>
+      <div class="card" style="padding:10px 16px; text-align:center;"><div class="small muted">En bodegas de proyecto</div><div style="font-size:26px; font-weight:700;">${totalProy}</div></div>
+      ${d.pedido ? `<div class="card" style="padding:10px 16px; text-align:center;"><div class="small muted">Pedido en camino</div><div style="font-size:26px; font-weight:700;">${d.pedido}</div></div>` : ''}</div>
+    <div class="small"><b>Dónde está</b></div>
+    <ul style="margin:4px 0 0 18px;" class="small">
+      ${d.ubic.map(u => `<li>📍 ${escaparHtml(u.nombre)}${u.pos ? ' · <b>' + escaparHtml(u.pos) + '</b>' : ''}: <b>${u.cant}</b> ${escaparHtml(unidad)}</li>`).join('')}
+      ${d.porUbicar > 0 ? `<li>⚠ Por ubicar (en Bodega General sin posición): <b>${d.porUbicar}</b> ${escaparHtml(unidad)}</li>` : ''}
+      ${d.proyectos.map(x => `<li>🏗 Bodega de <b>${escaparHtml(x.cod)}</b>: ${x.stock} ${escaparHtml(x.unidad)}${x.inst ? ` · instalado ${x.inst}` : ''}</li>`).join('')}
+      ${!d.ubic.length && !(d.porUbicar > 0) && !d.proyectos.length ? '<li>No hay existencias de este material en ninguna bodega.</li>' : ''}</ul></div>`;
+}
+function escPrevSku() {
+  const b = (document.getElementById('escEnlBarra') || {}).value || "", s = (document.getElementById('escEnlSku') || {}).value || "", el = document.getElementById('escEnlPrev'); if (!el) return;
+  const nm = escSkusConocidos().get(String(s).trim()); const ya = (DB.codigosBarra || []).find(x => escNormBar(x.b) === escNormBar(b) && b.trim());
+  el.innerHTML = (s.trim() ? (nm ? `SKU: <b>${escaparHtml(nm)}</b>` : '<span style="color:var(--red,#b3261e)">Ese SKU no existe en Bodega General ni en los acuerdos.</span>') : '') + (ya ? ` · <span style="color:var(--copper-dark)">Este código ya está enlazado al SKU ${escaparHtml(ya.sku)} (se reemplazará).</span>` : '');
+}
+function escEnlazar(barra, sku) {
+  barra = String(barra || "").trim(); sku = String(sku || "").trim();
+  if (!barra || !sku) return "Falta el código de barras o el SKU.";
+  if (!escSkusConocidos().has(sku)) return `El SKU ${sku} no existe en Bodega General ni en los acuerdos.`;
+  DB.codigosBarra = DB.codigosBarra || [];
+  const i = DB.codigosBarra.findIndex(x => escNormBar(x.b) === escNormBar(barra));
+  const reg = { b: barra, sku, fecha: hoyISO(), por: DB.usuario || "" };
+  if (i >= 0) DB.codigosBarra[i] = reg; else DB.codigosBarra.push(reg);
+  return "";
+}
+function escGuardarEnlace(verDespues) {
+  if (!puedeUsarEscaner()) return;
+  const barra = document.getElementById('escEnlBarra').value, sku = document.getElementById('escEnlSku').value.trim();
+  const sk = escSkusConocidos(); let skuOk = sku;
+  if (!sk.has(skuOk)) { const m = [...sk].filter(([k, v]) => v.toLowerCase() === sku.toLowerCase()); if (m.length === 1) skuOk = m[0][0]; }
+  const err = escEnlazar(barra, skuOk); if (err) { toast(err, "danger"); return; }
+  registrarHistorial({ proyecto: "General", accion: "Modificar", detalle: `Código de barras ${barra} enlazado al SKU ${skuOk}`, usuario: DB.usuario + " · " + DB.role, criticidad: "Baja" });
+  guardarEstado("Código de barras enlazado"); toast("Código de barras enlazado.", "ok");
+  if (verDespues) escBuscar(barra); else modalEscaner('enlaces');
+}
+function escEnlazarMasivo() {
+  const lineas = (document.getElementById('escEnlMasivo').value || "").split(/\r?\n/).map(l => l.trim()).filter(Boolean); let ok = 0; const mal = [];
+  lineas.forEach(l => { const p = l.split(/\t|;|,/).map(x => x.trim()); const err = escEnlazar(p[0], p[1]); if (err) mal.push(`${p[0] || '?'}: ${err}`); else ok++; });
+  if (ok) { registrarHistorial({ proyecto: "General", accion: "Modificar", detalle: `${ok} códigos de barras enlazados desde lista`, usuario: DB.usuario + " · " + DB.role, criticidad: "Baja" }); guardarEstado("Códigos de barras"); }
+  toast(`${ok} enlazado(s)${mal.length ? ` · ${mal.length} con error (${mal[0]})` : ''}.`, mal.length ? "danger" : "ok"); modalEscaner('enlaces');
+}
+function escQuitarEnlace(i) { const e = (DB.codigosBarra || [])[i]; if (!e) return; DB.codigosBarra.splice(i, 1); guardarEstado("Enlace quitado"); modalEscaner('enlaces'); }
 function renderBodegaGeneral() {
   const puede = puedeGestionarBodega();
   return `
@@ -6089,6 +6260,7 @@ function renderBodegaGeneral() {
       <div class="page-desc">Material disponible de la empresa, sin asignar todavía a ningún proyecto. Desde acá se asigna a un proyecto específico cuando corresponda.</div>
     </div>
     <div class="flex-gap">
+      ${puedeUsarEscaner() ? `<button class="btn btn-primary" onclick="modalEscaner()" title="Escanear el código de barras con la cámara y ver cuánto hay y dónde">📷 Escanear</button>` : ''}
       <button class="btn" onclick="modalVerificarImportacion()" title="Cruzar las cotizaciones 807-02 y 807-03 (compras al extranjero) con las bodegas">🌎 Verificar compras importadas</button>
       <button class="btn" onclick="wmsAbrir()" title="Dónde está cada material, traspasos Central/Taller/Estante y trazabilidad">📍 Ubicaciones</button>
       <button class="btn" onclick="goTo('panol')" title="Solicitar material de esta bodega para un proyecto">📦 Ir al Pañol</button>

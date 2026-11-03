@@ -536,7 +536,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.12.1";
+const APP_VERSION = "3.13.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -2116,7 +2116,7 @@ function agregarProductoBodegaGeneral(datos) {
   DB.bodegaGeneral.push({
     codigo, material: datos.material.trim(), stock: stockInicial,
     unidad: datos.unidad||"unidad", minimo: Number(datos.minimo)||0,
-    precioUnitario,
+    precioUnitario, marca: (datos.marca||"").trim(),
   });
   if (stockInicial > 0) registrarMovimientoBodega({ tipo:"Ingreso inicial", signo:1, codigo, material:datos.material.trim(), unidad:datos.unidad||"unidad", cantidad:stockInicial, costoUnitario:precioUnitario, total:stockInicial*precioUnitario, documento:"Producto nuevo", estadoInforme:"No aplica" });
   registrarHistorial({proyecto:"General", accion:"Crear", detalle:`Producto agregado a bodega general: ${datos.material} (${codigo})${precioUnitario?` — precio unitario $${precioUnitario}`:''}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
@@ -5819,6 +5819,20 @@ function renderPresupuesto() {
 
 
 // --- Bodega ---
+function marcaDeProductoProyecto(b) {
+  const g = (DB.bodegaGeneral || []).find(x => x.codigo === b.codigo || (x.material || "").trim().toLowerCase() === (b.material || "").trim().toLowerCase());
+  return marcaDeProducto(g);
+}
+function bgBuscarProy(v) { bgBusqueda = v || ""; const el = document.getElementById('bgTabla'); if (el) el.innerHTML = htmlTablaBodegaProyecto(); }
+function htmlTablaBodegaProyecto() {
+  const p = proy(); const puede = puedeGestionarBodega();
+  const thead = `<tr><th>Código</th><th>Material</th><th>Stock</th><th>Mínimo</th><th>Estado</th>${puede ? '<th></th>' : ''}</tr>`;
+  const fila = b => `<tr><td class="mono">${b.codigo}</td><td>${b.material}</td><td class="mono">${b.stock} ${b.unidad}</td><td class="mono muted small">${b.minimo} ${b.unidad}</td><td>${badgeStock(calcularEstadoStock(b))}</td>
+    ${puede ? `<td class="flex-gap"><button class="btn btn-sm" onclick="modalAjustarStock('${p.id}','${b.codigo}')">Actualizar stock</button>
+      <button class="btn btn-sm" onclick="modalEnviarABodegaGeneral('${p.id}','${b.codigo}')" ${b.stock <= 0 ? 'disabled' : ''} title="Enviar sobrante a Bodega General, con precio unitario, para la base de Bsale">→ Bodega General</button></td>` : ''}</tr>`;
+  if (!p.bodega.length) return `<div class="empty-state card">Sin registros de bodega para este proyecto. ${puede ? 'Se crean automáticamente al registrar una recepción de compra, o puedes agregar uno manualmente.' : ''}</div>`;
+  return htmlGruposMarca(p.bodega, marcaDeProductoProyecto, fila, thead, false, "P:");
+}
 function renderBodega() {
   if (!proyectosDelArea().length) {
     return `<div class="page-head"><div><h1>Bodega del proyecto</h1></div></div>
@@ -5836,18 +5850,11 @@ function renderBodega() {
       ${puede ? `<button class="btn btn-primary" onclick="modalProductoBodega('${p.id}')">+ Agregar producto</button>` : ''}
     </div>
   </div>
-  <div class="table-wrap">
-    <table>
-      <tr><th>Código</th><th>Material</th><th>Stock</th><th>Mínimo</th><th>Estado</th>${puede?'<th></th>':''}</tr>
-      ${p.bodega.length ? p.bodega.map(b => `
-        <tr><td class="mono">${b.codigo}</td><td>${b.material}</td><td class="mono">${b.stock} ${b.unidad}</td><td class="mono muted small">${b.minimo} ${b.unidad}</td><td>${badgeStock(calcularEstadoStock(b))}</td>
-        ${puede? `<td class="flex-gap">
-          <button class="btn btn-sm" onclick="modalAjustarStock('${p.id}','${b.codigo}')">Actualizar stock</button>
-          <button class="btn btn-sm" onclick="modalEnviarABodegaGeneral('${p.id}','${b.codigo}')" ${b.stock<=0?'disabled':''} title="Enviar sobrante a Bodega General, con precio unitario, para la base de Bsale">→ Bodega General</button>
-        </td>`:''}</tr>
-      `).join('') : `<tr><td colspan="${puede?6:5}"><div class="empty-state">Sin registros de bodega para este proyecto. ${puede?'Se crean automáticamente al registrar una recepción de compra, o puedes agregar uno manualmente.':''}</div></td></tr>`}
-    </table>
-  </div>
+  <div class="card" style="margin-bottom:12px;"><div class="flex-gap" style="flex-wrap:wrap;">
+    <input type="text" placeholder="Buscar por código, material o marca…" style="flex:1; min-width:220px;" value="${escaparHtml(bgBusqueda)}" oninput="bgBuscarProy(this.value)">
+    <button class="btn btn-sm" onclick="bgExpandir(true)">Desplegar todas</button>
+    <button class="btn btn-sm" onclick="bgExpandir(false)">Plegar todas</button></div></div>
+  <div id="bgTabla">${htmlTablaBodegaProyecto()}</div>
   `;
 }
 
@@ -5856,6 +5863,66 @@ function renderBodega() {
    El encargado de taller carga acá lo que llega sin destino aún, y lo va
    asignando a proyectos específicos a medida que se necesita.
    ===================================================================== */
+/* ---------- Bodegas agrupadas por marca (desplegables) ---------- */
+let bgAbiertas = new Set(), bgBusqueda = "", bgSel = new Set(), _bgGrupos = [];
+const MARCA_SIN = "Sin marca";
+function marcaDeProducto(b) { return ((b && b.marca) || "").trim() || MARCA_SIN; }
+function marcasConocidas() { const s = new Set(); (DB.bodegaGeneral || []).forEach(b => { const m = (b.marca || "").trim(); if (m) s.add(m); }); return [...s].sort((x, y) => x.localeCompare(y, 'es')); }
+function htmlGruposMarca(lista, getMarca, filaHtml, thead, conSel, prefijo, ncol) {
+  const q = bgBusqueda.trim().toLowerCase();
+  const filtrada = lista.filter(b => !q || `${b.codigo} ${b.material} ${getMarca(b)}`.toLowerCase().includes(q));
+  if (!filtrada.length) return `<div class="empty-state card">${lista.length ? 'Ningún producto coincide con la búsqueda.' : 'Sin productos.'}</div>`;
+  const grupos = {}; filtrada.forEach(b => { (grupos[getMarca(b)] = grupos[getMarca(b)] || []).push(b); });
+  const nombres = Object.keys(grupos).sort((x, y) => x === MARCA_SIN ? 1 : y === MARCA_SIN ? -1 : x.localeCompare(y, 'es'));
+  _bgGrupos = [];
+  return nombres.map((m, gi) => {
+    const items = grupos[m]; _bgGrupos[gi] = items.map(b => b.codigo);
+    const bajo = items.filter(b => calcularEstadoStock(b) !== 'Normal').length;
+    const valor = items.reduce((s, b) => s + (Number(b.stock) || 0) * (Number(b.precioUnitario) || 0), 0);
+    const key = prefijo + m; const abierto = !!q || bgAbiertas.has(key);
+    return `<details class="card card-flush" style="margin-bottom:10px;" ${abierto ? 'open' : ''} ontoggle="bgToggle(this, ${gi}, '${escaparHtml(key).replace(/'/g, "\\'")}')">
+      <summary style="cursor:pointer; padding:12px 16px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+        ${conSel ? `<input type="checkbox" title="Seleccionar todo el grupo" onclick="event.stopPropagation(); bgSelGrupo(${gi}, this.checked)">` : ''}
+        <b style="font-size:15px;">${escaparHtml(m)}</b><span class="small muted">${items.length} producto(s)</span>
+        ${bajo ? `<span class="badge b-amarillo"><span class="dot"></span>${bajo} con stock bajo</span>` : ''}
+        ${valor ? `<span class="small muted" style="margin-left:auto;">${money(valor)} en stock</span>` : ''}</summary>
+      <div class="table-wrap"><table>${thead}${items.map(filaHtml).join('')}</table></div></details>`;
+  }).join('');
+}
+function bgToggle(el, gi, key) { if (el.open) bgAbiertas.add(key); else bgAbiertas.delete(key); }
+function bgSelGrupo(gi, on) { (_bgGrupos[gi] || []).forEach(c => on ? bgSel.add(c) : bgSel.delete(c)); document.querySelectorAll('#bgTabla input[data-c]').forEach(i => { if ((_bgGrupos[gi] || []).includes(i.dataset.c)) i.checked = on; }); bgSelResumen(); }
+function bgSelToggle(c, on) { on ? bgSel.add(c) : bgSel.delete(c); bgSelResumen(); }
+function bgSelResumen() { const el = document.getElementById('bgSelBtn'); if (el) el.textContent = `🏷 Asignar marca a seleccionados (${bgSel.size})`; }
+function bgBuscar(v) { bgBusqueda = v || ""; const el = document.getElementById('bgTabla'); if (el) el.innerHTML = htmlTablaBodegaGeneral(); }
+function bgExpandir(todo) { if (todo) document.querySelectorAll('#bgTabla details').forEach(d => { d.open = true; }); else { bgAbiertas.clear(); document.querySelectorAll('#bgTabla details').forEach(d => { d.open = false; }); } }
+function htmlTablaBodegaGeneral() {
+  const puede = puedeGestionarBodega();
+  const thead = `<tr>${puede ? '<th style="width:30px"></th>' : ''}<th>Código</th><th>Material</th><th>Stock disponible</th><th>Mínimo</th><th>Precio unitario</th><th>Estado</th>${puede ? '<th></th>' : ''}</tr>`;
+  const fila = b => `<tr>${puede ? `<td><input type="checkbox" data-c="${escaparHtml(b.codigo)}" ${bgSel.has(b.codigo) ? 'checked' : ''} onchange="bgSelToggle(this.dataset.c, this.checked)"></td>` : ''}
+    <td class="mono">${b.codigo}</td><td>${b.material}</td><td class="mono">${b.stock} ${b.unidad}</td><td class="mono muted small">${b.minimo} ${b.unidad}</td><td class="mono">$${(b.precioUnitario || 0).toLocaleString('es-CL')}</td><td>${badgeStock(calcularEstadoStock(b))}</td>
+    ${puede ? `<td class="flex-gap"><button class="btn btn-sm" onclick="modalAjustarStockGeneral('${b.codigo}')">Actualizar stock</button>
+      <button class="btn btn-sm btn-primary" onclick="modalAsignarAProyecto('${b.codigo}')" ${b.stock <= 0 ? 'disabled' : ''}>→ Asignar a proyecto</button></td>` : ''}</tr>`;
+  if (!DB.bodegaGeneral.length) return `<div class="empty-state card">Bodega general vacía. ${puede ? 'Agrega material que aún no tenga proyecto asignado.' : ''}</div>`;
+  return htmlGruposMarca(DB.bodegaGeneral, marcaDeProducto, fila, thead, puede, "G:");
+}
+function modalAsignarMarcaBodega() {
+  if (!puedeGestionarBodega()) { toast(`Tu rol (${DB.role}) no gestiona bodega.`, "danger"); return; }
+  if (!bgSel.size) { toast("Marca primero los productos (casillas de la izquierda o la del grupo).", "danger"); return; }
+  openModal(`
+    <div class="modal-head"><h3>Asignar marca</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body"><p class="small muted">${bgSel.size} producto(s) seleccionados.</p>
+      <label class="field-label">Marca</label>
+      <input type="text" id="bgMarcaNueva" list="bgMarcasList" placeholder="Ej: Weidmüller, Schneider, Phoenix Contact">
+      <datalist id="bgMarcasList">${marcasConocidas().map(m => `<option value="${escaparHtml(m)}">`).join('')}</datalist>
+      <p class="hint">Déjala vacía para volver a «Sin marca».</p></div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="guardarMarcaBodega()">Guardar</button></div>`, 520);
+}
+function guardarMarcaBodega() {
+  const m = (document.getElementById('bgMarcaNueva').value || "").trim(); let n = 0;
+  DB.bodegaGeneral.forEach(b => { if (bgSel.has(b.codigo)) { b.marca = m; n++; } });
+  registrarHistorial({ proyecto: "General", accion: "Modificar", detalle: `Marca «${m || 'Sin marca'}» asignada a ${n} producto(s) de Bodega General`, usuario: DB.usuario + " · " + DB.role, criticidad: "Baja" });
+  bgSel.clear(); guardarEstado("Marca asignada"); closeModal(); renderAll(); toast(`Marca asignada a ${n} producto(s).`, "ok");
+}
 function renderBodegaGeneral() {
   const puede = puedeGestionarBodega();
   return `
@@ -5873,18 +5940,12 @@ function renderBodegaGeneral() {
       ${puede ? `<button class="btn btn-primary" onclick="modalProductoBodegaGeneral()">+ Agregar producto</button>` : ''}
     </div>
   </div>
-  <div class="table-wrap">
-    <table>
-      <tr><th>Código</th><th>Material</th><th>Stock disponible</th><th>Mínimo</th><th>Precio unitario</th><th>Estado</th>${puede?'<th></th>':''}</tr>
-      ${DB.bodegaGeneral.length ? DB.bodegaGeneral.map(b => `
-        <tr><td class="mono">${b.codigo}</td><td>${b.material}</td><td class="mono">${b.stock} ${b.unidad}</td><td class="mono muted small">${b.minimo} ${b.unidad}</td><td class="mono">$${(b.precioUnitario||0).toLocaleString('es-CL')}</td><td>${badgeStock(calcularEstadoStock(b))}</td>
-        ${puede? `<td class="flex-gap">
-          <button class="btn btn-sm" onclick="modalAjustarStockGeneral('${b.codigo}')">Actualizar stock</button>
-          <button class="btn btn-sm btn-primary" onclick="modalAsignarAProyecto('${b.codigo}')" ${b.stock<=0?'disabled':''}>→ Asignar a proyecto</button>
-        </td>`:''}</tr>
-      `).join('') : `<tr><td colspan="${puede?7:6}"><div class="empty-state">Bodega general vacía. ${puede?'Agrega material que aún no tenga proyecto asignado.':''}</div></td></tr>`}
-    </table>
-  </div>
+  <div class="card" style="margin-bottom:12px;"><div class="flex-gap" style="flex-wrap:wrap;">
+    <input type="text" placeholder="Buscar por código, material o marca…" style="flex:1; min-width:220px;" value="${escaparHtml(bgBusqueda)}" oninput="bgBuscar(this.value)">
+    <button class="btn btn-sm" onclick="bgExpandir(true)">Desplegar todas</button>
+    <button class="btn btn-sm" onclick="bgExpandir(false)">Plegar todas</button>
+    ${puede ? `<button class="btn btn-sm" id="bgSelBtn" onclick="modalAsignarMarcaBodega()">🏷 Asignar marca a seleccionados (${bgSel.size})</button>` : ''}</div></div>
+  <div id="bgTabla">${htmlTablaBodegaGeneral()}</div>
   `;
 }
 
@@ -6574,6 +6635,7 @@ function modalProductoBodegaGeneral() {
         <div><label class="field-label">Código (opcional, se genera solo)</label><input type="text" id="bgCodigo" placeholder="Ej: MAT-G-0200"></div>
         <div><label class="field-label">Unidad</label><input type="text" id="bgUnidad" value="unidad"></div>
       </div>
+      <label class="field-label">Marca (opcional)</label><input type="text" id="bgMarca" list="bgMarcasList2" placeholder="Ej: Weidmüller"><datalist id="bgMarcasList2">${marcasConocidas().map(m => `<option value="${escaparHtml(m)}">`).join('')}</datalist>
       <div class="grid grid-2" style="gap:10px;">
         <div><label class="field-label">Stock inicial</label><input type="text" id="bgStock" value="0" oninput="recalcularPrecioUnitarioModal()"></div>
         <div><label class="field-label">Stock mínimo</label><input type="text" id="bgMinimo" value="0"></div>
@@ -6591,6 +6653,7 @@ function modalProductoBodegaGeneral() {
           material: document.getElementById('bgMaterial').value,
           codigo: document.getElementById('bgCodigo').value,
           unidad: document.getElementById('bgUnidad').value,
+          marca: document.getElementById('bgMarca').value,
           stock: document.getElementById('bgStock').value,
           minimo: document.getElementById('bgMinimo').value,
           precioTotal: document.getElementById('bgPrecioTotal').value,

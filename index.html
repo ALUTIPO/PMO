@@ -536,7 +536,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.11.2";
+const APP_VERSION = "3.12.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -5867,6 +5867,7 @@ function renderBodegaGeneral() {
     <div class="flex-gap">
       <button class="btn" onclick="wmsAbrir()" title="Dónde está cada material, traspasos Central/Taller/Estante y trazabilidad">📍 Ubicaciones</button>
       <button class="btn" onclick="goTo('panol')" title="Solicitar material de esta bodega para un proyecto">📦 Ir al Pañol</button>
+      ${puede ? `<button class="btn" onclick="modalCruceStock()" title="Contar lo que hay y cruzarlo con el sistema, indicando a qué proyecto se cargó la diferencia">⚖ Cruce de stock</button>` : ''}
       ${puede ? `<button class="btn" onclick="modalImportarBodegaExcel()" title="Cargar productos masivamente desde un Excel">⬆ Importar Excel</button>` : ''}
       <button class="btn" onclick="exportarBodegaExcelBsale()" title="Descarga un Excel listo para cargar en el importador de Stock de Bsale">⬇ Exportar a Excel (Bsale)</button>
       ${puede ? `<button class="btn btn-primary" onclick="modalProductoBodegaGeneral()">+ Agregar producto</button>` : ''}
@@ -6321,6 +6322,145 @@ function mapearFilaImportBodega(row) {
   return { sku: (sku||"").toString().trim(), nombre: (nombre||"").toString().trim(), stock: Number(stock)||0, costo: Number(costo)||0 };
 }
 
+/* =====================================================================
+   CRUCE DE STOCK — conteo físico vs. sistema (Bodega General)
+   Se escribe lo que realmente hay; la app muestra sobra/falta por código,
+   se indica a qué se debe la diferencia (proyecto, pañol, consumo…) y
+   solo al aprobar se ajusta el stock y queda el movimiento registrado.
+   ===================================================================== */
+let acCr = null;
+const CR_DESTINOS = [
+  ["proyecto", "Cargado a proyecto…", -1], ["panol", "Está en pañol / taller", -1], ["consumo", "Consumo o merma", -1],
+  ["ingreso", "Ingreso no registrado", 1], ["devolucion", "Devolución de terreno", 1], ["sin", "Sin explicar (solo ajustar)", 0]
+];
+function crFilaVacia() { return { codigo: "", contado: "", destino: "sin", proyectoId: "", nota: "", ok: true }; }
+function modalCruceStock() {
+  if (!puedeGestionarBodega()) { toast(`Tu rol (${DB.role}) no gestiona bodega.`, "danger"); return; }
+  acCr = { filas: [crFilaVacia()] };
+  openModal(`
+    <div class="modal-head"><h3>⚖ Cruce de stock — conteo físico vs. sistema</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <p class="small muted">Escribe lo que <strong>realmente hay</strong> por código (las filas sin cantidad se ignoran). Si falta o sobra, indica el motivo: a qué proyecto se cargó, si está en pañol, etc. Nada cambia hasta que apruebes y pulses «Aplicar».</p>
+      <datalist id="crCodigos">${(DB.bodegaGeneral || []).map(b => `<option value="${escaparHtml(b.codigo)}">${escaparHtml(b.material)}</option>`).join('')}</datalist>
+      <div class="flex-gap" style="flex-wrap:wrap; margin-bottom:8px;">
+        <button class="btn btn-sm" onclick="crAgregarFila()">＋ Otra fila</button>
+        <button class="btn btn-sm" onclick="crTraerTodo()" title="Una fila por cada material con stock, para ir contando">Traer todos los materiales con stock</button>
+        <button class="btn btn-sm" onclick="crPegar()">📋 Pegar desde Excel (código + cantidad)</button>
+        <div style="flex:1; min-width:180px;"><input type="text" placeholder="Filtrar filas…" oninput="crFiltrar(this.value)"></div></div>
+      <div id="acCrPegarBox" style="display:none; margin-bottom:8px;"><textarea id="acCrPegar" rows="4" style="width:100%;" placeholder="código&#9;cantidad (una línea por producto)"></textarea>
+        <button class="btn btn-sm" style="margin-top:6px;" onclick="crPegarAplicar()">Cargar a la tabla</button></div>
+      <div id="acCrTabla" style="max-height:50vh; overflow:auto;"></div>
+      <div id="acCrResumen" style="margin-top:10px;"></div>
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="crAplicar()">Aplicar los ajustes aprobados</button></div>`, 1250);
+  crPintar();
+}
+function crLeer() {
+  if (!acCr) return;
+  acCr.filas.forEach((f, i) => {
+    const g = k => { const el = document.getElementById('acCr_' + k + '_' + i); return el; };
+    if (g('codigo')) f.codigo = g('codigo').value;
+    if (g('contado')) f.contado = g('contado').value;
+    if (g('destino')) f.destino = g('destino').value;
+    if (g('proy')) f.proyectoId = g('proy').value;
+    if (g('nota')) f.nota = g('nota').value;
+    if (g('ok')) f.ok = g('ok').checked;
+  });
+}
+function crAgregarFila() { crLeer(); acCr.filas.push(crFilaVacia()); crPintar(); }
+function crQuitar(i) { crLeer(); acCr.filas.splice(i, 1); if (!acCr.filas.length) acCr.filas.push(crFilaVacia()); crPintar(); }
+function crTraerTodo() {
+  crLeer(); const ya = new Set(acCr.filas.map(f => f.codigo.trim().toLowerCase()));
+  acCr.filas = acCr.filas.filter(f => f.codigo || f.contado);
+  (DB.bodegaGeneral || []).filter(b => Number(b.stock) > 0 && !ya.has(String(b.codigo).toLowerCase())).forEach(b => acCr.filas.push(Object.assign(crFilaVacia(), { codigo: b.codigo })));
+  if (!acCr.filas.length) acCr.filas.push(crFilaVacia());
+  crPintar();
+}
+function crPegar() { document.getElementById('acCrPegarBox').style.display = 'block'; }
+function crPegarAplicar() {
+  crLeer();
+  const nuevas = (document.getElementById('acCrPegar').value || "").split(/\r?\n/).map(l => l.trim()).filter(Boolean).map(l => { const p = l.split(/\t|;|,/).map(x => x.trim()); return { cod: p[0], q: String(p[1] || "").replace(/[^\d.]/g, "") }; }).filter(x => x.cod);
+  if (!nuevas.length) { toast("No encontré líneas.", "danger"); return; }
+  nuevas.forEach(n => { const f = acCr.filas.find(x => x.codigo.trim().toLowerCase() === n.cod.toLowerCase()); if (f) f.contado = n.q; else acCr.filas.push(Object.assign(crFilaVacia(), { codigo: n.cod, contado: n.q })); });
+  acCr.filas = acCr.filas.filter(f => f.codigo || f.contado);
+  document.getElementById('acCrPegar').value = ""; document.getElementById('acCrPegarBox').style.display = 'none';
+  crPintar();
+}
+function crFiltrar(v) { v = (v || "").trim().toLowerCase(); document.querySelectorAll('#acCrTabla tr[data-txt]').forEach(tr => { tr.style.display = (!v || tr.dataset.txt.includes(v)) ? "" : "none"; }); }
+function crDiff(f) {
+  const b = buscarBodegaGeneralPorCodigo((f.codigo || "").trim());
+  if (!b || f.contado === "" || isNaN(Number(f.contado))) return { b, d: null };
+  return { b, d: Math.round(Number(f.contado)) - (Number(b.stock) || 0) };
+}
+function crPintar() {
+  const box = document.getElementById('acCrTabla'); if (!box) return;
+  const inp = 'width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:7px;';
+  box.innerHTML = `<div class="table-wrap"><table>
+    <tr><th style="width:140px">Código</th><th>Material</th><th style="width:70px">Sistema</th><th style="width:90px">Contado</th><th style="width:80px">Diferencia</th><th style="width:190px">Motivo de la diferencia</th><th style="width:170px">Proyecto</th><th>Nota (pañol, quién, etc.)</th><th style="width:60px">Aprobar</th><th style="width:30px"></th></tr>
+    ${acCr.filas.map((f, i) => { const { b } = crDiff(f);
+      return `<tr data-txt="${escaparHtml(((f.codigo || '') + ' ' + (b ? b.material : '')).toLowerCase())}">
+        <td><input style="${inp}" list="crCodigos" id="acCr_codigo_${i}" value="${escaparHtml(f.codigo)}" onchange="crCambio()"></td>
+        <td class="small" id="acCr_mat_${i}"></td><td id="acCr_sis_${i}"></td>
+        <td><input type="number" min="0" style="${inp}" id="acCr_contado_${i}" value="${escaparHtml(f.contado)}" oninput="crCambio()"></td>
+        <td id="acCr_dif_${i}"></td>
+        <td><select style="${inp}" id="acCr_destino_${i}" onchange="crCambio()">${CR_DESTINOS.map(([v, l]) => `<option value="${v}" ${f.destino === v ? 'selected' : ''}>${l}</option>`).join('')}</select></td>
+        <td><select style="${inp}" id="acCr_proy_${i}" onchange="crCambio()"><option value="">—</option>${(DB.proyectos || []).map(p => `<option value="${p.id}" ${f.proyectoId === p.id ? 'selected' : ''}>${escaparHtml(p.codigo || p.nombre)}</option>`).join('')}</select></td>
+        <td><input style="${inp}" id="acCr_nota_${i}" value="${escaparHtml(f.nota)}" oninput="crCambio(true)"></td>
+        <td style="text-align:center;"><input type="checkbox" id="acCr_ok_${i}" ${f.ok ? 'checked' : ''} onchange="crCambio(true)"></td>
+        <td><button class="btn btn-sm" onclick="crQuitar(${i})">✕</button></td></tr>`; }).join('')}</table></div>`;
+  crCambio(true);
+}
+function crCambio(sinLeer) {
+  crLeer();
+  acCr.filas.forEach((f, i) => {
+    const { b, d } = crDiff(f);
+    const set = (id, h) => { const el = document.getElementById(id); if (el) el.innerHTML = h; };
+    set('acCr_mat_' + i, b ? escaparHtml(b.material) : (f.codigo.trim() ? '<span style="color:var(--copper-dark)">código no está en Bodega General</span>' : ''));
+    set('acCr_sis_' + i, b ? b.stock : '');
+    set('acCr_dif_' + i, d === null ? '' : (d === 0 ? '<span style="color:var(--ok)">✔ igual</span>' : `<b style="color:${d < 0 ? 'var(--red,#b3261e)' : 'var(--copper-dark)'}">${d > 0 ? '+' : ''}${d}</b>`));
+    const pr = document.getElementById('acCr_proy_' + i); if (pr) pr.style.visibility = f.destino === 'proyecto' ? 'visible' : 'hidden';
+    const dsel = document.getElementById('acCr_destino_' + i); if (dsel) dsel.disabled = (d === 0 || d === null);
+  });
+  const dif = acCr.filas.map(f => ({ f, ...crDiff(f) })).filter(x => x.b && x.d);
+  const falt = dif.filter(x => x.d < 0), sob = dif.filter(x => x.d > 0);
+  const val = x => Math.abs(x.d) * (Number(x.b.precioUnitario) || 0);
+  const el = document.getElementById('acCrResumen'); if (!el) return;
+  el.innerHTML = `<div class="card" style="background:var(--bg-soft,#f6f4ef);"><div class="small">Contados: <b>${acCr.filas.filter(f => crDiff(f).d !== null).length}</b> · con diferencia: <b>${dif.length}</b> · faltan en total: <b>${falt.reduce((s, x) => s - x.d, 0)}</b> (${money(falt.reduce((s, x) => s + val(x), 0))}) · sobran: <b>${sob.reduce((s, x) => s + x.d, 0)}</b> (${money(sob.reduce((s, x) => s + val(x), 0))})</div></div>`;
+}
+function crAplicar() {
+  crLeer();
+  const filas = acCr.filas.map(f => ({ f, ...crDiff(f) }));
+  const malos = filas.filter(x => x.f.codigo.trim() && x.f.contado !== "" && !x.b);
+  if (malos.length) { toast(`El código ${malos[0].f.codigo} no existe en Bodega General.`, "danger"); return; }
+  const dif = filas.filter(x => x.b && x.d && x.f.ok);
+  if (!dif.length) { toast("No hay diferencias aprobadas para aplicar.", "danger"); return; }
+  for (const x of dif) {
+    const f = x.f, d = x.d; const info = CR_DESTINOS.find(c => c[0] === f.destino);
+    if (f.destino === "proyecto" && d > 0) { toast(`${f.codigo}: sobra material, no puede ser «cargado a proyecto».`, "danger"); return; }
+    if (info && info[2] > 0 && d < 0) { toast(`${f.codigo}: faltan unidades, el motivo no puede ser «${info[1]}».`, "danger"); return; }
+    if (info && info[2] < 0 && d > 0) { toast(`${f.codigo}: sobran unidades, el motivo no puede ser «${info[1]}».`, "danger"); return; }
+    if (f.destino === "proyecto" && !f.proyectoId) { toast(`${f.codigo}: elige a qué proyecto se cargó.`, "danger"); return; }
+  }
+  if (!confirm(`Se ajustarán ${dif.length} producto(s) en Bodega General. ¿Aplicar?`)) return;
+  const fecha = hoyISO(); const resumen = []; let n = 0;
+  dif.forEach(x => {
+    const f = x.f, d = x.d, b = x.b; const mot = (CR_DESTINOS.find(c => c[0] === f.destino) || [])[1] || "";
+    const nota = f.nota.trim();
+    if (f.destino === "proyecto" && d < 0) {
+      if (asignarBodegaGeneralAProyecto(b.codigo, f.proyectoId, -d)) { n++; resumen.push(`${b.codigo} ${d} → proyecto ${(proy(f.proyectoId) || {}).codigo || ''}`); }
+    } else {
+      const antes = b.stock; const cu = Number(b.precioUnitario) || 0;
+      b.stock = Math.max(0, Number(b.stock) + d);
+      registrarMovimientoBodega({ tipo: "Ajuste por cruce de stock", signo: d > 0 ? 1 : -1, codigo: b.codigo, material: b.material, unidad: b.unidad || "", cantidad: Math.abs(d), costoUnitario: cu, total: Math.abs(d) * cu, documento: `Cruce de stock ${fecha} — ${mot}${nota ? ': ' + nota : ''}`, origenTipo: d > 0 ? (f.destino === "devolucion" ? "Terreno" : "Otro") : "", origenDetalle: nota, ubicDestino: d > 0 ? "Por ubicar" : "", estadoInforme: "No aplica" });
+      registrarHistorial({ proyecto: "General", accion: "Modificar", detalle: `Cruce de stock ${b.codigo} (${b.material}): ${antes} → ${b.stock} — ${mot}${nota ? ': ' + nota : ''}`, usuario: DB.usuario + " · " + DB.role, criticidad: "Media" });
+      n++; resumen.push(`${b.codigo} ${d > 0 ? '+' : ''}${d} (${mot})`);
+    }
+  });
+  registrarHistorial({ proyecto: "General", accion: "Modificar", detalle: `Cruce de stock aplicado: ${n} ajustes — ${resumen.join('; ')}`, usuario: DB.usuario + " · " + DB.role, criticidad: "Media" });
+  guardarEstado("Cruce de stock"); closeModal(); renderAll();
+  toast(`Cruce de stock aplicado: ${n} producto(s) ajustados.`, "ok");
+}
 function modalImportarBodegaExcel() {
   if (!puedeGestionarBodega()) { toast(`Tu rol (${DB.role}) no gestiona bodega.`, "danger"); return; }
   _importBodegaFilas = [];

@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.22.0";
+const APP_VERSION = "3.23.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -9158,7 +9158,7 @@ function renderTareaPunch(p, it) {
             ${badgeImportancia(it.importancia)}
             ${it.fechaInicio || it.fechaTermino ? `<span class="small" style="color:${urgenciaColor}">📅 ${it.fechaInicio||'?'} → ${it.fechaTermino||'?'}${urgencia==='vencido'?' (vencido)':urgencia==='proximo'?' (próximo)':''}</span>` : ''}
             ${enGantt ? `<span class="small" style="color:var(--blueprint)">🔧 en Gantt</span>` : ''}
-            ${responsables.length ? `<span class="small" style="color:var(--ink-3)">👤 ${responsables.map(r=>r.nombre).join(', ')}</span>` : ''}
+            ${responsables.length ? `<span class="small" style="color:var(--ink-3)">👤 ${responsables.map(r=>r.nombre).join(', ')}</span>` : (it.asignadoTexto ? `<span class="small" style="color:var(--ink-3)" title="Asignado según el Excel (iniciales)">👤 ${escaparHtml(it.asignadoTexto)}</span>` : '')}${it.origenExcel ? `<span class="small muted" title="Viene del Punch List del Excel Project Delivery">📥 Excel</span>` : ''}
           </div>
         </div>
       </div>
@@ -11212,12 +11212,115 @@ function exParseFollowUp(aoa){
     out.items.push({ grupo, item:exTxt(v(f,"item")), qty:exNum(v(f,"qty")), desc, empresa:comp, codigo:exTxt(v(f,"project code")), proveedor:exTxt(v(f,"supplier")), origen:exTxt(v(f,"origin")), estado:exTxt(v(f,"status")), contenedores:exTxt(v(f,"qty of containers")), etaPlanExcel:exFechaISO(v(f,"eta (planned)")), costoUSD:exNum(v(f,"cost (usd)")), ventaUSD:exNum(v(f,"sales price (usd)")) }); }
   return out;
 }
+/* ---- Punch List del Excel «Project Delivery» (V3.23) ---- */
+const PUNCH_DISC = { electrical: "Eléctrico", automation: "Automatización", mechanical: "Mecánico" };
+const PUNCH_IMP = { high: "Alta", medium: "Media", low: "Baja" };
+const PUNCH_EST = { "not started": "No Iniciado", "in progress": "En Progreso", "complete": "Completado", "completed": "Completado", "done": "Completado" };
+const PUNCH_ORD = { "No Iniciado": 0, "En Progreso": 1, "Completado": 2 };
+function exParsePunch(aoa) {
+  const secs = []; let titulo = "", cur = null, col = null, vacias = 0;
+  for (let r = 0; r < (aoa || []).length; r++) {
+    const f = aoa[r] || [], ns = f.map(exNorm);
+    if (ns.includes("item #") && ns.includes("item name")) { col = {}; ns.forEach((t, c) => { if (col[t] == null) col[t] = c; });
+      cur = { titulo, codigo: (titulo.match(/CL\d{3}-\d{2}(?:-[A-Z])?/) || [""])[0], base: (titulo.match(/CL\d{3}/) || [""])[0], filas: [] }; secs.push(cur); vacias = 0; continue; }
+    const celdas = f.map(exTxt).filter(Boolean);
+    if (!celdas.length) { if (cur && ++vacias >= 2) { cur = null; col = null; } continue; }
+    if (celdas.length === 1 && /punch/i.test(celdas[0])) { titulo = celdas[0]; cur = null; col = null; continue; }
+    if (!cur) continue; vacias = 0;
+    const g = k => col[k] == null ? "" : exTxt(f[col[k]]); const issue = g("issue"); if (!issue) continue;
+    const limpio = s => /^#(REF|N\/A|VALUE|NAME)/i.test(s) ? "" : s;
+    cur.filas.push({ num: g("item #"), grupo: g("item name"), tipo: g("job type"), issue, accion: g("action"), vence: col["due date"] == null ? "" : exFechaISO(f[col["due date"]]), asignado: g("asigned to") || g("assigned to"), importancia: g("importance"), status: g("status"), comentario: limpio(g("comments")) });
+  }
+  return { secciones: secs.filter(s => s.filas.length) };
+}
+function punchMapear(x) {
+  const cap = s => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+  return { clave: exNorm(x.grupo + "|" + x.issue), desc: `${x.grupo}: ${cap(x.issue)}${x.accion ? " — " + x.accion : ""}`, disciplina: PUNCH_DISC[exNorm(x.tipo)] || "Eléctrico", importancia: PUNCH_IMP[exNorm(x.importancia)] || "Media",
+    estado: PUNCH_EST[exNorm(x.status)] || "No Iniciado", fechaTermino: x.vence || "", asignadoTexto: x.asignado || "", grupo: x.grupo, accion: x.accion || "", numExcel: x.num, comentarioExcel: x.comentario || "" };
+}
+function punchPersonasDe(txt) {
+  const toks = String(txt || "").toUpperCase().split(/[^A-ZÁÉÍÓÚÑ]+/).filter(Boolean); if (!toks.length) return [];
+  const ini = per => String(per.nombre || "").trim().split(/\s+/).map(w => w[0] || "").join("").toUpperCase(), ids = [];
+  for (const t of toks) { const c = (DB.personal || []).filter(per => ini(per) === t); if (c.length !== 1) return []; ids.push(c[0].id); }
+  return ids;
+}
+function punchBuscar(p, m) { return (p.punch || []).find(it => it.claveExcel === m.clave) || (p.punch || []).find(it => !it.claveExcel && exNorm(it.desc) === exNorm(m.desc)) || null; }
+function punchPlan(p, sec) {
+  const plan = { nuevos: [], cambian: [], iguales: 0, ausentes: [] }, vistas = new Set();
+  sec.filas.forEach(x => { const m = punchMapear(x), it = p ? punchBuscar(p, m) : null; if (!it) { plan.nuevos.push(m); return; } vistas.add(it.id);
+    const dif = []; if (it.importancia !== m.importancia) dif.push(`importancia ${it.importancia} → ${m.importancia}`); if ((it.fechaTermino || "") !== m.fechaTermino) dif.push(`fecha ${fcF(it.fechaTermino)} → ${fcF(m.fechaTermino)}`);
+    if (!(it.subitems || []).length && (PUNCH_ORD[m.estado] || 0) > (PUNCH_ORD[it.estado] || 0)) dif.push(`estado ${it.estado} → ${m.estado}`);
+    if ((it.asignadoTexto || "") !== m.asignadoTexto) dif.push(`asignado ${it.asignadoTexto || "—"} → ${m.asignadoTexto || "—"}`); if (it.disciplina !== m.disciplina) dif.push(`disciplina ${it.disciplina} → ${m.disciplina}`);
+    if (dif.length) plan.cambian.push({ it, m, dif }); else plan.iguales++; });
+  if (p) plan.ausentes = (p.punch || []).filter(it => it.claveExcel && !vistas.has(it.id) && it.estado !== "Completado");
+  return plan;
+}
+function punchAplicar(p, sec) {
+  const plan = punchPlan(p, sec); let nid = (p.punch || []).length;
+  plan.nuevos.forEach(m => { nid++; const ids = punchPersonasDe(m.asignadoTexto);
+    p.punch.push({ id: "PX-" + Math.random().toString(36).slice(2, 6).toUpperCase() + "-" + nid, desc: m.desc, disciplina: m.disciplina, importancia: m.importancia, fechaInicio: "", fechaTermino: m.fechaTermino, estado: m.estado, subitems: [],
+      claveExcel: m.clave, grupo: m.grupo, accion: m.accion, asignadoTexto: m.asignadoTexto, asignadoPersonaIds: ids, numExcel: m.numExcel, comentarioExcel: m.comentarioExcel, origenExcel: true }); });
+  plan.cambian.forEach(({ it, m }) => { it.importancia = m.importancia; it.fechaTermino = m.fechaTermino; it.disciplina = m.disciplina; it.asignadoTexto = m.asignadoTexto; it.grupo = m.grupo; it.accion = m.accion; it.claveExcel = it.claveExcel || m.clave; it.numExcel = m.numExcel;
+    if (!(it.asignadoPersonaIds || []).length) it.asignadoPersonaIds = punchPersonasDe(m.asignadoTexto);
+    if (!(it.subitems || []).length && (PUNCH_ORD[m.estado] || 0) > (PUNCH_ORD[it.estado] || 0)) it.estado = m.estado;
+    if (it.fechaInicio) sincronizarPunchAGanttObj(p, it); });
+  registrarHistorial({ proyecto: p.codigo, accion: "Modificar", detalle: `Punch List importado desde Excel («${sec.titulo}»): ${plan.nuevos.length} nuevo(s), ${plan.cambian.length} actualizado(s), ${plan.iguales} sin cambios`, usuario: DB.usuario + " · " + DB.role, criticidad: "Baja" });
+  return plan;
+}
+let impPunchDest = [];
+function impPunchDestinoDefecto(sec) {
+  const base = sec.base, c = DB.proyectos.filter(p => base && String(p.codigo).startsWith(base)); if (!c.length) return "";
+  const exacto = c.find(p => sec.codigo && String(p.codigo).startsWith(sec.codigo.replace(/-[A-Z]$/, ""))); return (exacto || c.find(p => !p.terminado) || c[0]).id;
+}
+function htmlPunchSecciones(R) {
+  const secs = (R.punch && R.punch.secciones) || []; if (!secs.length) return "";
+  return `<div class="card" style="margin:12px 0;padding:12px;"><b>📋 Punch List del Excel</b> <span class="small muted">· las tareas de término del proyecto</span>
+    ${secs.map((sec, i) => { const dest = impPunchDest[i] || "", p = dest ? proy(dest) : null, plan = p ? punchPlan(p, sec) : null;
+      const cnt = e => sec.filas.filter(x => PUNCH_EST[exNorm(x.status)] === e).length;
+      return `<div style="margin-top:10px; padding-top:8px; border-top:1px solid var(--line);"><div><b>${escaparHtml(sec.titulo || 'Punch List')}</b></div><div class="small muted">${sec.filas.length} ítems · ${cnt('No Iniciado')} sin iniciar · ${cnt('En Progreso')} en progreso · ${cnt('Completado')} completos</div>
+        <label class="small muted">Cargar en el proyecto<select onchange="impPunchDest[${i}]=this.value; impPunchRefrescar();"><option value="">— no importar esta sección —</option>${DB.proyectos.map(x => `<option value="${x.id}" ${x.id === dest ? 'selected' : ''}>${escaparHtml(x.codigo)} — ${escaparHtml(x.nombre)}${x.terminado ? ' (terminado)' : ''}</option>`).join('')}</select></label>
+        ${plan ? `<div class="small" style="margin-top:4px;">➕ <b>${plan.nuevos.length}</b> nuevos · ✏️ <b>${plan.cambian.length}</b> con cambios · = ${plan.iguales} sin cambios${plan.ausentes.length ? ` · ⚠ ${plan.ausentes.length} ya no vienen en el Excel (se conservan)` : ''}</div>
+          ${plan.cambian.slice(0, 5).map(c => `<div class="small muted">· ${escaparHtml(c.m.grupo)}: ${escaparHtml(c.m.desc.split(' — ')[0].replace(c.m.grupo + ': ', ''))} (${escaparHtml(c.dif.join('; '))})</div>`).join('')}${plan.cambian.length > 5 ? `<div class="small muted">… y ${plan.cambian.length - 5} más</div>` : ''}` : '<div class="small muted" style="margin-top:4px;">No se importará esta sección.</div>'}</div>`; }).join('')}
+    <p class="hint" style="margin-top:8px;">Las tareas importadas quedan marcadas con su origen y se pueden volver a importar: se actualizan por su descripción sin duplicarse. Si ya avanzaste una tarea en la app, su estado no retrocede.</p></div>`;
+}
+function impPunchRefrescar() { const b = document.getElementById("impPunchBox"); if (b && _impProy) b.innerHTML = htmlPunchSecciones(_impProy); }
+function impPunchAplicarTodo() {
+  const R = _impProy; let n = 0, c = 0; ((R.punch || {}).secciones || []).forEach((sec, i) => { const p = impPunchDest[i] ? proy(impPunchDest[i]) : null; if (!p) return; const pl = punchAplicar(p, sec); n += pl.nuevos.length; c += pl.cambian.length; });
+  return [n, c];
+}
+function impPunchSolo() {
+  if (!_impProy || !puedeImportarProyecto()) return; const [n, c] = impPunchAplicarTodo(); if (!n && !c) { toast("No hay cambios que importar en el Punch List.", "ok"); return; }
+  guardarEstado("Punch List importado desde Excel"); closeModal(); renderAll(); toast(`Punch List: ${n} tarea(s) nuevas y ${c} actualizadas.`, "ok");
+}
+function impProyComparar(R, p) {
+  const o = [], k = R.kickoff, F = R.followUp, fe = exFmt; if (!p) return o;
+  if ((p.fechaEntrega || "") !== (k.fechaEntrega || "")) o.push(`Fecha de entrega: ${p.fechaEntrega ? fe(p.fechaEntrega) : "—"} → ${k.fechaEntrega ? fe(k.fechaEntrega) : "—"}`);
+  if (p.montos && Math.abs((p.montos.usdVentaTotal || 0) - k.usdTotal) > 1) o.push(`Monto total neto del Kick-off: USD ${Math.round(p.montos.usdVentaTotal || 0).toLocaleString("es-CL")} → USD ${Math.round(k.usdTotal).toLocaleString("es-CL")}`);
+  const prev = {}; (p.planificacion || []).filter(t => t.origenExcel).forEach(t => prev[exNorm(t.fase + "|" + t.nombre)] = t);
+  const camb = [], nuevas = []; R.planner.tareas.forEach(t => { const a = prev[exNorm(t.fase + "|" + t.nombre)]; if (!a) { nuevas.push(t.nombre); return; } const d = []; if (a.inicio !== t.inicio) d.push(`inicio ${fe(a.inicio)} → ${fe(t.inicio)}`); if (a.fin !== t.fin) d.push(`término ${fe(a.fin)} → ${fe(t.fin)}`); if (Math.round(a.avance || 0) !== t.avance) d.push(`avance ${Math.round(a.avance || 0)}% → ${t.avance}%`); if (d.length) camb.push(`«${t.nombre}»: ${d.join(", ")}`); });
+  if (camb.length) o.push(`Planner: ${camb.length} tarea(s) con cambios. ` + camb.slice(0, 6).join(" | ") + (camb.length > 6 ? " …" : ""));
+  if (nuevas.length) o.push(`Planner: ${nuevas.length} tarea(s) nuevas: ` + nuevas.slice(0, 6).join(", ") + (nuevas.length > 6 ? " …" : ""));
+  const fcPrev = {}; exArr(p.kickoff && p.kickoff.fechasCriticas).forEach(f => fcPrev[exNorm(f.desc)] = f);
+  const fcCamb = k.fechasCriticas.filter(f => fcPrev[exNorm(f.desc)] && fcPrev[exNorm(f.desc)].fecha !== f.fecha).map(f => `«${f.desc}» ${fe(fcPrev[exNorm(f.desc)].fecha)} → ${fe(f.fecha)}`);
+  if (fcCamb.length) o.push("Fechas críticas con cambios: " + fcCamb.join(" | "));
+  const sp = {}; exArr(p.seguimientoExterior && p.seguimientoExterior.items).forEach(i => sp[exNorm(i.desc + "|" + i.codigo + "|" + i.proveedor)] = i);
+  const sc = [], sn = []; F.items.forEach(i => { const a = sp[exNorm(i.desc + "|" + i.codigo + "|" + i.proveedor)]; if (!a) { sn.push(i.desc); return; } const d = []; if ((a.estado || "") !== (i.estado || "")) d.push(`estado ${a.estado || "—"} → ${i.estado || "—"}`); if ((a.etaPlan || "") !== (i.etaPlan || "")) d.push(`ETA ${a.etaPlan ? fe(a.etaPlan) : "—"} → ${i.etaPlan ? fe(i.etaPlan) : "—"}`); if (d.length) sc.push(`${i.desc} (${i.proveedor || i.empresa}): ${d.join(", ")}`); });
+  if (sc.length) o.push(`Compras al exterior (Follow Up): ${sc.length} ítem(s) con cambios. ` + sc.slice(0, 5).join(" | ")); if (sn.length) o.push(`Follow Up: ${sn.length} ítem(s) nuevos.`);
+  const ap = new Set(exArr(p.kickoff && p.kickoff.acuerdos).map(a => exNorm(a.desc))); const an = k.acuerdos.filter(a => !ap.has(exNorm(a.desc))); if (an.length) o.push(`${an.length} acuerdo(s) nuevo(s) en el Kick-off.`);
+  const rp = exArr(p.kickoff && p.kickoff.responsables).map(r => exNorm(r.rol + "=" + r.nombre)).sort().join("|"), rn = k.responsables.map(r => exNorm(r.rol + "=" + r.nombre)).sort().join("|"); if (rp !== rn && rp) o.push("Los responsables del Kick-off cambiaron.");
+  return o;
+}
+function impElegirExistente(codigo) { const p = DB.proyectos.find(x => x.codigo === codigo); if (p) { document.getElementById("impCodigo").value = p.codigo; document.getElementById("impNombre").value = p.nombre; const c = document.getElementById("impActPres"); if (c) c.checked = false; } impCompararRefrescar(); }
+function impCompararRefrescar() {
+  const b = document.getElementById("impComparaBox"); if (!b || !_impProy) return; const cod = (document.getElementById("impCodigo") || {}).value, p = DB.proyectos.find(x => x.codigo === (cod || "").trim()), l = impProyComparar(_impProy, p);
+  b.innerHTML = p ? `<div class="card" style="margin:12px 0;padding:12px;"><b>🔍 Qué cambia respecto a lo que ya tienes en ${escaparHtml(p.codigo)}</b>${l.length ? `<ul style="margin:6px 0 0 18px;padding:0;" class="small">${l.map(x => `<li style="margin-bottom:4px;">${escaparHtml(x)}</li>`).join('')}</ul>` : '<div class="small muted" style="margin-top:4px;">El Excel no trae cambios en datos generales, Planner, fechas críticas ni compras al exterior.</div>'}</div>` : '<div class="small muted" style="margin:10px 0;">Se creará un proyecto nuevo con este código.</div>';
+}
 function exParseProyecto(hojas, nombreArchivo){
   const get=(re)=>{ const k=Object.keys(hojas).find(n=>re.test(exNorm(n))); return k ? hojas[k] : null; };
   const aK=get(/^kick/), aC=get(/^cpm/), aP=get(/^planner/), aF=get(/^follow/), aX=get(/^punch/);
   if(!aK) throw new Error("No encontré la hoja «Kick-off». ¿Es el documento madre Project Delivery?");
   const R={ kickoff:exParseKickoff(aK), cpm: aC?exParseCPM(aC):{objetivo:"",items:[]}, planner: aP?exParsePlanner(aP):{tareas:[],sinFechas:[]}, followUp: aF?exParseFollowUp(aF):{items:[],grupos:[],totales:{},tcExcel:0}, punchFilas:0 };
-  if(aX){ const hh=aX.findIndex(f=>(f||[]).map(exNorm).includes("item name")); if(hh>=0) R.punchFilas = aX.slice(hh+1).filter(f=>exTxt((f||[])[2])!=="").length; }
+  R.punch = aX ? exParsePunch(aX) : { secciones: [] }; R.punchFilas = R.punch.secciones.reduce((s, x) => s + x.filas.length, 0);
   const k=R.kickoff;
   const m=String(nombreArchivo||"").match(/CL\d{3}-\d{2}(?:-[A-Z])?/);
   R.codigo = m ? m[0] : ((k.cotizaciones[0]||"").replace(/-Q(?=-|$)/,"") || "SIN-CODIGO");
@@ -11246,6 +11349,9 @@ function exObservaciones(R){
   if(R.planner.tareas.length && R.planner.tareas.every(t=>!t.responsable)) o.push({ nivel:"info", texto:"El Planner no trae responsables por tarea (columna OWNER vacía)." });
   const sinResp=k.acuerdos.filter(a=>!a.resp).length; if(sinResp) o.push({ nivel:"info", texto:`${sinResp} acuerdo(s) sin responsable.` });
   if(!R.punchFilas) o.push({ nivel:"info", texto:"La hoja Punch List del Excel está vacía (se usa el Punch List de la app)." });
+  else o.push({ nivel:"info", texto:`El Punch List del Excel trae ${R.punchFilas} ítem(s) en ${R.punch.secciones.length} sección(es): ${R.punch.secciones.map(x=>x.codigo||x.titulo).join(", ")}. Elige a qué proyecto va cada una.` });
+  const base=(R.codigo.match(/CL\d{3}/)||[""])[0], ajenas=[...new Set(R.planner.tareas.map(t=>(String(t.fase).match(/^CL\d{3}/i)||[""])[0].toUpperCase()).filter(x=>x && x!==base))];
+  if(ajenas.length) o.push({ nivel:"warn", texto:`El Planner incluye secciones de otro(s) proyecto(s) (${ajenas.join(", ")}); si actualizas, esas tareas también entran a la Gantt de este proyecto.` });
   return o;
 }
 
@@ -11262,7 +11368,7 @@ function modalImportarProyecto(){
       <input type="file" id="impProyFile" accept=".xlsx,.xlsm" onchange="previsualizarImportProyecto(this)">
       <div id="impProyPreview" style="margin-top:12px;"></div>
     </div>
-    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" id="impProyBtn" disabled onclick="confirmarImportProyecto()">Crear / actualizar proyecto</button></div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn" id="impPunchBtn" disabled onclick="impPunchSolo()" title="Carga solo las tareas del Punch List, sin tocar nada más del proyecto">📋 Importar solo el Punch List</button><button class="btn btn-primary" id="impProyBtn" disabled onclick="confirmarImportProyecto()">Crear / actualizar proyecto</button></div>
   `, 680);
 }
 async function previsualizarImportProyecto(input){
@@ -11276,7 +11382,12 @@ async function previsualizarImportProyecto(input){
       const wb=XLSX.read(e.target.result,{type:'array'}); const hojas={};
       wb.SheetNames.forEach(n=>{ const ws=wb.Sheets[n]; if(ws['!ref']){ const rg=XLSX.utils.decode_range(ws['!ref']); rg.e.c=Math.min(rg.e.c,40); rg.e.r=Math.min(rg.e.r,400); ws['!ref']=XLSX.utils.encode_range(rg); } hojas[n]=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:""}); });
       _impProy=exParseProyecto(hojas,file.name); _impProy.archivo=file.name;
-      box.innerHTML=htmlPreviewImportProyecto(_impProy); btn.disabled=false;
+      const base=(_impProy.codigo.match(/CL\d{3}/)||[""])[0];
+      _impProy.candidatos = DB.proyectos.some(p=>p.codigo===_impProy.codigo) ? null : (base ? DB.proyectos.filter(p=>p.codigo.startsWith(base)) : []);
+      if(_impProy.candidatos && !_impProy.candidatos.length) _impProy.candidatos=null;
+      impPunchDest = ((_impProy.punch||{}).secciones||[]).map(impPunchDestinoDefecto);
+      box.innerHTML=htmlPreviewImportProyecto(_impProy); btn.disabled=false; impCompararRefrescar();
+      const bp=document.getElementById('impPunchBtn'); if(bp) bp.disabled=!_impProy.punchFilas;
     }catch(err){ box.innerHTML=`<div class="hint" style="color:var(--danger)">${escaparHtml(err.message||String(err))}</div>`; }
   };
   reader.readAsArrayBuffer(file);
@@ -11289,7 +11400,7 @@ function htmlPreviewImportProyecto(R){
   return `
     ${existe?`<div class="alert-chip" style="margin-bottom:10px;">Ya existe un proyecto con este código: se actualizarán sus datos del Excel (avances y checks se conservan).</div>`:''}
     <div class="grid-2" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-      <label class="small muted">Código<input type="text" id="impCodigo" value="${escaparHtml(R.codigo)}"></label>
+      <label class="small muted">Código<input type="text" id="impCodigo" value="${escaparHtml(R.codigo)}" oninput="impCompararRefrescar()"></label>
       <label class="small muted">Nombre<input type="text" id="impNombre" value="${escaparHtml(R.nombre)}"></label>
       <div><div class="small muted">Cliente</div><b>${escaparHtml(k.cliente||"—")}</b></div>
       <div><div class="small muted">PM · Entrega</div><b>${escaparHtml(k.pm||"—")} · ${exFmt(k.fechaEntrega)}</b></div>
@@ -11309,6 +11420,12 @@ function htmlPreviewImportProyecto(R){
       <p class="hint" style="margin-top:6px;">${R.followUp.tcExcel?`El Excel usa ${R.followUp.tcExcel} CLP/USD en el Follow Up (referencia de planificación). `:''}Escribe el dólar observado de la fecha de carga; queda registrado y se puede actualizar después.</p>
     </div>
     <div class="small" style="margin-bottom:8px;">Se cargarán: <b>${R.planner.tareas.length}</b> tareas del Planner · <b>${k.fechasCriticas.length}</b> fechas críticas · <b>${R.cpm.items.length}</b> actividades CPM · <b>${k.acuerdos.length}</b> acuerdos · <b>${k.checklist.length}</b> puntos de checklist · <b>${R.followUp.items.length}</b> ítems de compras al exterior.</div>
+    ${R.candidatos&&!existe?`<div class="card" style="margin-bottom:10px;padding:10px;border-left:4px solid var(--copper);"><div class="small"><b>Ya tienes proyecto(s) con ese número de CL.</b> El Excel se llama ${escaparHtml(R.codigo)}; ¿es el mismo proyecto?</div>
+      <select onchange="impElegirExistente(this.value)" style="margin-top:6px;"><option value="">No: crear un proyecto nuevo (${escaparHtml(R.codigo)})</option>${R.candidatos.map(c=>`<option value="${escaparHtml(c.codigo)}">Sí: actualizar ${escaparHtml(c.codigo)} — ${escaparHtml(c.nombre)}</option>`).join('')}</select></div>`:''}
+    <div id="impComparaBox"></div>
+    <div id="impPunchBox">${htmlPunchSecciones(R)}</div>
+    <label class="small" style="display:block;margin:6px 0;"><input type="checkbox" id="impActPres" ${existe?'':'checked'}> Actualizar también el presupuesto y los montos USD del proyecto con este Excel ${existe?'(déjalo sin marcar si el presupuesto del proyecto es solo del área eléctrica)':''}</label>
+    ${R.punchFilas?`<label class="small" style="display:block;margin:6px 0;"><input type="checkbox" id="impPunchTambien" checked> Al crear/actualizar, cargar también el Punch List a los proyectos elegidos</label>`:''}
     ${obs?`<div class="small"><b>Observaciones detectadas</b><ul style="margin:6px 0 0 18px;padding:0;">${obs}</ul></div>`:''}
   `;
 }
@@ -11320,7 +11437,10 @@ function confirmarImportProyecto(){
   if(!codigo||!nombre){ toast("Código y nombre son obligatorios.", "danger"); return; }
   if(!(tc>0)){ toast("Ingresa el tipo de cambio (CLP por USD) para convertir el monto.", "danger"); return; }
   const base=document.getElementById('impBase').value;
-  aplicarImportProyecto(R, { codigo, nombre, tc, fechaTC, base });
+  const actPres = (document.getElementById('impActPres')||{checked:true}).checked;
+  const conPunch = (document.getElementById('impPunchTambien')||{}).checked;
+  aplicarImportProyecto(R, { codigo, nombre, tc, fechaTC, base, actPres });
+  if(conPunch){ const [n,c]=impPunchAplicarTodo(); guardarEstado(); toast(`Punch List: ${n} nuevas y ${c} actualizadas.`, "ok"); }
   closeModal();
 }
 function aplicarImportProyecto(R, o){
@@ -11330,7 +11450,7 @@ function aplicarImportProyecto(R, o){
   if(!p){
     const r=crearProyecto({ codigo:o.codigo, nombre:o.nombre, cliente:k.cliente, clienteFinal:"", pm:k.pm||DB.usuario, tipo:"electrico", prioridad:"Alta", criticidad:"Alta", fechaKickoff:(R.planner.tareas.find(t=>/kick/i.test(t.nombre))||{}).inicio || k.fechaDocumento || hoyISO(), presupuesto:clp });
     if(!r) return; p=proy(r.id); nuevo=true;
-  } else { p.nombre=o.nombre; p.cliente=k.cliente||p.cliente; if(k.pm) p.pm=k.pm; p.presupuestoTotal=clp; }
+  } else { p.nombre=o.nombre; p.cliente=k.cliente||p.cliente; if(k.pm) p.pm=k.pm; if(o.actPres!==false) p.presupuestoTotal=clp; }
   // Conservar avances / checks de una carga anterior
   const avPrev={}; (p.planificacion||[]).forEach(t=>{ avPrev[exNorm(t.nombre)]=t.avance; });
   const chkPrev={}; exArr(p.cpm&&p.cpm.items).forEach(i=>{ chkPrev[exNorm(i.fase+"|"+i.actividad)]=i; });
@@ -11345,9 +11465,9 @@ function aplicarImportProyecto(R, o){
   p.planificacion=normalizarPlanificacion(p.planificacion);
   // Datos explícitos
   p.fechaEntrega=k.fechaEntrega||"";
-  p.montos={ usdBase:o.base, usdUsado:usd, usdVentaCL:k.usdCL, usdVentaUY:k.usdUY, usdVentaTotal:k.usdTotal, tipoCambio:o.tc, fechaTipoCambio:o.fechaTC, clp:clp,
+  if(nuevo || o.actPres!==false) p.montos={ usdBase:o.base, usdUsado:usd, usdVentaCL:k.usdCL, usdVentaUY:k.usdUY, usdVentaTotal:k.usdTotal, tipoCambio:o.tc, fechaTipoCambio:o.fechaTC, clp:clp,
              usdCostoFollowUp:F.totales.costoUSD||0, usdVentaFollowUp:F.totales.ventaUSD||0, margenPct:F.totales.margenPct||0, margenUSD:F.totales.margenUSD||0, tcExcel:F.tcExcel||0 };
-  const hist=exArr(p.historialTC); hist.push({ fecha:o.fechaTC, tipoCambio:o.tc, clp:clp, usuario:DB.usuario, motivo:"Carga desde Excel" }); p.historialTC=hist;
+  if(nuevo || o.actPres!==false){ const hist=exArr(p.historialTC); hist.push({ fecha:o.fechaTC, tipoCambio:o.tc, clp:clp, usuario:DB.usuario, motivo:"Carga desde Excel" }); p.historialTC=hist; }
   p.kickoff={ fechaDocumento:k.fechaDocumento, tipoProyecto:k.tipoProyecto, ubicacion:k.ubicacion, cotizaciones:k.cotizaciones, contraparte:k.contraparte, responsables:k.responsables,
     alcance:k.alcance, incluye:k.incluye, noIncluye:k.noIncluye, comprasExterior:k.comprasExterior, comprasLocales:k.comprasLocales, checklist:k.checklist,
     acuerdos:k.acuerdos.map(a=>({ ...a, hecho: acPrev[exNorm(a.desc)] ? !!acPrev[exNorm(a.desc)].hecho : false })),

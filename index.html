@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.26.0";
+const APP_VERSION = "3.26.1";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -2046,10 +2046,11 @@ function agregarProductoBodega(pid, datos) {
   if (!puedeGestionarBodega()) { toast(`Tu rol (${DB.role}) no gestiona bodega.`, "danger"); return false; }
   if (!datos.material || !datos.material.trim()) { toast("Indica el nombre del material.", "danger"); return false; }
   if (buscarBodegaPorNombre(p, datos.material)) { toast("Ese material ya existe en bodega — usa 'Actualizar stock' en vez de crear uno nuevo.", "danger"); return false; }
+  if (cdNum(datos.stock) >= 1000 && !confirm(`Vas a ingresar ${cdNum(datos.stock)} ${datos.unidad||'unidades'} de «${datos.material.trim()}». ¿Es la cantidad correcta? (Si es el precio, ponlo en «Costo unitario neto».)`)) return false;
   const codigo = (datos.codigo||"").trim() || ("MAT-"+String(1000+p.bodega.length+Math.floor(Math.random()*900)));
   p.bodega.push({
-    codigo, material: datos.material.trim(), stock: Number(datos.stock)||0,
-    unidad: datos.unidad||"unidad", minimo: Number(datos.minimo)||0,
+    codigo, material: datos.material.trim(), stock: cdNum(datos.stock),
+    unidad: datos.unidad||"unidad", minimo: cdNum(datos.minimo), precioUnitario: cdNum(datos.precio),
   });
   registrarHistorial({proyecto:p.codigo, accion:"Crear", detalle:`Producto agregado a bodega: ${datos.material} (${codigo})`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
   toast("Producto agregado a bodega.", "ok");
@@ -6394,9 +6395,10 @@ function marcaDeProductoProyecto(b) {
 function bgBuscarProy(v) { bgBusqueda = v || ""; const el = document.getElementById('bgTabla'); if (el) el.innerHTML = htmlTablaBodegaProyecto(); }
 function htmlTablaBodegaProyecto() {
   const p = proy(); const puede = puedeGestionarBodega();
-  const thead = `<tr><th>Código</th><th>Material</th><th>Stock en bodega</th><th>Instalado y montado</th><th>Mínimo</th><th>Estado</th>${puede ? '<th></th>' : ''}</tr>`;
-  const fila = b => `<tr><td class="mono">${b.codigo}</td><td>${b.material}</td><td class="mono">${b.stock} ${b.unidad}</td><td class="mono">${b.instalado ? '✔ ' + b.instalado + ' ' + b.unidad : '—'}</td><td class="mono muted small">${b.minimo} ${b.unidad}</td><td>${badgeStock(calcularEstadoStock(b))}</td>
-    ${puede ? `<td class="flex-gap"><button class="btn btn-sm" onclick="modalAjustarStock('${p.id}','${b.codigo}')">Actualizar stock</button>
+  const thead = `<tr><th>Código</th><th>Material</th><th>Stock en bodega</th><th>Costo unit. neto</th><th>Instalado y montado</th><th>Mínimo</th><th>Estado</th>${puede ? '<th></th>' : ''}</tr>`;
+  const sosp = b => Number(b.stock) >= 1000 && !(Number(b.precioUnitario) > 0);
+  const fila = b => `<tr><td class="mono">${b.codigo}</td><td>${b.material}</td><td class="mono">${b.stock} ${b.unidad}${sosp(b) ? ' <span title="Stock alto y sin costo: ¿se ingresó el costo como stock? Usa Editar." style="color:#b3261e">⚠</span>' : ''}</td><td class="mono small">${Number(b.precioUnitario) > 0 ? money(b.precioUnitario) : '<span class="muted">sin costo</span>'}</td><td class="mono">${b.instalado ? '✔ ' + b.instalado + ' ' + b.unidad : '—'}</td><td class="mono muted small">${b.minimo} ${b.unidad}</td><td>${badgeStock(calcularEstadoStock(b))}</td>
+    ${puede ? `<td class="flex-gap"><button class="btn btn-sm" onclick="modalEditarProductoBodegaProy('${p.id}','${b.codigo}')">✏ Editar</button><button class="btn btn-sm" onclick="modalAjustarStock('${p.id}','${b.codigo}')">Actualizar stock</button>
       <button class="btn btn-sm" onclick="modalEnviarABodegaGeneral('${p.id}','${b.codigo}')" ${b.stock <= 0 ? 'disabled' : ''} title="Enviar sobrante a Bodega General, con precio unitario, para la base de Bsale">→ Bodega General</button></td>` : ''}</tr>`;
   if (!p.bodega.length) return `<div class="empty-state card">Sin registros de bodega para este proyecto. ${puede ? 'Se crean automáticamente al registrar una recepción de compra, o puedes agregar uno manualmente.' : ''}</div>`;
   return htmlGruposMarca(p.bodega, marcaDeProductoProyecto, fila, thead, false, "P:");
@@ -8702,9 +8704,10 @@ function modalProductoBodega(pid) {
         <div><label class="field-label">Unidad</label><input type="text" id="bodUnidad" value="unidad" placeholder="unidad / metro / etc."></div>
       </div>
       <div class="grid grid-2" style="gap:10px;">
-        <div><label class="field-label">Stock inicial</label><input type="text" id="bodStock" value="0"></div>
+        <div><label class="field-label">Stock inicial (cantidad de unidades)</label><input type="text" id="bodStock" value="0"></div>
         <div><label class="field-label">Stock mínimo</label><input type="text" id="bodMinimo" value="0"></div>
       </div>
+      <label class="field-label">Costo unitario neto (CLP, por unidad, sin IVA)</label><input type="text" id="bodPrecio" placeholder="Ej: 15.000">
     </div>
     <div class="modal-foot">
       <button class="btn" onclick="closeModal()">Cancelar</button>
@@ -8715,12 +8718,36 @@ function modalProductoBodega(pid) {
           unidad: document.getElementById('bodUnidad').value,
           stock: document.getElementById('bodStock').value,
           minimo: document.getElementById('bodMinimo').value,
+          precio: document.getElementById('bodPrecio').value,
         });
         if(ok){ closeModal(); renderAll(); }">Agregar</button>
     </div>
   `);
 }
 
+function modalEditarProductoBodegaProy(pid, codigo) {
+  const p = proy(pid), b = p && p.bodega.find(x => x.codigo === codigo); if (!b) return;
+  if (!puedeGestionarBodega()) { toast(`Tu rol (${DB.role}) no gestiona bodega.`, "danger"); return; }
+  openModal(`<div class="modal-head"><h3>Editar producto — ${escaparHtml(b.material)}</h3><button class="close-x" onclick="closeModal()">✕</button></div><div class="modal-body">
+    <label class="field-label">Nombre / descripción</label><input type="text" id="epyNombre" value="${escaparHtml(b.material)}">
+    <div class="grid grid-2" style="gap:10px;margin-top:8px"><div><label class="field-label">Código</label><input type="text" id="epyCodigo" value="${escaparHtml(b.codigo)}"></div><div><label class="field-label">Unidad</label><input type="text" id="epyUnidad" value="${escaparHtml(b.unidad || '')}"></div></div>
+    <div class="grid grid-2" style="gap:10px;margin-top:8px"><div><label class="field-label">Stock (cantidad real en bodega)</label><input type="text" id="epyStock" value="${Number(b.stock) || 0}"></div><div><label class="field-label">Stock mínimo</label><input type="text" id="epyMinimo" value="${Number(b.minimo) || 0}"></div></div>
+    <label class="field-label" style="margin-top:8px">Costo unitario neto (CLP, por unidad, sin IVA)</label><input type="text" id="epyPrecio" value="${Number(b.precioUnitario) || ''}" placeholder="Ej: 15.000">
+    <p class="hint">Corrige aquí un producto mal ingresado (por ejemplo, el costo puesto como stock). El cambio de stock queda en el historial.</p></div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="guardarProductoBodegaProy('${pid}','${escaparHtml(b.codigo)}')">Guardar</button></div>`, 620);
+}
+function guardarProductoBodegaProy(pid, codigoOrig) {
+  const p = proy(pid), b = p && p.bodega.find(x => x.codigo === codigoOrig); if (!b) return;
+  if (!puedeGestionarBodega()) { toast(`Tu rol (${DB.role}) no gestiona bodega.`, "danger"); return; }
+  const g = id => document.getElementById(id).value, nom = g('epyNombre').trim(), cod = g('epyCodigo').trim();
+  if (!nom || !cod) { toast("El nombre y el código son obligatorios.", "danger"); return; }
+  if (cod !== codigoOrig && p.bodega.some(x => x !== b && x.codigo === cod)) { toast(`El código ${cod} ya existe en esta bodega.`, "danger"); return; }
+  const stock = cdNum(g('epyStock')), precio = cdNum(g('epyPrecio')), antes = `${b.stock} ${b.unidad} · ${b.precioUnitario ? money(b.precioUnitario) : 'sin costo'}`;
+  if (stock < 0) { toast("El stock no puede ser negativo.", "danger"); return; }
+  b.material = nom; b.codigo = cod; b.unidad = g('epyUnidad').trim() || b.unidad; b.stock = stock; b.minimo = cdNum(g('epyMinimo')); b.precioUnitario = precio;
+  registrarHistorial({proyecto:p.codigo, accion:"Modificar", detalle:`Bodega: producto corregido ${nom} (${cod}) — ${antes} → ${stock} ${b.unidad} · ${precio ? money(precio) : 'sin costo'}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
+  guardarEstado(); closeModal(); renderAll(); toast("Producto actualizado.", "ok");
+}
 function modalAjustarStock(pid, codigo) {
   const p = proy(pid);
   const b = p.bodega.find(x => x.codigo === codigo);

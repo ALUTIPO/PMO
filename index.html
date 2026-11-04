@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.27.2";
+const APP_VERSION = "3.27.3";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -14518,29 +14518,67 @@ async function cpcExcel(){
   if(D.mo.ok) hoja("Mano de obra",D.mo.personas.map(q=>({ "Persona":q.nombre,"Tipo":q.ext?"Externo":"Interno","Horas":Math.round(q.h*10)/10,"Horas extra":Math.round(q.hx*10)/10,"Costo":Math.round(q.costo) })));
   XLSX.writeFile(wb,cpcNombreArchivo("xlsx"));
 }
+/* ---- PDF de costos: membrete, ficha del proyecto, tarjetas de resumen, tablas y pie de página ---- */
+const CPC_COBRE=[193,113,46], CPC_OSC=[60,52,46], CPC_CLARO=[250,243,234];
+function cpcPdfCabecera(doc,D){
+  const W=210, M=14, p=D.p;
+  doc.setFillColor(...CPC_CLARO); doc.rect(0,0,W,34,"F"); doc.setFillColor(...CPC_COBRE); doc.rect(0,34,W,1.2,"F");
+  try{ const w=38; doc.addImage(LOGO_ALUTIPO_B64,"PNG",W-M-w,9,w,w*108/400); }catch(e){}
+  doc.setTextColor(...CPC_COBRE); doc.setFont(undefined,"bold"); doc.setFontSize(8.5); doc.text("COSTOS DEL PROYECTO",M,11);
+  doc.setTextColor(...CPC_OSC); doc.setFontSize(19); doc.text(String(p.codigo||""),M,19.5);
+  doc.setFont(undefined,"normal"); doc.setFontSize(9.5); doc.setTextColor(90,80,72);
+  doc.text(doc.splitTextToSize(String(p.nombre||""),W-2*M-46).slice(0,2),M,25.5);
+  // ficha
+  const campos=[["Cliente",p.cliente||"—"],["PM",p.pm||"—"],["Fecha del informe",fcF(D.fecha)],["Presupuesto (neto)",D.pres?money(Math.round(D.pres)):"—"]], cw=(W-2*M)/4;
+  campos.forEach((c,i)=>{ const x=M+i*cw; doc.setFontSize(7); doc.setTextColor(140,130,120); doc.text(c[0].toUpperCase(),x,43); doc.setFontSize(9.5); doc.setFont(undefined,"bold"); doc.setTextColor(...CPC_OSC); doc.text(doc.splitTextToSize(String(c[1]),cw-3)[0],x,48.5); doc.setFont(undefined,"normal"); });
+  doc.setDrawColor(225,218,208); doc.line(M,53,W-M,53); doc.setTextColor(0,0,0);
+  return 58;
+}
+function cpcPdfTarjetas(doc,y,tarjetas){
+  const W=210, M=14, n=tarjetas.length, gap=4, cw=(W-2*M-gap*(n-1))/n;
+  tarjetas.forEach((t,i)=>{ const x=M+i*(cw+gap); doc.setFillColor(t.dest?250:247,t.dest?243:246,t.dest?234:244); doc.setDrawColor(t.dest?193:225,t.dest?113:218,t.dest?46:208); doc.roundedRect(x,y,cw,19,2,2,"FD");
+    doc.setFontSize(7); doc.setTextColor(140,130,120); doc.setFont(undefined,"normal"); doc.text(t.t.toUpperCase(),x+3,y+6); doc.setFontSize(12.5); doc.setFont(undefined,"bold"); doc.setTextColor(...(t.rojo?[179,38,30]:(t.dest?[161,90,29]:CPC_OSC))); doc.text(String(t.v),x+3,y+14.5); });
+  doc.setTextColor(0,0,0); doc.setFont(undefined,"normal"); return y+25;
+}
+function cpcPdfTitulo(doc,y,txt,sub){ doc.setFont(undefined,"bold"); doc.setFontSize(10.5); doc.setTextColor(...CPC_OSC); doc.text(txt,14,y); if(sub){ doc.setFont(undefined,"normal"); doc.setFontSize(8); doc.setTextColor(140,130,120); doc.text(sub,196,y,{align:"right"}); } doc.setTextColor(0,0,0); doc.setFont(undefined,"normal"); return y+2.5; }
+function cpcPdfNota(doc,txt){ let y=doc.lastAutoTable.finalY+7; if(y>268){ doc.addPage(); y=20; } doc.setFont(undefined,"normal"); doc.setFontSize(7.5); doc.setTextColor(120,110,100); doc.text(doc.splitTextToSize(txt,182),14,y); doc.setTextColor(0,0,0); }
+function cpcPdfPie(doc,D){
+  const n=doc.getNumberOfPages(); for(let i=1;i<=n;i++){ doc.setPage(i); doc.setDrawColor(225,218,208); doc.line(14,284,196,284); doc.setFontSize(7.5); doc.setTextColor(140,130,120);
+    doc.text(`Alutipo · Costos del proyecto ${D.p.codigo} · al ${fcF(D.fecha)}`,14,289); doc.text(`Página ${i} de ${n}`,196,289,{align:"right"}); }
+}
 async function cpcPdf(){
   if(!_cpc) return; if(!(await asegurarPDF())){ toast("No se pudo cargar el generador de PDF.","danger"); return; }
   const D=_cpc, { jsPDF }=window.jspdf, doc=new jsPDF({orientation:"portrait",unit:"mm",format:"a4"}), r=n=>money(Math.round(n));
-  tpPdfLogo(doc,210,10,6); doc.setFontSize(14); doc.setFont(undefined,"bold"); doc.text(`Costos del proyecto ${D.p.codigo}`,14,15); doc.setFontSize(10); doc.setFont(undefined,"normal"); doc.text(`${D.p.nombre} · ${D.p.cliente||""} · PM ${D.p.pm||""} · al ${fcF(D.fecha)}`,14,21);
+  let y0=cpcPdfCabecera(doc,D);
+  const tabla=(extra)=>Object.assign({ theme:"striped", styles:{fontSize:8.5,cellPadding:2,overflow:"linebreak",textColor:[50,46,42],lineColor:[232,226,218]}, headStyles:{fillColor:CPC_COBRE,textColor:255,fontStyle:"bold",fontSize:8}, alternateRowStyles:{fillColor:[252,250,247]}, margin:{left:14,right:14,bottom:18} },extra);
   if(D.base==="cons"){
-    const neto=D.matEjec+(D.mo.ok?D.mo.costo:0), iva=Math.round(neto*CD_IVA);
-    doc.autoTable({ startY:26, head:[["Código","Descripción","Cant.","Costo unit. neto","Total neto"]], body:D.items.map(i=>[i.codigo,i.material,i.cant+" "+i.unidad,i.pu>0?r(i.pu):"sin costo",r(i.total)]).concat([[{content:"Total material consolidado (neto)",colSpan:4,styles:{fontStyle:"bold",fillColor:[250,243,234]}},{content:r(D.matEjec),styles:{fontStyle:"bold",fillColor:[250,243,234]}}]]), theme:"grid", styles:{fontSize:8,cellPadding:1.5,overflow:"linebreak"}, headStyles:{fillColor:[193,113,46]}, columnStyles:{2:{halign:"right"},3:{halign:"right"},4:{halign:"right"}}, margin:{left:14,right:14} });
-    if(D.mo.ok&&D.mo.personas.length) doc.autoTable({ startY:doc.lastAutoTable.finalY+6, head:[["Persona","Tipo","Horas","Extra","Costo"]], body:D.mo.personas.map(q=>[q.nombre,q.ext?"Externo":"Interno",tpHtxt(q.h),tpHtxt(q.hx),r(q.costo)]), theme:"grid", styles:{fontSize:8,cellPadding:1.5}, headStyles:{fillColor:[100,100,100]}, columnStyles:{2:{halign:"right"},3:{halign:"right"},4:{halign:"right"}}, margin:{left:14,right:14} });
-    doc.autoTable({ startY:doc.lastAutoTable.finalY+6, body:[["Neto",r(neto)],["IVA 19 %",r(iva)],[{content:"Total con IVA",styles:{fontStyle:"bold"}},{content:r(neto+iva),styles:{fontStyle:"bold"}}]], theme:"grid", styles:{fontSize:9,cellPadding:1.8}, columnStyles:{1:{halign:"right"}}, margin:{left:14,right:14}, tableWidth:90 });
-    doc.setFontSize(7); doc.text("Solo material consolidado (instalado y montado), al costo unitario neto de compra. No incluye material devuelto ni pendiente de consolidar.",14,Math.min(doc.lastAutoTable.finalY+5,288));
-    doc.save(cpcNombreArchivo("pdf")); return;
+    const neto=D.matEjec+(D.mo.ok?D.mo.costo:0), iva=Math.round(neto*CD_IVA), tj=[{t:"Material consolidado",v:r(D.matEjec)}];
+    if(D.mo.ok) tj.push({t:"Mano de obra",v:r(D.mo.costo)});
+    tj.push({t:"Costo total (neto)",v:r(neto),dest:true}); if(D.pres) tj.push({t:"Del presupuesto",v:Math.round(neto/D.pres*100)+" %",rojo:neto>D.pres});
+    let y=cpcPdfTarjetas(doc,y0,tj);
+    y=cpcPdfTitulo(doc,y+1,"Material consolidado",`${D.items.length} ítem${D.items.length===1?"":"s"} instalado${D.items.length===1?"":"s"} y montado${D.items.length===1?"":"s"}`);
+    doc.autoTable(tabla({ startY:y, head:[["Código","Descripción","Cant.","Costo unit.","Total neto"]], body:D.items.map(i=>[i.codigo,i.material,i.cant+" "+i.unidad,i.pu>0?r(i.pu):"sin costo",r(i.total)]).concat([[{content:"Total material consolidado (neto)",colSpan:4,styles:{fontStyle:"bold",fillColor:CPC_CLARO,halign:"right"}},{content:r(D.matEjec),styles:{fontStyle:"bold",fillColor:CPC_CLARO,halign:"right"}}]]),
+      columnStyles:{0:{cellWidth:30,font:"courier",fontSize:7.5},2:{halign:"right",cellWidth:22},3:{halign:"right",cellWidth:24},4:{halign:"right",cellWidth:28}}, headStyles:{fillColor:CPC_COBRE,textColor:255,fontStyle:"bold",fontSize:8,halign:"left"},
+      didParseCell:function(h){ if(h.section==="head"&&h.column.index>=2) h.cell.styles.halign="right"; } }));
+    if(D.mo.ok&&D.mo.personas.length){ let y2=doc.lastAutoTable.finalY+8; if(y2>240){ doc.addPage(); y2=20; } y2=cpcPdfTitulo(doc,y2,"Mano de obra",`${tpHtxt(D.mo.h+D.mo.hx)} h confirmadas`);
+      doc.autoTable(tabla({ startY:y2, head:[["Persona","Tipo","Horas","Extra","Costo"]], body:D.mo.personas.map(q=>[q.nombre,q.ext?"Externo":"Interno",tpHtxt(q.h),tpHtxt(q.hx),r(q.costo)]), columnStyles:{2:{halign:"right"},3:{halign:"right"},4:{halign:"right"}}, didParseCell:function(h){ if(h.section==="head"&&h.column.index>=2) h.cell.styles.halign="right"; } })); }
+    let yb=doc.lastAutoTable.finalY+8; if(yb>245){ doc.addPage(); yb=20; }
+    doc.setFont(undefined,"bold"); doc.setFontSize(10.5); doc.setTextColor(...CPC_OSC); doc.text("Para cotizar o facturar",14,yb); doc.setTextColor(0,0,0);
+    doc.autoTable(tabla({ startY:yb+2.5, body:[["Neto",r(neto)],["IVA 19 %",r(iva)],[{content:"TOTAL CON IVA",styles:{fontStyle:"bold",fontSize:11,fillColor:CPC_CLARO,textColor:[161,90,29]}},{content:r(neto+iva),styles:{fontStyle:"bold",fontSize:11,fillColor:CPC_CLARO,textColor:[161,90,29]}}]], theme:"plain", styles:{fontSize:9.5,cellPadding:2.4,lineColor:[232,226,218],lineWidth:0.2}, columnStyles:{0:{cellWidth:50},1:{halign:"right",cellWidth:40}}, margin:{left:106,right:14,bottom:18} }));
+    cpcPdfNota(doc,"Solo material consolidado (instalado y montado en el proyecto), valorizado al costo unitario neto de compra"+(D.mo.ok?"; mano de obra según horas confirmadas y tarifas vigentes":"")+". No incluye material devuelto a Bodega General ni pendiente de consolidar.");
+    cpcPdfPie(doc,D); doc.save(cpcNombreArchivo("pdf")); return;
   }
   const res=[["Presupuesto (neto)",D.pres?r(D.pres):"—"],["Compras (cotizaciones) recibidas",r(D.cotE)],["Compras directas registradas",r(D.dirE)],["Material enviado desde Bodega Central",r(D.envT)],["Material ingresado al proyecto (bruto)",r(D.matBruto)],["(−) Devuelto a Bodega General","-"+r(D.devT)]];
   if(D.base==="cons") res.push(["(−) Aún en bodega del proyecto, sin consolidar","-"+r(D.bodStock)]);
   res.push([{content:D.base==="cons"?"Material consolidado (costo del proyecto)":"Materiales, costo neto",styles:{fontStyle:"bold"}},{content:r(D.matEjec),styles:{fontStyle:"bold"}}]);
   if(D.mo.ok) res.push([`Mano de obra (${tpHtxt(D.mo.h+D.mo.hx)} h)`,r(D.mo.costo)],[{content:"COSTO REAL TOTAL",styles:{fontStyle:"bold",fillColor:[250,243,234]}},{content:r(D.total),styles:{fontStyle:"bold",fillColor:[250,243,234]}}]);
   res.push(["Comprometido (por recibir)",r(D.matComp)]);
-  doc.autoTable({ startY:26, body:res, theme:"grid", styles:{fontSize:9,cellPadding:1.8}, columnStyles:{1:{halign:"right"}}, margin:{left:14,right:14}, tableWidth:130 });
+  doc.autoTable({ startY:y0, body:res, theme:"grid", styles:{fontSize:9,cellPadding:1.8}, columnStyles:{1:{halign:"right"}}, margin:{left:14,right:14}, tableWidth:130 });
   doc.autoTable({ startY:doc.lastAutoTable.finalY+6, head:[["Tipo","Ref.","Detalle","Estado","Ejecutado","Comprom."]], body:D.filas.map(f=>[f.cat,f.ref,f.det,f.estado,f.ejec?r(f.ejec):"",f.comp?r(f.comp):""]), theme:"grid", styles:{fontSize:8,cellPadding:1.5,overflow:"linebreak"}, headStyles:{fillColor:[193,113,46]}, columnStyles:{4:{halign:"right"},5:{halign:"right"}}, margin:{left:14,right:14} });
   if(D.envios.length||D.devs.length) doc.autoTable({ startY:doc.lastAutoTable.finalY+6, head:[["Fecha","Movimiento","Producto","Cant.","Valor"]], body:D.envios.concat(D.devs).sort((a,b)=>(a.fecha||"").localeCompare(b.fecha||"")).map(m=>[m.fecha||"",m.tipo,m.material||"",(m.cantidad||"")+" "+(m.unidad||""),(EJ_DEVOL.includes(m.tipo)?"-":"")+r(Number(m.total)||0)]), theme:"grid", styles:{fontSize:8,cellPadding:1.5,overflow:"linebreak"}, headStyles:{fillColor:[100,100,100]}, columnStyles:{4:{halign:"right"}}, margin:{left:14,right:14} });
   if(D.mo.ok&&D.mo.personas.length) doc.autoTable({ startY:doc.lastAutoTable.finalY+6, head:[["Persona","Tipo","Horas","Extra","Costo"]], body:D.mo.personas.map(q=>[q.nombre,q.ext?"Externo":"Interno",tpHtxt(q.h),tpHtxt(q.hx),r(q.costo)]), theme:"grid", styles:{fontSize:8,cellPadding:1.5}, headStyles:{fillColor:[100,100,100]}, columnStyles:{2:{halign:"right"},3:{halign:"right"},4:{halign:"right"}}, margin:{left:14,right:14} });
-  doc.setFontSize(7); doc.text("Montos netos (sin IVA). Ejecutado = recibido o pagado; comprometido = orden emitida o compra autorizada sin recibir.",14,Math.min(doc.lastAutoTable.finalY+5,288));
-  doc.save(cpcNombreArchivo("pdf"));
+  cpcPdfNota(doc,"Montos netos (sin IVA). Ejecutado = recibido o pagado; comprometido = orden emitida o compra autorizada sin recibir.");
+  cpcPdfPie(doc,D); doc.save(cpcNombreArchivo("pdf"));
 }
 
 /* =====================================================================

@@ -536,7 +536,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.18.1";
+const APP_VERSION = "3.19.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -5355,6 +5355,116 @@ async function ejPdf(aid) {
     doc.autoTable({ startY: 27, head: [["Código", "Producto", "Marca", "Cantidad", "Costo unit.", "Total"]], body: P.lineas.map(l => [l.codigo, l.desc, l.marca || "—", `${l.qty} ${l.unidad}`, l.qty ? f(l.total / l.qty) : "—", f(l.total)]).concat([[{ content: "TOTAL", colSpan: 5, styles: { fontStyle: "bold", halign: "right" } }, { content: f(P.acum), styles: { fontStyle: "bold" } }]]), styles: { fontSize: 8 }, headStyles: { fillColor: [31, 58, 95] }, columnStyles: { 1: { cellWidth: 100 } }, margin: { left: M, right: M } }); });
   doc.save(`Resumen_ejecutivo_${(a.marca || a.proveedor || 'acuerdo').replace(/\s+/g, '_')}_${mes}.pdf`);
 }
+/* =====================================================================
+   CONCILIAR FACTURAS DEL PROVEEDOR — cruza las facturas que administración
+   debe pagar con las recepciones del PMO y con lo cargado a proyectos
+   (FIFO: lo primero que entró es lo primero que se envía a proyectos).
+   ===================================================================== */
+const FC_IVA = 1.19;
+const FC_PLANILLA_SHAYRA = [["F-1639304", "2026-09-21", "2026-10-21", 1054949], ["F-1639299", "2026-09-21", "2026-10-21", 139658], ["F-1639043", "2026-09-17", "2026-10-17", 1071365], ["F-1639047", "2026-09-17", "2026-10-17", 1272878], ["F-1640103", "2026-09-25", "2026-10-25", 88125], ["F-1640112", "2026-09-26", "2026-10-26", 1000919], ["F-1640122", "2026-09-27", "2026-10-27", 2598702], ["F-1641463", "2026-09-30", "2026-10-30", 2085118], ["F-1643189", "2026-10-13", "2026-11-12", 1923358], ["F-1644398", "2026-10-20", "2026-11-19", 1955234]];
+function fcNum(s) { return String(s || "").replace(/\D/g, "").replace(/^0+/, ""); }
+function fcF(iso) { const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}-${m[2]}-${m[1]}` : (iso || "—"); }
+function fcLista(a) { a.facturasProv = exArr(a.facturasProv); return a.facturasProv; }
+function fcNeto(a, f) { return a.facturasConIVA === false ? Number(f.monto) || 0 : (Number(f.monto) || 0) / FC_IVA; }
+function fcModelo(a, movs) {
+  const porNum = {}; const items = {}; (a.items || []).forEach(i => items[i.codigo] = i);
+  (a.entregas || []).forEach(e => acEntregaRecs(e).forEach(r => { const n = fcNum(r.factura); if (!n) return;
+    const F = porNum[n] = porNum[n] || { num: n, factura: r.factura, fecha: r.fecha || "", lineas: {}, neto: 0, asig: {}, stockNeto: 0 }; if (r.fecha && (!F.fecha || r.fecha < F.fecha)) F.fecha = r.fecha;
+    (r.lineas || []).forEach(l => { const pu = Number((items[l.codigo] || {}).precio) || 0, q = Number(l.cant) || 0; const L = F.lineas[l.codigo] = F.lineas[l.codigo] || { codigo: l.codigo, desc: (items[l.codigo] || {}).descripcion || "", qty: 0, pu, rest: 0, asig: {} }; L.qty += q; L.rest += q; F.neto += q * pu; }); }));
+  const orden = Object.values(porNum).sort((x, y) => String(x.fecha).localeCompare(String(y.fecha)) || x.num.localeCompare(y.num));
+  const pares = {}; (movs || []).forEach(m => { const env = EJ_ENVIO.includes(m.tipo), dev = EJ_DEVOL.includes(m.tipo); if (!env && !dev) return; if (!items[m.codigo]) return; if (!m.proyectoId && !m.proyectoCodigo) return;
+    const k = m.codigo + "|" + (m.proyectoId || m.proyectoCodigo); const P = pares[k] = pares[k] || { codigo: m.codigo, proy: m.proyectoId || m.proyectoCodigo, pc: m.proyectoCodigo || "", pn: m.proyectoNombre || "", fecha: m.fecha || "", qty: 0 };
+    P.qty += (env ? 1 : -1) * (Number(m.cantidad) || 0); if (m.fecha && (!P.fecha || m.fecha < P.fecha)) P.fecha = m.fecha; });
+  const proyectos = {};
+  Object.values(pares).filter(p => p.qty > 0).sort((x, y) => String(x.fecha).localeCompare(String(y.fecha))).forEach(p => {
+    proyectos[p.proy] = { cod: p.pc, nom: p.pn }; let falta = p.qty;
+    for (const F of orden) { if (falta <= 0) break; const L = F.lineas[p.codigo]; if (!L || L.rest <= 0) continue; const t = Math.min(L.rest, falta); L.rest -= t; falta -= t; L.asig[p.proy] = (L.asig[p.proy] || 0) + t; F.asig[p.proy] = (F.asig[p.proy] || 0) + t * L.pu; }
+    if (falta > 0) { proyectos[p.proy].sinFactura = (proyectos[p.proy].sinFactura || 0) + falta * ((items[p.codigo] || {}).precio || 0); } });
+  orden.forEach(F => { F.stockNeto = Object.values(F.lineas).reduce((s, L) => s + L.rest * L.pu, 0); F.asigNeto = Object.values(F.asig).reduce((s, v) => s + v, 0); });
+  return { porNum, orden, proyectos };
+}
+function fcEvaluar(a, mod) {
+  const lista = fcLista(a).slice().sort((x, y) => String(x.vence).localeCompare(String(y.vence)));
+  const hoy = hoyISO(); const filas = lista.map(f => {
+    const n = fcNum(f.numero), F = mod.porNum[n] || null, neto = fcNeto(a, f), monto = Number(f.monto) || 0, pagado = Number(f.pagado) || 0;
+    const r = { f, F, neto, monto, pagado, porPagar: Math.max(0, monto - pagado), vencida: f.vence && f.vence < hoy && pagado < monto, dest: {}, stockCon: 0, estado: "", clase: "" };
+    if (!F) { r.estado = "Sin recepción en el PMO"; r.clase = "no"; return r; }
+    r.difNeto = neto - F.neto; r.calza = F.neto > 0 && Math.abs(r.difNeto) / neto <= 0.02;
+    const base = F.neto || 1; Object.keys(F.asig).forEach(k => r.dest[k] = F.asig[k] / base * monto); r.stockCon = F.stockNeto / base * monto;
+    const pct = F.asigNeto / base, ks = Object.keys(r.dest);
+    if (!r.calza) r.aviso = r.difNeto > 0 ? `La factura es ${money(Math.round(r.difNeto))} (neto) mayor que lo recibido en el PMO: falta ingresar material o hay otros productos.` : `Lo recibido en el PMO supera la factura por ${money(Math.round(-r.difNeto))} (neto): revisa cantidades o precios.`;
+    if (pct >= 0.995) { r.estado = ks.length === 1 ? "Total a " + (mod.proyectos[ks[0]] || {}).cod : "Total a proyectos (" + ks.length + ")"; r.clase = "total"; }
+    else if (pct > 0.005) { r.estado = `Parcial: ${(pct * 100).toFixed(0)}% a proyectos, resto inventario`; r.clase = "parcial"; }
+    else { r.estado = "Todo a inventario (Bodega General)"; r.clase = "inv"; }
+    return r; });
+  const porCL = {}; let inv = 0, sin = 0; filas.forEach(r => { Object.keys(r.dest).forEach(k => porCL[k] = (porCL[k] || 0) + r.dest[k]); inv += r.stockCon; if (!r.F) sin += r.monto; });
+  const total = filas.reduce((s, r) => s + r.monto, 0), pagado = filas.reduce((s, r) => s + r.pagado, 0), vencido = filas.filter(r => r.vencida).reduce((s, r) => s + r.porPagar, 0);
+  const noEnLista = Object.values(mod.porNum).filter(F => !lista.some(f => fcNum(f.numero) === F.num));
+  return { filas, porCL, inv, sin, total, pagado, vencido, noEnLista };
+}
+function htmlFacturasAcuerdo(a) {
+  if (!_movimientosCache) { cargarMovimientosBodega().then(() => { if (acuerdoVista === 'facturas') renderAll(); }).catch(() => { }); return '<div class="card">Cargando movimientos de bodega…</div>'; }
+  const mod = fcModelo(a, _movimientosCache), E = fcEvaluar(a, mod), puede = puedeGestionarAcuerdo(), iva = a.facturasConIVA !== false;
+  const pill = c => ({ total: "background:#dcfce7;color:#166534", parcial: "background:#fef3c7;color:#92400e", inv: "background:#dbeafe;color:#1e40af", no: "background:#fee2e2;color:#991b1b" })[c] || "";
+  const nombreCL = k => { const p = mod.proyectos[k] || {}; return `<b>${escaparHtml(p.cod || k)}</b><div class="small muted">${escaparHtml(p.nom || "")}</div>`; };
+  return `
+  <div class="card" style="margin-bottom:12px;"><div class="flex-gap" style="flex-wrap:wrap; align-items:center;">
+    ${puede ? `<button class="btn btn-primary" onclick="modalPegarFacturas('${a.id}')">➕ Pegar facturas del proveedor</button>${!fcLista(a).length ? `<button class="btn" onclick="fcCargarPlanilla('${a.id}')">Cargar las 10 de la planilla de Administración (03-nov)</button>` : ''}` : ''}
+    <label class="small"><input type="checkbox" ${iva ? 'checked' : ''} ${puede ? '' : 'disabled'} onchange="fcSetIVA('${a.id}', this.checked)"> Los montos de las facturas incluyen IVA (19%)</label>
+    <div style="flex:1"></div><button class="btn" onclick="fcExcel('${a.id}')">⬇ Excel</button></div>
+    <p class="hint" style="margin-top:8px;">Cada factura se cruza por su número con las recepciones del PMO. Lo que ya se envió a proyectos se asigna a la factura más antigua primero (FIFO). Así se ve qué parte de cada factura corresponde a cada CL y qué parte sigue como inventario.</p></div>
+  <div class="grid" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; margin-bottom:12px;">
+    <div class="card"><div class="muted small">Total facturas</div><div style="font-size:22px;font-weight:700;">${money(E.total)}</div><div class="small muted">${E.filas.length} factura(s) · pagado ${money(E.pagado)}</div></div>
+    <div class="card" style="border-top:4px solid var(--danger);"><div class="muted small">Vencido por pagar</div><div style="font-size:22px;font-weight:700;">${money(E.vencido)}</div><div class="small muted">${E.filas.filter(r => r.vencida).length} factura(s)</div></div>
+    <div class="card"><div class="muted small">Sin recepción en el PMO</div><div style="font-size:22px;font-weight:700;">${money(E.sin)}</div><div class="small muted">${E.filas.filter(r => !r.F).length} factura(s)</div></div>
+  </div>
+  ${E.filas.length ? `<div class="card card-flush" style="margin-bottom:12px;"><div style="padding:14px 16px;"><h3>Qué corresponde pagar a cada CL (monto con la base de las facturas)</h3></div><div class="table-wrap"><table>
+    <tr><th>Destino</th><th>Monto de factura</th><th>% de lo facturado</th></tr>
+    ${Object.keys(E.porCL).sort((x, y) => E.porCL[y] - E.porCL[x]).map(k => `<tr><td>${nombreCL(k)}</td><td><b>${money(Math.round(E.porCL[k]))}</b></td><td>${E.total ? (E.porCL[k] / E.total * 100).toFixed(1) : 0}%</td></tr>`).join('')}
+    <tr><td><b>Inventario Bodega General</b><div class="small muted">aún sin CL; se carga al usarse</div></td><td><b>${money(Math.round(E.inv))}</b></td><td>${E.total ? (E.inv / E.total * 100).toFixed(1) : 0}%</td></tr>
+    ${E.sin ? `<tr><td><b>Sin asignar</b><div class="small muted">facturas sin recepción en el PMO</div></td><td><b>${money(Math.round(E.sin))}</b></td><td>${(E.sin / E.total * 100).toFixed(1)}%</td></tr>` : ''}
+    <tr><td><b>Total</b></td><td><b>${money(Math.round(E.total))}</b></td><td></td></tr></table></div></div>` : ''}
+  <div class="card card-flush" style="margin-bottom:12px;"><div class="table-wrap"><table>
+    <tr><th>Factura</th><th>Emisión</th><th>Vence</th><th>Monto</th><th>Pagado</th><th>${iva ? 'Neto' : 'Monto'}</th><th>Recibido en PMO (neto)</th><th>Estado / destino</th>${puede ? '<th></th>' : ''}</tr>
+    ${E.filas.length ? E.filas.map(r => `<tr><td><b>${escaparHtml(r.f.numero)}</b></td><td>${fcF(r.f.emision)}</td><td ${r.vencida ? 'style="color:var(--danger);font-weight:600;"' : ''}>${fcF(r.f.vence)}${r.vencida ? ' ⚠' : ''}</td><td>${money(r.monto)}</td>
+      <td>${puede ? `<input type="text" value="${r.pagado || ''}" placeholder="0" style="width:90px;" onchange="fcSetPagado('${a.id}','${r.f.id}',this.value)">` : money(r.pagado)}</td><td>${money(Math.round(r.neto))}</td><td>${r.F ? money(Math.round(r.F.neto)) : '—'}</td>
+      <td><span style="padding:2px 8px; border-radius:10px; font-size:12px; ${pill(r.clase)}">${escaparHtml(r.estado)}</span>
+        ${Object.keys(r.dest).map(k => `<div class="small">${escaparHtml((mod.proyectos[k] || {}).cod || k)}: ${money(Math.round(r.dest[k]))}</div>`).join('')}${r.stockCon > 1 ? `<div class="small muted">Inventario: ${money(Math.round(r.stockCon))}</div>` : ''}${r.aviso ? `<div class="small" style="color:var(--copper-dark);">⚠ ${escaparHtml(r.aviso)}</div>` : ''}</td>
+      ${puede ? `<td><button class="btn btn-sm btn-ghost" onclick="fcQuitar('${a.id}','${r.f.id}')">✕</button></td>` : ''}</tr>`).join('') : `<tr><td colspan="9" class="muted">Aún no hay facturas cargadas. Pega la planilla de Administración.</td></tr>`}</table></div></div>
+  ${E.noEnLista.length ? `<div class="ai-note" style="margin-bottom:12px;">Facturas con recepción en el PMO que no están en tu lista: ${E.noEnLista.map(F => escaparHtml(F.factura) + ' (' + money(Math.round(F.neto)) + ' neto)').join(', ')}.</div>` : ''}`;
+}
+function modalPegarFacturas(aid) {
+  openModal(`<h2>Pegar facturas del proveedor</h2><p class="hint">Una por línea: N° de factura, emisión, vencimiento y monto total (copia directo de la planilla). Ej: <span class="mono">F-1639304 21-09-2026 21-10-2026 1.054.949</span>. Si una factura ya existe, se actualiza.</p>
+    <textarea id="fcTxt" rows="10" style="width:100%;" placeholder="F-1639304&#9;21-09-2026&#9;21-10-2026&#9;$1.054.949"></textarea>
+    <div class="flex-gap" style="margin-top:10px;"><button class="btn btn-primary" onclick="fcImportarTexto('${aid}')">Cargar</button><button class="btn" onclick="closeModal()">Cancelar</button></div>`, 560);
+}
+function fcParse(txt) {
+  const out = [], toISO = s => { const m = String(s).match(/(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})/); return m ? `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}` : ""; };
+  String(txt || "").split(/\r?\n/).forEach(l => { l = l.trim(); if (!l) return; const num = (l.match(/F?-?\s*(\d{5,})/i) || [])[0]; if (!num) return;
+    const fechas = (l.match(/\d{1,2}[-\/.]\d{1,2}[-\/.]\d{4}/g) || []).map(toISO); const resto = l.replace(num, " ").replace(/\d{1,2}[-\/.]\d{1,2}[-\/.]\d{4}/g, " ");
+    const montos = (resto.match(/\$?\s*\d[\d.,]*/g) || []).map(x => Number(x.replace(/\D/g, ""))).filter(x => x > 0); if (!montos.length) return;
+    out.push({ numero: "F-" + fcNum(num), emision: fechas[0] || "", vence: fechas[1] || "", monto: montos[montos.length - 1] }); });
+  return out;
+}
+function fcAgregar(a, arr) { const L = fcLista(a); let nu = 0, ac = 0; arr.forEach(x => { const e = L.find(y => fcNum(y.numero) === fcNum(x.numero)); if (e) { Object.assign(e, { emision: x.emision || e.emision, vence: x.vence || e.vence, monto: x.monto }); ac++; } else { L.push({ id: "FP" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), numero: x.numero, emision: x.emision, vence: x.vence, monto: x.monto, pagado: 0 }); nu++; } }); return [nu, ac]; }
+function fcImportarTexto(aid) { const a = (DB.acuerdos || []).find(x => x.id === aid); if (!a) return; const arr = fcParse((document.getElementById("fcTxt") || {}).value);
+  if (!arr.length) { toast("No encontré facturas en el texto. Revisa el formato.", "danger"); return; }
+  const [nu, ac] = fcAgregar(a, arr); guardarEstado("Facturas del proveedor cargadas"); closeModal(); renderAll(); toast(`${nu} factura(s) nuevas, ${ac} actualizadas.`, "ok"); }
+function fcCargarPlanilla(aid) { const a = (DB.acuerdos || []).find(x => x.id === aid); if (!a) return; fcAgregar(a, FC_PLANILLA_SHAYRA.map(x => ({ numero: x[0], emision: x[1], vence: x[2], monto: x[3] }))); guardarEstado("Facturas de la planilla cargadas"); renderAll(); toast("Cargadas las 10 facturas de la planilla.", "ok"); }
+function fcSetIVA(aid, v) { const a = (DB.acuerdos || []).find(x => x.id === aid); if (!a) return; a.facturasConIVA = !!v; guardarEstado("IVA en facturas: " + (v ? "incluido" : "no incluido")); renderAll(); }
+function fcSetPagado(aid, fid, v) { const a = (DB.acuerdos || []).find(x => x.id === aid); const f = a && fcLista(a).find(x => x.id === fid); if (!f) return; f.pagado = Number(String(v).replace(/\D/g, "")) || 0; guardarEstado("Pago de factura " + f.numero); renderAll(); }
+function fcQuitar(aid, fid) { const a = (DB.acuerdos || []).find(x => x.id === aid); if (!a || !confirm("¿Quitar esta factura de la lista?")) return; a.facturasProv = fcLista(a).filter(x => x.id !== fid); guardarEstado("Factura quitada de la conciliación"); renderAll(); }
+async function fcExcel(aid) {
+  const a = (DB.acuerdos || []).find(x => x.id === aid); if (!a || !_movimientosCache) return; if (!(await asegurarXLSX())) { toast("No se pudo cargar el generador de Excel.", "danger"); return; }
+  const mod = fcModelo(a, _movimientosCache), E = fcEvaluar(a, mod), wb = XLSX.utils.book_new(), cl = k => (mod.proyectos[k] || {}).cod || k;
+  const ws1 = XLSX.utils.json_to_sheet(E.filas.map(r => ({ "Factura": r.f.numero, "Emisión": fcF(r.f.emision), "Vencimiento": fcF(r.f.vence), "Monto total": r.monto, "Pagado": r.pagado, "Por pagar": r.porPagar, "Neto": Math.round(r.neto), "Recibido en PMO (neto)": r.F ? Math.round(r.F.neto) : "", "Estado": r.estado, "Destino a proyectos": Object.keys(r.dest).map(k => cl(k) + ": " + Math.round(r.dest[k])).join(" | "), "Inventario": Math.round(r.stockCon), "Observación": r.aviso || "" })));
+  ws1["!cols"] = [{ wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 20 }, { wch: 36 }, { wch: 50 }, { wch: 12 }, { wch: 50 }]; XLSX.utils.book_append_sheet(wb, ws1, "Facturas");
+  const filas2 = Object.keys(E.porCL).map(k => ({ "Destino": cl(k), "Nombre": (mod.proyectos[k] || {}).nom || "", "Monto (base factura)": Math.round(E.porCL[k]) })).concat([{ "Destino": "Inventario Bodega General", "Nombre": "", "Monto (base factura)": Math.round(E.inv) }, { "Destino": "Sin asignar (sin recepción)", "Nombre": "", "Monto (base factura)": Math.round(E.sin) }, { "Destino": "TOTAL", "Nombre": "", "Monto (base factura)": Math.round(E.total) }]);
+  const ws2 = XLSX.utils.json_to_sheet(filas2); ws2["!cols"] = [{ wch: 30 }, { wch: 50 }, { wch: 20 }]; XLSX.utils.book_append_sheet(wb, ws2, "Por CL");
+  const det = []; Object.values(mod.porNum).forEach(F => Object.values(F.lineas).forEach(L => det.push({ "Factura": F.factura, "Código": L.codigo, "Producto": L.desc, "Cant. recibida": L.qty, "Precio unit.": L.pu, "Neto": Math.round(L.qty * L.pu), "A proyectos": Object.keys(L.asig).map(k => cl(k) + ": " + L.asig[k]).join(" | "), "En stock": L.rest })));
+  const ws3 = XLSX.utils.json_to_sheet(det.length ? det : [{ "Factura": "(sin datos)" }]); ws3["!cols"] = [{ wch: 12 }, { wch: 16 }, { wch: 44 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 40 }, { wch: 10 }]; XLSX.utils.book_append_sheet(wb, ws3, "Detalle por producto");
+  XLSX.writeFile(wb, `Conciliacion_facturas_${(a.proveedor || 'proveedor').replace(/\s+/g, '_')}_${hoyISO()}.xlsx`);
+}
 function renderAcuerdos() {
   const a = acuerdoActivo();
   if (!a) {
@@ -5366,7 +5476,7 @@ function renderAcuerdos() {
   const m = montosAcuerdo(a), tp = porcentajeTiempoAcuerdo(a);
   const alertas = alertasAcuerdo(a);
   const colorAl = { danger: ['var(--danger-bg)', 'var(--danger)'], warn: ['var(--warn-bg)', 'var(--copper-dark)'], info: ['var(--blueprint-light)', 'var(--blueprint)'] };
-  const tabs = [['resumen', 'Resumen'], ['entregas', 'Entregas'], ['compendio', 'Compendio'], ['ejecutivo', '📊 Resumen ejecutivo']];
+  const tabs = [['resumen', 'Resumen'], ['entregas', 'Entregas'], ['compendio', 'Compendio'], ['ejecutivo', '📊 Resumen ejecutivo'], ['facturas', '🧾 Conciliar facturas']];
   return `
   <div class="page-head">
     <div><h1>${a.nombre}</h1>
@@ -5385,7 +5495,7 @@ function renderAcuerdos() {
       ${barraAcuerdo(tp, 'var(--blueprint)')}<div class="small muted">${m.pct > tp + 10 ? 'Vas más rápido que el calendario' : (m.pct < tp - 10 ? 'Vas más lento que el calendario' : 'Ritmo acorde al calendario')}</div></div>
   </div>
   <div class="flex-gap" style="margin-bottom:12px;">${tabs.map(([k, l]) => `<button class="btn ${acuerdoVista === k ? 'btn-primary' : ''}" onclick="acuerdoVista='${k}'; renderAll();">${l}</button>`).join('')}</div>
-  ${acuerdoVista === 'entregas' ? htmlEntregasAcuerdo(a) : (acuerdoVista === 'compendio' ? htmlCompendioAcuerdo(a) : (acuerdoVista === 'ejecutivo' ? htmlEjecutivoAcuerdo(a) : htmlResumenAcuerdo(a)))}`;
+  ${acuerdoVista === 'entregas' ? htmlEntregasAcuerdo(a) : (acuerdoVista === 'compendio' ? htmlCompendioAcuerdo(a) : (acuerdoVista === 'ejecutivo' ? htmlEjecutivoAcuerdo(a) : (acuerdoVista === 'facturas' ? htmlFacturasAcuerdo(a) : htmlResumenAcuerdo(a))))}`;
 }
 function htmlResumenAcuerdo(a) {
   const porRep = (a.items || []).map(it => ({ it, s: estadoItemAcuerdo(a, it) })).filter(x => x.s.bajoMinimo);

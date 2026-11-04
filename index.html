@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.26.1";
+const APP_VERSION = "3.27.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -13829,6 +13829,7 @@ function NAV_ACTUAL() {
     {id:"dashboard", label:"Dashboard", icon:iconGrid()},
     {id:"proyecto360", label:"Proyecto 360°", icon:iconLayers()},
     {id:"presupuesto", label:"Presupuesto", icon:iconCoin()},
+    {id:"costosProyecto", label:"Costos del proyecto", icon:iconCoin(), roles: ROLES_COSTOS_PROY},
     {id:"punch", label:"Punch List", icon:iconCheck()},
     {id:"requerimientos", label:"Requerimientos", icon:iconChat()},
     {id:"galeria", label:"Galería", icon:iconGallery()},
@@ -13840,6 +13841,7 @@ function NAV_ACTUAL() {
     {id:"kickoff", label:"Kick-off y CPM", icon:iconClipboard()},
     {id:"finSemana", label:"Metas fin de semana", icon:iconTarget()},
     {id:"presupuesto", label:"Presupuesto", icon:iconCoin()},
+    {id:"costosProyecto", label:"Costos del proyecto", icon:iconCoin(), roles: ROLES_COSTOS_PROY},
     {id:"punch", label:"Punch List", icon:iconCheck()},
     {id:"requerimientos", label:"Requerimientos", icon:iconChat()},
     {id:"galeria", label:"Galería", icon:iconGallery()},
@@ -14074,7 +14076,7 @@ function renderAll() {
     dashboard: renderDashboard, miPanel: renderMiPanel, panelEquipo: renderPanelEquipo, bodegaGeneral: renderBodegaGeneral, personal: renderPersonal, proyecto360: renderProyecto360, planificacion: renderPlanificacion, compras: renderCompras,
     presupuesto: renderPresupuesto, bodega: renderBodega, reporteMateriales: renderReporteMateriales, comprasDirectas: renderComprasDirectas, punch: renderPunch, requerimientos: renderRequerimientos, galeria: renderGaleria, cuadroCarga: renderCuadroCarga,
     recepciones: renderRecepciones, resumenOC: renderResumenOC, panol: renderPanol, acuerdos: renderAcuerdos, informesAdmin: renderInformesAdmin, protocolos: renderProtocolos, finSemana: renderFinSemana, kickoff: renderKickoff, tallerPrograma: renderTallerPrograma,
-    fabricacion: renderFabricacion, terminados: renderTerminados, costosMO: renderCostosMO,
+    fabricacion: renderFabricacion, terminados: renderTerminados, costosMO: renderCostosMO, costosProyecto: renderCostosProyecto,
     reaperturas: renderReaperturas, copiloto: renderCopiloto, auditoria: renderAuditoria, actividad: renderActividad, respaldos: renderRespaldos,
   };
   const target = document.getElementById("page-"+currentPage);
@@ -14406,6 +14408,97 @@ async function cmCorreoAbrir(){
   if(!cmCorreoConfirmar()) return; await cmCorreoCopiar(true); const para=document.getElementById("cmPara").value.trim(), asu=document.getElementById("cmAsunto").value;
   window.open(`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(para)}&subject=${encodeURIComponent(asu)}&body=${encodeURIComponent("Pega aquí el informe con Ctrl+V (ya quedó copiado).")}`,"_blank");
   toast("Informe copiado. En el correo, pega con Ctrl+V. Luego marca la semana como enviada en «Envío y recordatorios».","ok");
+}
+
+/* =====================================================================
+   V3.27.0 — COSTOS DEL PROYECTO (para compartir)
+   Consolida en un solo informe: presupuesto, compras (cotizaciones), compras
+   directas, material enviado desde Bodega Central y devuelto, material en
+   bodega / instalado y mano de obra (horas hombre y costo). Se comparte por
+   Excel, PDF o correo con formato.
+   ===================================================================== */
+const ROLES_COSTOS_PROY = ["Jefe de Servicios Eléctricos","Gerencia","Jefe de Proyecto","Asistente Administrativo"];
+let _cpc = null, cpcMO = true;
+function cpcPuede(){ return esAdministrador() || ROLES_COSTOS_PROY.includes(DB.role); }
+function cpcCalcular(p, movs){
+  const COMP = ["OC Solicitada","OC Emitida","En Tránsito","Recibido Parcial"], filas = [];
+  (p.cotizaciones||[]).forEach(c=>{ if(c.estado==="Cotizando") return; const m=totalNetoCotizacion(c), ej=c.estado==="Recibido";
+    if(ej||COMP.includes(c.estado)) filas.push({ cat:"Compras (cotizaciones)", ref:c.id, det:(c.proveedor||"")+(c.referencia?" — "+c.referencia:""), estado:c.estado, ejec:ej?m:0, comp:ej?0:m, fecha:"" }); });
+  (p.comprasDirectas||[]).forEach(cd=>{ if(cd.estado==="Registrada") filas.push({ cat:"Compras directas", ref:cd.id, det:resumenItemsCompraDirecta(cd.items,90)+(cd.proveedor?" · "+cd.proveedor:""), estado:"Registrada", ejec:cdNetoReal(cd), comp:0, fecha:cd.fechaCompra||"" });
+    else if(cd.estado==="Autorizada") filas.push({ cat:"Compras directas", ref:cd.id, det:resumenItemsCompraDirecta(cd.items,90), estado:"Autorizada", ejec:0, comp:Number(cd.montoEstimado)||0, fecha:"" }); });
+  const mv=(movs||[]).filter(m=>m.proyectoId===p.id||(m.proyectoCodigo&&m.proyectoCodigo===p.codigo));
+  const envios=mv.filter(m=>EJ_ENVIO.includes(m.tipo)), devs=mv.filter(m=>EJ_DEVOL.includes(m.tipo));
+  const envT=envios.reduce((a,m)=>a+(Number(m.total)||0),0), devT=devs.reduce((a,m)=>a+(Number(m.total)||0),0);
+  const bodStock=(p.bodega||[]).reduce((a,b)=>a+(Number(b.stock)||0)*(Number(b.precioUnitario)||0),0), instalado=(p.bodega||[]).reduce((a,b)=>a+(Number(b.instalado)||0)*(Number(b.precioUnitario)||0),0);
+  const cot=filas.filter(f=>f.cat.startsWith("Compras (")), dir=filas.filter(f=>f.cat==="Compras directas"), sum=(l,k)=>l.reduce((a,f)=>a+f[k],0);
+  let mo={ ok:false, h:0, hx:0, costo:0, int:0, ext:0, personas:[] };
+  if(cmPuedeVer()&&cpcMO){ const c=cmDB(), ks=Object.keys(c.semanas).sort(); if(ks.length){ const min=ks[0], tope=sumarDias(hoyISO(),-7*59), desde=min>tope?min:tope, ls=cmLineasPeriodo(desde,hoyISO(),false,p.id), R=cmResumen(ls), pr=R.proys[0];
+      mo={ ok:true, h:R.tot.h, hx:R.tot.hx, costo:R.tot.costo, int:R.tot.int, ext:R.tot.ext, personas:pr?Object.values(pr.pers).map(q=>({ nombre:cmNombre(q.pid), ext:cmTarifa(q.pid).ext, h:q.h, hx:q.hx, costo:q.costo })).sort((a,b)=>a.nombre.localeCompare(b.nombre)):[] }; } else mo.ok=true; }
+  const matEjec=sum(cot,"ejec")+sum(dir,"ejec")+envT-devT, matComp=sum(cot,"comp")+sum(dir,"comp"), total=matEjec+(mo.ok?mo.costo:0), pres=Number(p.presupuestoTotal)||0;
+  return { p, filas, envios, devs, envT, devT, bodStock, instalado, cotE:sum(cot,"ejec"), cotC:sum(cot,"comp"), dirE:sum(dir,"ejec"), dirC:sum(dir,"comp"), matEjec, matComp, mo, total, pres, pct:pres?Math.round((total+matComp)/pres*100):0, fecha:hoyISO() };
+}
+function cpcHtml(D,paraCorreo){
+  const esc=escaparHtml, th="border:1px solid #ddd;background:#f1ece6;padding:3px 6px;font-size:11px;text-align:left", td="border:1px solid #ddd;padding:3px 6px;font-size:12px", r=n=>money(Math.round(n)), p=D.p;
+  const kpi=(t,v,c)=>`<td style="border:1px solid #ddd;padding:6px 10px;background:#fff"><div style="font-size:10.5px;color:#777">${t}</div><div style="font-size:15px;font-weight:bold;color:${c||'#222'}">${v}</div></td>`;
+  const resumen=[["Compras (cotizaciones) recibidas",D.cotE],["Compras directas registradas",D.dirE],["Material enviado desde Bodega Central",D.envT],["(−) Devuelto a Bodega General",-D.devT]];
+  const fil=(t,v,b)=>`<tr><td style="${td};${b?'font-weight:bold;background:#faf3ea':''}">${t}</td><td style="${td};text-align:right;${b?'font-weight:bold;background:#faf3ea':''}">${v<0?"−"+r(-v):r(v)}</td></tr>`;
+  return `<div style="font-family:Arial,Helvetica,sans-serif;color:#222;font-size:13px;max-width:980px"><div style="font-size:17px;font-weight:bold">Costos del proyecto ${esc(p.codigo)} — ${esc(p.nombre)}</div>
+    <div style="color:#555;margin:2px 0 8px">${esc(p.cliente||"")} · PM ${esc(p.pm||"")} · al ${esc(fcF(D.fecha))}</div>
+    <table style="border-collapse:collapse;margin-bottom:8px"><tr>${kpi("Presupuesto (neto)",D.pres?r(D.pres):"—")}${kpi("Costo real ejecutado",r(D.total),"#a15a1d")}${kpi("Comprometido (por recibir)",r(D.matComp))}${kpi("Avance del presupuesto",D.pres?D.pct+" %":"—",D.pct>100?"#b3261e":"#222")}</tr></table>
+    <div style="font-weight:bold;margin:8px 0 2px">Resumen de costos (neto, sin IVA)</div><table style="border-collapse:collapse;width:100%;max-width:560px">${resumen.map(x=>fil(x[0],x[1])).join("")}${fil("Materiales, costo neto del proyecto",D.matEjec,true)}${D.mo.ok?fil(`Mano de obra (${tpHtxt(D.mo.h+D.mo.hx)} h)`,D.mo.costo)+fil("COSTO REAL TOTAL",D.total,true):""}</table>
+    <div style="font-size:11px;color:#777;margin:3px 0">Material en bodega del proyecto: ${r(D.bodStock)} · instalado y montado: ${r(D.instalado)} (informativo, ya está dentro de los costos).</div>
+    <div style="font-weight:bold;margin:12px 0 2px">Detalle de compras</div><table style="border-collapse:collapse;width:100%"><tr>${["Tipo","Ref.","Detalle","Estado","Ejecutado","Comprometido"].map(h=>`<th style="${th}">${h}</th>`).join("")}</tr>
+    ${D.filas.map(f=>`<tr><td style="${td}">${esc(f.cat)}</td><td style="${td}">${esc(f.ref)}</td><td style="${td}">${esc(f.det)}</td><td style="${td}">${esc(f.estado)}</td><td style="${td};text-align:right">${f.ejec?r(f.ejec):""}</td><td style="${td};text-align:right">${f.comp?r(f.comp):""}</td></tr>`).join("")||`<tr><td style="${td}" colspan="6">Sin compras.</td></tr>`}</table>
+    ${(D.envios.length||D.devs.length)?`<div style="font-weight:bold;margin:12px 0 2px">Material desde / hacia Bodega Central</div><table style="border-collapse:collapse;width:100%"><tr>${["Fecha","Movimiento","Producto","Cant.","Valor"].map(h=>`<th style="${th}">${h}</th>`).join("")}</tr>${D.envios.concat(D.devs).sort((a,b)=>(a.fecha||"").localeCompare(b.fecha||"")).map(m=>`<tr><td style="${td}">${esc(m.fecha||"")}</td><td style="${td}">${esc(m.tipo)}</td><td style="${td}">${esc(m.material||"")}</td><td style="${td};text-align:right">${m.cantidad||""} ${esc(m.unidad||"")}</td><td style="${td};text-align:right">${EJ_DEVOL.includes(m.tipo)?"−":""}${r(Number(m.total)||0)}</td></tr>`).join("")}</table>`:""}
+    ${D.mo.ok&&D.mo.personas.length?`<div style="font-weight:bold;margin:12px 0 2px">Mano de obra (horas confirmadas)</div><table style="border-collapse:collapse;width:100%;max-width:640px"><tr>${["Persona","Tipo","Horas","Extra","Costo"].map(h=>`<th style="${th}">${h}</th>`).join("")}</tr>${D.mo.personas.map(q=>`<tr><td style="${td}">${esc(q.nombre)}</td><td style="${td}">${q.ext?"Externo":"Interno"}</td><td style="${td};text-align:right">${tpHtxt(q.h)}</td><td style="${td};text-align:right">${tpHtxt(q.hx)}</td><td style="${td};text-align:right">${r(q.costo)}</td></tr>`).join("")}</table>`:""}
+    <div style="margin-top:8px;font-size:11px;color:#777">Montos netos (sin IVA). Ejecutado = recibido o pagado; comprometido = orden emitida o compra autorizada aún sin recibir.${D.mo.ok?" Mano de obra según horas confirmadas y tarifas vigentes.":""}</div></div>`;
+}
+function renderCostosProyecto(){
+  if(!proyectosDelAreaTodos().length) return `<div class="page-head"><div><h1>Costos del proyecto</h1></div></div><div class="empty-state card">Aún no hay proyectos.</div>`;
+  setTimeout(cpcRefrescar,0);
+  return `<div class="page-head"><div><h1>Costos del proyecto</h1><div class="page-desc">Todo lo que costó el proyecto en un solo informe para compartir: compras, compras directas, material de Bodega Central, bodega consolidada y mano de obra.</div></div>
+    <div class="flex-gap">${selectorProyectos()}</div></div>
+    <div class="card" style="margin-bottom:10px"><div class="flex-gap" style="flex-wrap:wrap">${cmPuedeVer()?`<label class="small flex-gap"><input type="checkbox" ${cpcMO?'checked':''} onchange="cpcMO=this.checked; cpcRefrescar()"> Incluir mano de obra</label>`:''}
+    <button class="btn" onclick="cpcExcel()">📊 Excel</button><button class="btn" onclick="cpcPdf()">📄 PDF</button><button class="btn btn-primary" onclick="cpcCopiar()">📋 Copiar con formato</button><button class="btn" onclick="cpcOutlook()">✉ Outlook web</button></div>
+    <div class="hint" style="margin-top:6px">Para correo: «Copiar con formato», abre el correo y pega con Ctrl+V. El Excel y el PDF se adjuntan.</div></div>
+    <div id="cpcCuerpo" class="card" style="background:#fff"><div class="muted">Calculando…</div></div>`;
+}
+async function cpcRefrescar(){
+  const el=document.getElementById("cpcCuerpo"); if(!el) return; const p=proy(); if(!p) return;
+  let movs=[]; try{ movs=await cargarMovimientosBodega(); }catch(e){ toast("No se pudieron leer los movimientos de bodega: se omite el material de Bodega Central.","danger"); }
+  _cpc=cpcCalcular(p,movs); el.innerHTML=cpcHtml(_cpc);
+}
+function cpcNombreArchivo(ext){ return `Costos_${_cpc.p.codigo}_${_cpc.fecha}.${ext}`; }
+async function cpcCopiar(){
+  if(!_cpc){ toast("Espera a que termine de calcular.","danger"); return; } const html=cpcHtml(_cpc), div=document.createElement("div"); div.innerHTML=html;
+  try{ await navigator.clipboard.write([new ClipboardItem({"text/html":new Blob([html],{type:"text/html"}),"text/plain":new Blob([div.innerText],{type:"text/plain"})})]); toast("Copiado con formato. Pégalo en el correo con Ctrl+V.","ok"); return true; }
+  catch(e){ try{ const el=document.getElementById("cpcCuerpo"), r=document.createRange(); r.selectNodeContents(el); const s=window.getSelection(); s.removeAllRanges(); s.addRange(r); const ok=document.execCommand("copy"); s.removeAllRanges(); toast(ok?"Copiado.":"No se pudo copiar.",ok?"ok":"danger"); return ok; }catch(e2){ return false; } }
+}
+async function cpcOutlook(){ if(!_cpc) return; await cpcCopiar(); window.open(`https://outlook.office.com/mail/deeplink/compose?subject=${encodeURIComponent("Costos del proyecto "+_cpc.p.codigo+" — "+_cpc.p.nombre)}&body=${encodeURIComponent("Pega aquí el informe con Ctrl+V (ya quedó copiado).")}`,"_blank"); }
+async function cpcExcel(){
+  if(!_cpc) return; if(!(await asegurarXLSX())){ toast("No se pudo cargar el generador de Excel.","danger"); return; } const D=_cpc, wb=XLSX.utils.book_new(), hoja=(n,d)=>XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(d.length?d:[{"(sin datos)":""}]),n);
+  const res=[{ "Concepto":"Presupuesto (neto)","Monto":D.pres },{ "Concepto":"Compras (cotizaciones) recibidas","Monto":Math.round(D.cotE) },{ "Concepto":"Compras directas registradas","Monto":Math.round(D.dirE) },{ "Concepto":"Material enviado desde Bodega Central","Monto":Math.round(D.envT) },{ "Concepto":"(−) Devuelto a Bodega General","Monto":-Math.round(D.devT) },{ "Concepto":"Materiales — costo neto","Monto":Math.round(D.matEjec) }];
+  if(D.mo.ok) res.push({ "Concepto":"Mano de obra","Monto":Math.round(D.mo.costo) },{ "Concepto":"COSTO REAL TOTAL","Monto":Math.round(D.total) });
+  res.push({ "Concepto":"Comprometido (por recibir)","Monto":Math.round(D.matComp) },{ "Concepto":"Material en bodega del proyecto (valor)","Monto":Math.round(D.bodStock) },{ "Concepto":"Material instalado (valor)","Monto":Math.round(D.instalado) });
+  hoja("Resumen",res); hoja("Compras",D.filas.map(f=>({ "Tipo":f.cat,"Ref.":f.ref,"Detalle":f.det,"Estado":f.estado,"Ejecutado":Math.round(f.ejec),"Comprometido":Math.round(f.comp) })));
+  hoja("Bodega Central",D.envios.concat(D.devs).map(m=>({ "Fecha":m.fecha,"Movimiento":m.tipo,"Código":m.codigo,"Producto":m.material,"Cantidad":m.cantidad,"Unidad":m.unidad,"Valor":(EJ_DEVOL.includes(m.tipo)?-1:1)*Math.round(Number(m.total)||0),"Documento":m.documento||"" })));
+  hoja("Bodega del proyecto",(D.p.bodega||[]).map(b=>({ "Código":b.codigo,"Material":b.material,"Stock":Number(b.stock)||0,"Instalado":Number(b.instalado)||0,"Costo unit.":Number(b.precioUnitario)||0,"Valor en bodega":Math.round((Number(b.stock)||0)*(Number(b.precioUnitario)||0)) })));
+  if(D.mo.ok) hoja("Mano de obra",D.mo.personas.map(q=>({ "Persona":q.nombre,"Tipo":q.ext?"Externo":"Interno","Horas":Math.round(q.h*10)/10,"Horas extra":Math.round(q.hx*10)/10,"Costo":Math.round(q.costo) })));
+  XLSX.writeFile(wb,cpcNombreArchivo("xlsx"));
+}
+async function cpcPdf(){
+  if(!_cpc) return; if(!(await asegurarPDF())){ toast("No se pudo cargar el generador de PDF.","danger"); return; }
+  const D=_cpc, { jsPDF }=window.jspdf, doc=new jsPDF({orientation:"portrait",unit:"mm",format:"a4"}), r=n=>money(Math.round(n));
+  tpPdfLogo(doc,210,10,6); doc.setFontSize(14); doc.setFont(undefined,"bold"); doc.text(`Costos del proyecto ${D.p.codigo}`,14,15); doc.setFontSize(10); doc.setFont(undefined,"normal"); doc.text(`${D.p.nombre} · ${D.p.cliente||""} · PM ${D.p.pm||""} · al ${fcF(D.fecha)}`,14,21);
+  const res=[["Presupuesto (neto)",D.pres?r(D.pres):"—"],["Compras (cotizaciones) recibidas",r(D.cotE)],["Compras directas registradas",r(D.dirE)],["Material enviado desde Bodega Central",r(D.envT)],["(−) Devuelto a Bodega General","-"+r(D.devT)],[{content:"Materiales, costo neto",styles:{fontStyle:"bold"}},{content:r(D.matEjec),styles:{fontStyle:"bold"}}]];
+  if(D.mo.ok) res.push([`Mano de obra (${tpHtxt(D.mo.h+D.mo.hx)} h)`,r(D.mo.costo)],[{content:"COSTO REAL TOTAL",styles:{fontStyle:"bold",fillColor:[250,243,234]}},{content:r(D.total),styles:{fontStyle:"bold",fillColor:[250,243,234]}}]);
+  res.push(["Comprometido (por recibir)",r(D.matComp)]);
+  doc.autoTable({ startY:26, body:res, theme:"grid", styles:{fontSize:9,cellPadding:1.8}, columnStyles:{1:{halign:"right"}}, margin:{left:14,right:14}, tableWidth:130 });
+  doc.autoTable({ startY:doc.lastAutoTable.finalY+6, head:[["Tipo","Ref.","Detalle","Estado","Ejecutado","Comprom."]], body:D.filas.map(f=>[f.cat,f.ref,f.det,f.estado,f.ejec?r(f.ejec):"",f.comp?r(f.comp):""]), theme:"grid", styles:{fontSize:8,cellPadding:1.5,overflow:"linebreak"}, headStyles:{fillColor:[193,113,46]}, columnStyles:{4:{halign:"right"},5:{halign:"right"}}, margin:{left:14,right:14} });
+  if(D.envios.length||D.devs.length) doc.autoTable({ startY:doc.lastAutoTable.finalY+6, head:[["Fecha","Movimiento","Producto","Cant.","Valor"]], body:D.envios.concat(D.devs).sort((a,b)=>(a.fecha||"").localeCompare(b.fecha||"")).map(m=>[m.fecha||"",m.tipo,m.material||"",(m.cantidad||"")+" "+(m.unidad||""),(EJ_DEVOL.includes(m.tipo)?"-":"")+r(Number(m.total)||0)]), theme:"grid", styles:{fontSize:8,cellPadding:1.5,overflow:"linebreak"}, headStyles:{fillColor:[100,100,100]}, columnStyles:{4:{halign:"right"}}, margin:{left:14,right:14} });
+  if(D.mo.ok&&D.mo.personas.length) doc.autoTable({ startY:doc.lastAutoTable.finalY+6, head:[["Persona","Tipo","Horas","Extra","Costo"]], body:D.mo.personas.map(q=>[q.nombre,q.ext?"Externo":"Interno",tpHtxt(q.h),tpHtxt(q.hx),r(q.costo)]), theme:"grid", styles:{fontSize:8,cellPadding:1.5}, headStyles:{fillColor:[100,100,100]}, columnStyles:{2:{halign:"right"},3:{halign:"right"},4:{halign:"right"}}, margin:{left:14,right:14} });
+  doc.setFontSize(7); doc.text("Montos netos (sin IVA). Ejecutado = recibido o pagado; comprometido = orden emitida o compra autorizada sin recibir.",14,Math.min(doc.lastAutoTable.finalY+5,288));
+  doc.save(cpcNombreArchivo("pdf"));
 }
 
 /* =====================================================================

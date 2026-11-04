@@ -536,7 +536,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.19.0";
+const APP_VERSION = "3.20.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -5386,8 +5386,8 @@ function fcModelo(a, movs) {
 function fcEvaluar(a, mod) {
   const lista = fcLista(a).slice().sort((x, y) => String(x.vence).localeCompare(String(y.vence)));
   const hoy = hoyISO(); const filas = lista.map(f => {
-    const n = fcNum(f.numero), F = mod.porNum[n] || null, neto = fcNeto(a, f), monto = Number(f.monto) || 0, pagado = Number(f.pagado) || 0;
-    const r = { f, F, neto, monto, pagado, porPagar: Math.max(0, monto - pagado), vencida: f.vence && f.vence < hoy && pagado < monto, dest: {}, stockCon: 0, estado: "", clase: "" };
+    const n = fcNum(f.numero), F = mod.porNum[n] || null, XM = fcXmlDe(a, f.numero), neto = XM && XM.neto ? XM.neto : fcNeto(a, f), monto = Number(f.monto) || 0, pagado = Number(f.pagado) || 0;
+    const r = { f, F, XM, neto, monto, pagado, porPagar: Math.max(0, monto - pagado), vencida: f.vence && f.vence < hoy && pagado < monto, dest: {}, stockCon: 0, estado: "", clase: "" };
     if (!F) { r.estado = "Sin recepción en el PMO"; r.clase = "no"; return r; }
     r.difNeto = neto - F.neto; r.calza = F.neto > 0 && Math.abs(r.difNeto) / neto <= 0.02;
     const base = F.neto || 1; Object.keys(F.asig).forEach(k => r.dest[k] = F.asig[k] / base * monto); r.stockCon = F.stockNeto / base * monto;
@@ -5402,6 +5402,64 @@ function fcEvaluar(a, mod) {
   const noEnLista = Object.values(mod.porNum).filter(F => !lista.some(f => fcNum(f.numero) === F.num));
   return { filas, porCL, inv, sin, total, pagado, vencido, noEnLista };
 }
+/* ---------- Facturas electrónicas (XML DTE del SII / correo del proveedor) y Registro de Compras (CSV) ---------- */
+function fcTxt(el, tag) { const n = el ? el.getElementsByTagName(tag)[0] : null; return n ? (n.textContent || "").trim() : ""; }
+function fcParseXML(texto) {
+  const doc = new DOMParser().parseFromString(texto, "text/xml"); if (doc.getElementsByTagName("parsererror").length) return [];
+  return Array.from(doc.getElementsByTagName("Documento")).map(d => {
+    const enc = d.getElementsByTagName("Encabezado")[0], id = enc && enc.getElementsByTagName("IdDoc")[0], em = enc && enc.getElementsByTagName("Emisor")[0], tot = enc && enc.getElementsByTagName("Totales")[0];
+    const items = Array.from(d.getElementsByTagName("Detalle")).map(x => { const cods = Array.from(x.getElementsByTagName("CdgItem")).map(c => fcTxt(c, "VlrCodigo")).filter(Boolean);
+      return { cod: cods[0] || "", cods, desc: fcTxt(x, "NmbItem"), qty: Number(fcTxt(x, "QtyItem")) || 0, pu: Number(fcTxt(x, "PrcItem")) || 0, monto: Number(fcTxt(x, "MontoItem")) || 0 }; });
+    return { folio: fcTxt(id, "Folio"), tipo: Number(fcTxt(id, "TipoDTE")) || 0, fecha: fcTxt(id, "FchEmis"), vence: fcTxt(id, "FchVenc"), rut: fcTxt(em, "RUTEmisor"), razon: fcTxt(em, "RznSoc"),
+      neto: Number(fcTxt(tot, "MntNeto")) || 0, exento: Number(fcTxt(tot, "MntExe")) || 0, iva: Number(fcTxt(tot, "IVA")) || 0, total: Number(fcTxt(tot, "MntTotal")) || 0, items };
+  }).filter(f => f.folio);
+}
+function fcParseRCV(texto) {
+  const lin = String(texto || "").split(/\r?\n/).filter(l => l.trim()); if (lin.length < 2) return [];
+  const sep = (lin[0].match(/;/g) || []).length >= (lin[0].match(/,/g) || []).length ? ";" : ","; const cab = lin[0].split(sep).map(c => c.trim().toLowerCase().replace(/"/g, ""));
+  const ix = re => cab.findIndex(c => re.test(c)); const iF = ix(/^folio/), iFe = ix(/fecha docto|fecha emisi/), iN = ix(/monto neto/), iT = ix(/monto total/), iR = ix(/rut proveedor|rut emisor/), iZ = ix(/raz[oó]n social|^proveedor$|^nombre/), iTi = ix(/tipo doc/);
+  if (iF < 0 || iT < 0) return [];
+  const num = s => Number(String(s || "").replace(/[^\d-]/g, "")) || 0, toISO = s => { const m = String(s).match(/(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/); return m ? `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}` : ""; };
+  return lin.slice(1).map(l => { const c = l.split(sep).map(x => x.replace(/"/g, "").trim()); return { folio: c[iF], tipo: iTi >= 0 ? num(c[iTi]) : 33, fecha: iFe >= 0 ? toISO(c[iFe]) : "", vence: "", rut: iR >= 0 ? c[iR] : "", razon: iZ >= 0 ? c[iZ] : "", neto: iN >= 0 ? num(c[iN]) : 0, iva: 0, total: num(c[iT]), items: [] }; }).filter(f => f.folio && f.total);
+}
+function modalSubirFacturasSII(aid) {
+  openModal(`<h2>Subir facturas del proveedor</h2>
+    <p class="hint"><b>XML (recomendado):</b> el archivo de la factura electrónica (DTE) trae el detalle de productos, cantidades y precios reales. Llega por correo desde el proveedor (intercambio de DTE) o se obtiene desde tu cuenta del SII. Puedes subir varios a la vez.</p>
+    <p class="hint"><b>CSV del Registro de Compras y Ventas (SII):</b> trae solo folio, fecha y montos de cada factura; sirve para cargar la lista, pero no el contenido.</p>
+    <input type="file" id="fcFiles" multiple accept=".xml,.csv,.txt" style="margin:8px 0;">
+    <div class="flex-gap" style="margin-top:10px;"><button class="btn btn-primary" onclick="fcProcesarArchivos('${aid}')">Cargar</button><button class="btn" onclick="closeModal()">Cancelar</button></div>`, 560);
+}
+async function fcProcesarArchivos(aid) {
+  const a = (DB.acuerdos || []).find(x => x.id === aid); const fs = Array.from((document.getElementById("fcFiles") || {}).files || []); if (!a || !fs.length) { toast("Elige uno o más archivos.", "danger"); return; }
+  a.facturasXML = exArr(a.facturasXML); let nx = 0, nr = 0, otras = 0; const prov = String(a.proveedor || "").toLowerCase().split(/\s+/)[0] || "";
+  for (const f of fs) { const t = await f.text(); const esXml = /<\s*DTE|<\s*Documento|<\?xml/i.test(t.slice(0, 600));
+    if (esXml) { fcParseXML(t).forEach(d => { if (d.tipo && d.tipo !== 33 && d.tipo !== 34 && d.tipo !== 61 && d.tipo !== 56) return; const i = a.facturasXML.findIndex(x => fcNum(x.folio) === fcNum(d.folio) && String(x.rut) === String(d.rut)); if (i >= 0) a.facturasXML[i] = d; else a.facturasXML.push(d);
+        fcAgregar(a, [{ numero: "F-" + fcNum(d.folio), emision: d.fecha, vence: d.vence, monto: d.total }]); nx++; }); }
+    else { fcParseRCV(t).forEach(d => { if (prov && !String(d.razon || "").toLowerCase().includes(prov)) { otras++; return; } fcAgregar(a, [{ numero: "F-" + fcNum(d.folio), emision: d.fecha, vence: d.vence, monto: d.total }]); nr++; }); } }
+  if (!nx && !nr) { toast("No pude leer facturas en esos archivos" + (otras ? ` (${otras} fila(s) de otros proveedores omitidas)` : "") + ".", "danger"); return; }
+  guardarEstado("Facturas del proveedor subidas (XML/CSV)"); closeModal(); renderAll(); toast(`${nx} factura(s) con detalle (XML) y ${nr} desde el registro de compras${otras ? `; ${otras} de otros proveedores omitidas` : ""}.`, "ok");
+}
+function fcXmlDe(a, numero) { return exArr(a.facturasXML).find(x => fcNum(x.folio) === fcNum(numero)) || null; }
+function fcVerificarContenido(a, mod, numero) {
+  const X = fcXmlDe(a, numero); if (!X) return null; const F = mod.porNum[fcNum(numero)] || { lineas: {} }; const items = a.items || [];
+  const buscar = it => { const cs = [it.cod].concat(it.cods || []).filter(Boolean).map(c => fcNum(c) || String(c).toLowerCase()); return items.find(i => cs.some(c => c === (fcNum(i.codigo) || String(i.codigo).toLowerCase()))) || null; };
+  const filas = X.items.map(it => { const ci = buscar(it), L = ci ? F.lineas[ci.codigo] : null; const rec = L ? L.qty : 0;
+    return { it, ci, rec, difQty: it.qty - rec, precioCompendio: ci ? Number(ci.precio) || 0 : null, difPrecio: ci && ci.precio ? it.pu - ci.precio : null }; });
+  const extra = Object.values(F.lineas).filter(L => !filas.some(r => r.ci && r.ci.codigo === L.codigo));
+  const ok = filas.every(r => r.ci && r.difQty === 0 && (r.difPrecio === null || Math.abs(r.difPrecio) <= Math.max(1, r.it.pu * 0.01))) && !extra.length;
+  return { X, filas, extra, ok };
+}
+function modalContenidoFactura(aid, numero) {
+  const a = (DB.acuerdos || []).find(x => x.id === aid); if (!a || !_movimientosCache) return; const V = fcVerificarContenido(a, fcModelo(a, _movimientosCache), numero); if (!V) return;
+  const X = V.X, m = money;
+  openModal(`<h2>Factura ${escaparHtml(X.folio)} — contenido real</h2><p class="small muted">${escaparHtml(X.razon)} · ${escaparHtml(X.rut)} · emitida ${fcF(X.fecha)} · neto ${m(X.neto)} · IVA ${m(X.iva)} · total ${m(X.total)}</p>
+    <div class="ai-note" style="margin:8px 0; ${V.ok ? '' : 'background:var(--warn-bg); color:var(--copper-dark);'}">${V.ok ? '✔ El contenido de la factura coincide con lo recibido en el PMO y con los precios del compendio.' : '⚠ Hay diferencias entre la factura, lo recibido en el PMO y/o los precios del compendio.'}</div>
+    <div class="table-wrap"><table><tr><th>Código</th><th>Producto</th><th>Cant. factura</th><th>Recibido PMO</th><th>Precio factura</th><th>Precio compendio</th><th>Observación</th></tr>
+    ${V.filas.map(r => `<tr><td class="mono small">${escaparHtml(r.it.cod)}</td><td class="small">${escaparHtml(r.it.desc)}</td><td>${r.it.qty}</td><td>${r.rec}</td><td>${m(r.it.pu)}</td><td>${r.precioCompendio === null ? '—' : m(r.precioCompendio)}</td>
+      <td class="small">${!r.ci ? '<span style="color:var(--danger)">No está en el compendio</span>' : [r.difQty ? (r.difQty > 0 ? `Faltan ${r.difQty} por ingresar` : `PMO tiene ${-r.difQty} de más`) : '', r.difPrecio !== null && Math.abs(r.difPrecio) > Math.max(1, r.it.pu * 0.01) ? `Precio ${r.difPrecio > 0 ? 'mayor' : 'menor'} en ${m(Math.abs(Math.round(r.difPrecio)))}` : ''].filter(Boolean).join(' · ') || '✔'}</td></tr>`).join('')}
+    ${V.extra.map(L => `<tr><td class="mono small">${escaparHtml(L.codigo)}</td><td class="small">${escaparHtml(L.desc)}</td><td>0</td><td>${L.qty}</td><td>—</td><td>${m(L.pu)}</td><td class="small" style="color:var(--danger)">Ingresado en el PMO pero no viene en la factura</td></tr>`).join('')}</table></div>
+    <div class="flex-gap" style="margin-top:10px;"><button class="btn" onclick="closeModal()">Cerrar</button></div>`, 900);
+}
 function htmlFacturasAcuerdo(a) {
   if (!_movimientosCache) { cargarMovimientosBodega().then(() => { if (acuerdoVista === 'facturas') renderAll(); }).catch(() => { }); return '<div class="card">Cargando movimientos de bodega…</div>'; }
   const mod = fcModelo(a, _movimientosCache), E = fcEvaluar(a, mod), puede = puedeGestionarAcuerdo(), iva = a.facturasConIVA !== false;
@@ -5409,7 +5467,7 @@ function htmlFacturasAcuerdo(a) {
   const nombreCL = k => { const p = mod.proyectos[k] || {}; return `<b>${escaparHtml(p.cod || k)}</b><div class="small muted">${escaparHtml(p.nom || "")}</div>`; };
   return `
   <div class="card" style="margin-bottom:12px;"><div class="flex-gap" style="flex-wrap:wrap; align-items:center;">
-    ${puede ? `<button class="btn btn-primary" onclick="modalPegarFacturas('${a.id}')">➕ Pegar facturas del proveedor</button>${!fcLista(a).length ? `<button class="btn" onclick="fcCargarPlanilla('${a.id}')">Cargar las 10 de la planilla de Administración (03-nov)</button>` : ''}` : ''}
+    ${puede ? `<button class="btn btn-primary" onclick="modalSubirFacturasSII('${a.id}')">📥 Subir facturas (XML / SII)</button><button class="btn" onclick="modalPegarFacturas('${a.id}')">➕ Pegar facturas a mano</button>${!fcLista(a).length ? `<button class="btn" onclick="fcCargarPlanilla('${a.id}')">Cargar las 10 de la planilla de Administración (03-nov)</button>` : ''}` : ''}
     <label class="small"><input type="checkbox" ${iva ? 'checked' : ''} ${puede ? '' : 'disabled'} onchange="fcSetIVA('${a.id}', this.checked)"> Los montos de las facturas incluyen IVA (19%)</label>
     <div style="flex:1"></div><button class="btn" onclick="fcExcel('${a.id}')">⬇ Excel</button></div>
     <p class="hint" style="margin-top:8px;">Cada factura se cruza por su número con las recepciones del PMO. Lo que ya se envió a proyectos se asigna a la factura más antigua primero (FIFO). Así se ve qué parte de cada factura corresponde a cada CL y qué parte sigue como inventario.</p></div>
@@ -5417,6 +5475,7 @@ function htmlFacturasAcuerdo(a) {
     <div class="card"><div class="muted small">Total facturas</div><div style="font-size:22px;font-weight:700;">${money(E.total)}</div><div class="small muted">${E.filas.length} factura(s) · pagado ${money(E.pagado)}</div></div>
     <div class="card" style="border-top:4px solid var(--danger);"><div class="muted small">Vencido por pagar</div><div style="font-size:22px;font-weight:700;">${money(E.vencido)}</div><div class="small muted">${E.filas.filter(r => r.vencida).length} factura(s)</div></div>
     <div class="card"><div class="muted small">Sin recepción en el PMO</div><div style="font-size:22px;font-weight:700;">${money(E.sin)}</div><div class="small muted">${E.filas.filter(r => !r.F).length} factura(s)</div></div>
+    <div class="card"><div class="muted small">Con contenido verificado (XML)</div><div style="font-size:22px;font-weight:700;">${E.filas.filter(r => r.XM).length} de ${E.filas.length}</div><div class="small muted">Sube el XML de las demás para consolidar la compra real</div></div>
   </div>
   ${E.filas.length ? `<div class="card card-flush" style="margin-bottom:12px;"><div style="padding:14px 16px;"><h3>Qué corresponde pagar a cada CL (monto con la base de las facturas)</h3></div><div class="table-wrap"><table>
     <tr><th>Destino</th><th>Monto de factura</th><th>% de lo facturado</th></tr>
@@ -5428,7 +5487,7 @@ function htmlFacturasAcuerdo(a) {
     <tr><th>Factura</th><th>Emisión</th><th>Vence</th><th>Monto</th><th>Pagado</th><th>${iva ? 'Neto' : 'Monto'}</th><th>Recibido en PMO (neto)</th><th>Estado / destino</th>${puede ? '<th></th>' : ''}</tr>
     ${E.filas.length ? E.filas.map(r => `<tr><td><b>${escaparHtml(r.f.numero)}</b></td><td>${fcF(r.f.emision)}</td><td ${r.vencida ? 'style="color:var(--danger);font-weight:600;"' : ''}>${fcF(r.f.vence)}${r.vencida ? ' ⚠' : ''}</td><td>${money(r.monto)}</td>
       <td>${puede ? `<input type="text" value="${r.pagado || ''}" placeholder="0" style="width:90px;" onchange="fcSetPagado('${a.id}','${r.f.id}',this.value)">` : money(r.pagado)}</td><td>${money(Math.round(r.neto))}</td><td>${r.F ? money(Math.round(r.F.neto)) : '—'}</td>
-      <td><span style="padding:2px 8px; border-radius:10px; font-size:12px; ${pill(r.clase)}">${escaparHtml(r.estado)}</span>
+      <td><span style="padding:2px 8px; border-radius:10px; font-size:12px; ${pill(r.clase)}">${escaparHtml(r.estado)}</span>${r.XM ? `<div><button class="btn btn-sm" onclick="modalContenidoFactura('${a.id}','${escaparHtml(r.f.numero)}')">🔍 Contenido ${fcVerificarContenido(a, mod, r.f.numero).ok ? '✔' : '⚠'}</button></div>` : '<div class="small muted">Sin XML: contenido no verificado</div>'}
         ${Object.keys(r.dest).map(k => `<div class="small">${escaparHtml((mod.proyectos[k] || {}).cod || k)}: ${money(Math.round(r.dest[k]))}</div>`).join('')}${r.stockCon > 1 ? `<div class="small muted">Inventario: ${money(Math.round(r.stockCon))}</div>` : ''}${r.aviso ? `<div class="small" style="color:var(--copper-dark);">⚠ ${escaparHtml(r.aviso)}</div>` : ''}</td>
       ${puede ? `<td><button class="btn btn-sm btn-ghost" onclick="fcQuitar('${a.id}','${r.f.id}')">✕</button></td>` : ''}</tr>`).join('') : `<tr><td colspan="9" class="muted">Aún no hay facturas cargadas. Pega la planilla de Administración.</td></tr>`}</table></div></div>
   ${E.noEnLista.length ? `<div class="ai-note" style="margin-bottom:12px;">Facturas con recepción en el PMO que no están en tu lista: ${E.noEnLista.map(F => escaparHtml(F.factura) + ' (' + money(Math.round(F.neto)) + ' neto)').join(', ')}.</div>` : ''}`;

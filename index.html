@@ -536,7 +536,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.18.0";
+const APP_VERSION = "3.18.1";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -1186,6 +1186,7 @@ const DB = {
   ubicaciones: [],
   existencias: [],
   codigosBarra: [],
+  tcImport: { valor: 979, fecha: "2026-11-03", fuente: "Dólar de mercado 03-11-2026 (referencia; el documento no indica tipo de cambio)" },
   wmsOrigenes: [],
   planSemanal: {},
   jornadaCfg: null,
@@ -1226,6 +1227,7 @@ function aplicarEstadoRemoto(data) {
   DB.ubicaciones = data.ubicaciones && data.ubicaciones.length ? data.ubicaciones : WMS_UB_DEFAULT.map(u => Object.assign({}, u));
   DB.existencias = data.existencias || [];
   DB.codigosBarra = exArr(data.codigosBarra);
+  if (data.tcImport && Number(data.tcImport.valor) > 0) DB.tcImport = data.tcImport;
   DB.wmsOrigenes = data.wmsOrigenes && data.wmsOrigenes.length ? data.wmsOrigenes : WMS_ORIGENES_DEF.slice();
   DB.planSemanal = data.planSemanal || {};
   DB.jornadaCfg = data.jornadaCfg || null;
@@ -1257,6 +1259,7 @@ function construirPayloadEstado() {
     ubicaciones: DB.ubicaciones || [],
     existencias: DB.existencias || [],
     codigosBarra: DB.codigosBarra || [],
+    tcImport: DB.tcImport || null,
     wmsOrigenes: DB.wmsOrigenes || [],
     planSemanal: DB.planSemanal || {},
     jornadaCfg: DB.jornadaCfg || null,
@@ -5221,7 +5224,9 @@ function badgeEntregaAcuerdo(estado) {
    proyectos (en $), con desglose por proyecto y detalle de productos.
    Base mensual; exporta a Excel (varias hojas) y PDF.
    ===================================================================== */
-let acEjMes = "", acEjAlcance = "acuerdo";
+let acEjMes = "", acEjAlcance = "acuerdo", acEjImport = true;
+function ejTC() { return Number((DB.tcImport || {}).valor) || 979; }
+function ejGuardarTC(v) { const n = parseFloat(String(v).replace(",", ".")); if (!(n > 0)) { toast("Tipo de cambio inválido.", "danger"); return; } DB.tcImport = { valor: n, fecha: hoyISO(), fuente: "Ingresado por " + DB.usuario }; guardarEstado("Tipo de cambio de compras importadas: " + n); renderAll(); }
 const EJ_ENVIO = ["Traspaso a proyecto", "Salida a proyecto", "Traspaso a estante de tablero"];
 const EJ_DEVOL = ["Devolución de proyecto a Bodega General", "Devolución de tablero a bodega"];
 const EJ_COL = { bodega: "#2563eb", proy: "#c2703d", dif: "#9ca3af" };
@@ -5241,6 +5246,13 @@ function ejModelo(a, alcance, movs) {
     if (!m.proyectoId && !m.proyectoCodigo) return; if (!ejEnScope(a, m.codigo, m.acuerdoId, alcance)) return;
     const k = m.proyectoId || m.proyectoCodigo; const P = proy[k] = proy[k] || { id: m.proyectoId || "", codigo: m.proyectoCodigo || "", nombre: m.proyectoNombre || "", movs: [] };
     P.movs.push({ fecha: m.fecha || "", codigo: m.codigo, desc: m.material || "", marca: ejMarcaDe(a, m.codigo, m.acuerdoId), unidad: m.unidad || "", qty: env ? q : -q, pu, total: (env ? 1 : -1) * (Number(m.total) || q * pu), doc: m.documento || "", tipo: m.tipo });
+  });
+  if (alcance === "todo" && acEjImport && typeof IMPORT_COTIZ !== "undefined") IMPORT_COTIZ.forEach(c => {
+    const tc = ejTC(), pr = impProyectoSugerido(c.proy), k = (pr && pr.id) || c.proy;
+    const P = proy[k] = proy[k] || { id: (pr && pr.id) || "", codigo: (pr && pr.codigo) || c.proy, nombre: (pr && pr.nombre) || "", movs: [] };
+    const lns = c.lineas.map(l => ({ codigo: l.c, desc: l.d, qty: l.q, pu: l.p * tc })).concat(c.pack ? [{ codigo: "EMBALAJE", desc: "Embalaje / pack EXW", qty: 1, pu: c.pack * tc }] : []);
+    lns.forEach(l => { const tot = l.qty * l.pu; comprado.push({ fecha: c.fecha, entrega: "Importación " + c.id, factura: c.id, codigo: l.codigo, desc: l.desc, marca: c.marcas, qty: l.qty, pu: l.pu, total: tot, usd: true });
+      P.movs.push({ fecha: c.fecha, codigo: l.codigo, desc: l.desc, marca: c.marcas, unidad: "", qty: l.qty, pu: l.pu, total: tot, doc: "Cot. " + c.id + " (USD a $" + tc + ")", tipo: "Importación" }); });
   });
   (DB.bodegaGeneral || []).forEach(b => { if (!ejEnScope(a, b.codigo, b.acuerdoId, alcance)) return; const st = Number(b.stock) || 0; if (st <= 0) return;
     const pu = Number(b.precioUnitario) || Number(((a.items || []).find(i => i.codigo === b.codigo) || {}).precio) || 0;
@@ -5278,6 +5290,8 @@ function htmlEjecutivoAcuerdo(a) {
   <div class="card" style="margin-bottom:12px;"><div class="flex-gap" style="flex-wrap:wrap; align-items:flex-end;">
     <div><label class="field-label">Mes del reporte</label><input type="month" value="${mes}" onchange="acEjMes=this.value; renderAll();"></div>
     <div><label class="field-label">Alcance</label><select onchange="acEjAlcance=this.value; renderAll();"><option value="acuerdo" ${acEjAlcance === 'acuerdo' ? 'selected' : ''}>Solo productos de este acuerdo</option><option value="todo" ${acEjAlcance === 'todo' ? 'selected' : ''}>Todos los materiales de Bodega General</option></select></div>
+    ${acEjAlcance === 'todo' ? `<div><label class="field-label">Compras importadas (USD)</label><label class="small"><input type="checkbox" ${acEjImport ? 'checked' : ''} onchange="acEjImport=this.checked; renderAll();"> Incluir cot. 807-02/03</label></div>
+    <div><label class="field-label">Dólar (CLP por USD)</label><input type="text" id="ejTC" value="${ejTC()}" style="width:90px;" onchange="ejGuardarTC(this.value)"><div class="small muted">${escaparHtml((DB.tcImport || {}).fuente || '')}</div></div>` : ''}
     <div style="flex:1"></div>
     <button class="btn" onclick="ejExcel('${a.id}')">⬇ Excel (4 hojas)</button><button class="btn btn-primary" onclick="ejPdf('${a.id}')">⬇ PDF ejecutivo</button></div></div>
   <div class="grid" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:12px; margin-bottom:12px;">
@@ -5298,7 +5312,7 @@ function htmlEjecutivoAcuerdo(a) {
   ${R.proyectos.map(P => `<details class="card card-flush" style="margin-bottom:8px;"><summary style="cursor:pointer; padding:12px 16px;"><b>${escaparHtml(P.codigo)}</b> — ${escaparHtml(P.nombre)} <span class="small muted">· ${P.lineas.length} producto(s) · ${money(P.acum)}</span></summary>
     <div class="table-wrap"><table><tr><th>Código</th><th>Producto</th><th>Marca</th><th>Cantidad</th><th>Costo unit.</th><th>Total</th></tr>
     ${P.lineas.map(l => `<tr><td class="mono small">${escaparHtml(l.codigo)}</td><td class="small">${escaparHtml(l.desc)}</td><td class="small">${escaparHtml(l.marca || '—')}</td><td>${l.qty} ${escaparHtml(l.unidad)}</td><td>${l.qty ? money(l.total / l.qty) : '—'}</td><td><b>${money(l.total)}</b></td></tr>`).join('')}</table></div></details>`).join('')}
-  <p class="hint" style="margin-top:10px;">Costos: lo comprado se valoriza al precio del compendio; lo cargado a proyectos al costo unitario que tenía la bodega al momento del traspaso (según el libro de movimientos). «Cargado a proyectos» incluye traspasos, retiros de Pañol y estantes de tablero, menos las devoluciones a bodega.</p>`;
+  <p class="hint" style="margin-top:10px;">Costos: lo comprado se valoriza al precio del compendio (las compras importadas, en USD convertidos al dólar indicado arriba cuando la cotización no trae tipo de cambio); lo cargado a proyectos al costo unitario que tenía la bodega al momento del traspaso (según el libro de movimientos). «Cargado a proyectos» incluye traspasos, retiros de Pañol y estantes de tablero, menos las devoluciones a bodega.</p>`;
 }
 function ejContexto(aid) {
   const a = (DB.acuerdos || []).find(x => x.id === aid); if (!a || !_movimientosCache) return null;

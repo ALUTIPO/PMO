@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.27.0";
+const APP_VERSION = "3.27.1";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -14418,7 +14418,7 @@ async function cmCorreoAbrir(){
    Excel, PDF o correo con formato.
    ===================================================================== */
 const ROLES_COSTOS_PROY = ["Jefe de Servicios Eléctricos","Gerencia","Jefe de Proyecto","Asistente Administrativo"];
-let _cpc = null, cpcMO = true;
+let _cpc = null, cpcMO = true, cpcBase = "cons";
 function cpcPuede(){ return esAdministrador() || ROLES_COSTOS_PROY.includes(DB.role); }
 function cpcCalcular(p, movs){
   const COMP = ["OC Solicitada","OC Emitida","En Tránsito","Recibido Parcial"], filas = [];
@@ -14434,19 +14434,21 @@ function cpcCalcular(p, movs){
   let mo={ ok:false, h:0, hx:0, costo:0, int:0, ext:0, personas:[] };
   if(cmPuedeVer()&&cpcMO){ const c=cmDB(), ks=Object.keys(c.semanas).sort(); if(ks.length){ const min=ks[0], tope=sumarDias(hoyISO(),-7*59), desde=min>tope?min:tope, ls=cmLineasPeriodo(desde,hoyISO(),false,p.id), R=cmResumen(ls), pr=R.proys[0];
       mo={ ok:true, h:R.tot.h, hx:R.tot.hx, costo:R.tot.costo, int:R.tot.int, ext:R.tot.ext, personas:pr?Object.values(pr.pers).map(q=>({ nombre:cmNombre(q.pid), ext:cmTarifa(q.pid).ext, h:q.h, hx:q.hx, costo:q.costo })).sort((a,b)=>a.nombre.localeCompare(b.nombre)):[] }; } else mo.ok=true; }
-  const matEjec=sum(cot,"ejec")+sum(dir,"ejec")+envT-devT, matComp=sum(cot,"comp")+sum(dir,"comp"), total=matEjec+(mo.ok?mo.costo:0), pres=Number(p.presupuestoTotal)||0;
-  return { p, filas, envios, devs, envT, devT, bodStock, instalado, cotE:sum(cot,"ejec"), cotC:sum(cot,"comp"), dirE:sum(dir,"ejec"), dirC:sum(dir,"comp"), matEjec, matComp, mo, total, pres, pct:pres?Math.round((total+matComp)/pres*100):0, fecha:hoyISO() };
+  const matBruto=sum(cot,"ejec")+sum(dir,"ejec")+envT, matCons=matBruto-devT-bodStock, matEjec=cpcBase==="cons"?matCons:matBruto-devT, matComp=sum(cot,"comp")+sum(dir,"comp"), total=matEjec+(mo.ok?mo.costo:0), pres=Number(p.presupuestoTotal)||0;
+  const dirSin=(p.comprasDirectas||[]).filter(cd=>cdPendienteIngreso(cd)).length, sinCosto=(p.bodega||[]).filter(b=>(Number(b.stock)||0)>0&&!(Number(b.precioUnitario)>0)).length;
+  return { base:cpcBase, matBruto, matCons, dirSin, sinCosto, p, filas, envios, devs, envT, devT, bodStock, instalado, cotE:sum(cot,"ejec"), cotC:sum(cot,"comp"), dirE:sum(dir,"ejec"), dirC:sum(dir,"comp"), matEjec, matComp, mo, total, pres, pct:pres?Math.round((total+matComp)/pres*100):0, fecha:hoyISO() };
 }
 function cpcHtml(D,paraCorreo){
   const esc=escaparHtml, th="border:1px solid #ddd;background:#f1ece6;padding:3px 6px;font-size:11px;text-align:left", td="border:1px solid #ddd;padding:3px 6px;font-size:12px", r=n=>money(Math.round(n)), p=D.p;
   const kpi=(t,v,c)=>`<td style="border:1px solid #ddd;padding:6px 10px;background:#fff"><div style="font-size:10.5px;color:#777">${t}</div><div style="font-size:15px;font-weight:bold;color:${c||'#222'}">${v}</div></td>`;
-  const resumen=[["Compras (cotizaciones) recibidas",D.cotE],["Compras directas registradas",D.dirE],["Material enviado desde Bodega Central",D.envT],["(−) Devuelto a Bodega General",-D.devT]];
+  const resumen=[["Compras (cotizaciones) recibidas",D.cotE],["Compras directas registradas",D.dirE],["Material enviado desde Bodega Central",D.envT],["Material ingresado al proyecto (bruto)",D.matBruto],["(−) Devuelto a Bodega General",-D.devT]].concat(D.base==="cons"?[["(−) Aún en bodega del proyecto, sin consolidar",-D.bodStock]]:[]);
   const fil=(t,v,b)=>`<tr><td style="${td};${b?'font-weight:bold;background:#faf3ea':''}">${t}</td><td style="${td};text-align:right;${b?'font-weight:bold;background:#faf3ea':''}">${v<0?"−"+r(-v):r(v)}</td></tr>`;
   return `<div style="font-family:Arial,Helvetica,sans-serif;color:#222;font-size:13px;max-width:980px"><div style="font-size:17px;font-weight:bold">Costos del proyecto ${esc(p.codigo)} — ${esc(p.nombre)}</div>
     <div style="color:#555;margin:2px 0 8px">${esc(p.cliente||"")} · PM ${esc(p.pm||"")} · al ${esc(fcF(D.fecha))}</div>
     <table style="border-collapse:collapse;margin-bottom:8px"><tr>${kpi("Presupuesto (neto)",D.pres?r(D.pres):"—")}${kpi("Costo real ejecutado",r(D.total),"#a15a1d")}${kpi("Comprometido (por recibir)",r(D.matComp))}${kpi("Avance del presupuesto",D.pres?D.pct+" %":"—",D.pct>100?"#b3261e":"#222")}</tr></table>
-    <div style="font-weight:bold;margin:8px 0 2px">Resumen de costos (neto, sin IVA)</div><table style="border-collapse:collapse;width:100%;max-width:560px">${resumen.map(x=>fil(x[0],x[1])).join("")}${fil("Materiales, costo neto del proyecto",D.matEjec,true)}${D.mo.ok?fil(`Mano de obra (${tpHtxt(D.mo.h+D.mo.hx)} h)`,D.mo.costo)+fil("COSTO REAL TOTAL",D.total,true):""}</table>
-    <div style="font-size:11px;color:#777;margin:3px 0">Material en bodega del proyecto: ${r(D.bodStock)} · instalado y montado: ${r(D.instalado)} (informativo, ya está dentro de los costos).</div>
+    <div style="font-weight:bold;margin:8px 0 2px">Resumen de costos (neto, sin IVA)</div><table style="border-collapse:collapse;width:100%;max-width:560px">${resumen.map(x=>fil(x[0],x[1])).join("")}${fil(D.base==="cons"?"Material consolidado (costo del proyecto)":"Materiales, costo neto (todo lo comprado menos devoluciones)",D.matEjec,true)}${D.mo.ok?fil(`Mano de obra (${tpHtxt(D.mo.h+D.mo.hx)} h)`,D.mo.costo)+fil("COSTO REAL TOTAL",D.total,true):""}</table>
+    <div style="font-size:11px;color:#777;margin:3px 0">${D.base==="cons"?"Solo cuenta el material consolidado: lo comprado menos lo devuelto a Bodega General y lo que aún está en bodega por consolidar. ":""}Control: material instalado y montado valorizado ${r(D.instalado)}${D.base==="cons"?` (diferencia con el costo consolidado: ${r(D.matCons-D.instalado)})`:""}.</div>
+    ${(D.base==="cons"&&!paraCorreo&&(D.bodStock>0||D.dirSin||D.sinCosto))?`<div style="font-size:11.5px;color:#8a5a00;margin:3px 0">⚠ ${D.bodStock>0?`Quedan ${r(D.bodStock)} en la bodega del proyecto sin consolidar (no cuentan como costo todavía). `:""}${D.dirSin?`${D.dirSin} compra(s) directa(s) sin ingresar a bodega. `:""}${D.sinCosto?`${D.sinCosto} producto(s) en bodega sin costo unitario: su valor no se descuenta.`:""}</div>`:""}
     <div style="font-weight:bold;margin:12px 0 2px">Detalle de compras</div><table style="border-collapse:collapse;width:100%"><tr>${["Tipo","Ref.","Detalle","Estado","Ejecutado","Comprometido"].map(h=>`<th style="${th}">${h}</th>`).join("")}</tr>
     ${D.filas.map(f=>`<tr><td style="${td}">${esc(f.cat)}</td><td style="${td}">${esc(f.ref)}</td><td style="${td}">${esc(f.det)}</td><td style="${td}">${esc(f.estado)}</td><td style="${td};text-align:right">${f.ejec?r(f.ejec):""}</td><td style="${td};text-align:right">${f.comp?r(f.comp):""}</td></tr>`).join("")||`<tr><td style="${td}" colspan="6">Sin compras.</td></tr>`}</table>
     ${(D.envios.length||D.devs.length)?`<div style="font-weight:bold;margin:12px 0 2px">Material desde / hacia Bodega Central</div><table style="border-collapse:collapse;width:100%"><tr>${["Fecha","Movimiento","Producto","Cant.","Valor"].map(h=>`<th style="${th}">${h}</th>`).join("")}</tr>${D.envios.concat(D.devs).sort((a,b)=>(a.fecha||"").localeCompare(b.fecha||"")).map(m=>`<tr><td style="${td}">${esc(m.fecha||"")}</td><td style="${td}">${esc(m.tipo)}</td><td style="${td}">${esc(m.material||"")}</td><td style="${td};text-align:right">${m.cantidad||""} ${esc(m.unidad||"")}</td><td style="${td};text-align:right">${EJ_DEVOL.includes(m.tipo)?"−":""}${r(Number(m.total)||0)}</td></tr>`).join("")}</table>`:""}
@@ -14458,7 +14460,7 @@ function renderCostosProyecto(){
   setTimeout(cpcRefrescar,0);
   return `<div class="page-head"><div><h1>Costos del proyecto</h1><div class="page-desc">Todo lo que costó el proyecto en un solo informe para compartir: compras, compras directas, material de Bodega Central, bodega consolidada y mano de obra.</div></div>
     <div class="flex-gap">${selectorProyectos()}</div></div>
-    <div class="card" style="margin-bottom:10px"><div class="flex-gap" style="flex-wrap:wrap">${cmPuedeVer()?`<label class="small flex-gap"><input type="checkbox" ${cpcMO?'checked':''} onchange="cpcMO=this.checked; cpcRefrescar()"> Incluir mano de obra</label>`:''}
+    <div class="card" style="margin-bottom:10px"><div class="mp-chips" style="margin-bottom:8px"><button class="mp-chip ${cpcBase==='cons'?'on':''}" onclick="cpcBase='cons'; renderAll()">Solo material consolidado</button><button class="mp-chip ${cpcBase==='bruto'?'on':''}" onclick="cpcBase='bruto'; renderAll()">Todo lo comprado</button></div><div class="flex-gap" style="flex-wrap:wrap">${cmPuedeVer()?`<label class="small flex-gap"><input type="checkbox" ${cpcMO?'checked':''} onchange="cpcMO=this.checked; cpcRefrescar()"> Incluir mano de obra</label>`:''}
     <button class="btn" onclick="cpcExcel()">📊 Excel</button><button class="btn" onclick="cpcPdf()">📄 PDF</button><button class="btn btn-primary" onclick="cpcCopiar()">📋 Copiar con formato</button><button class="btn" onclick="cpcOutlook()">✉ Outlook web</button></div>
     <div class="hint" style="margin-top:6px">Para correo: «Copiar con formato», abre el correo y pega con Ctrl+V. El Excel y el PDF se adjuntan.</div></div>
     <div id="cpcCuerpo" class="card" style="background:#fff"><div class="muted">Calculando…</div></div>`;
@@ -14477,7 +14479,9 @@ async function cpcCopiar(){
 async function cpcOutlook(){ if(!_cpc) return; await cpcCopiar(); window.open(`https://outlook.office.com/mail/deeplink/compose?subject=${encodeURIComponent("Costos del proyecto "+_cpc.p.codigo+" — "+_cpc.p.nombre)}&body=${encodeURIComponent("Pega aquí el informe con Ctrl+V (ya quedó copiado).")}`,"_blank"); }
 async function cpcExcel(){
   if(!_cpc) return; if(!(await asegurarXLSX())){ toast("No se pudo cargar el generador de Excel.","danger"); return; } const D=_cpc, wb=XLSX.utils.book_new(), hoja=(n,d)=>XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(d.length?d:[{"(sin datos)":""}]),n);
-  const res=[{ "Concepto":"Presupuesto (neto)","Monto":D.pres },{ "Concepto":"Compras (cotizaciones) recibidas","Monto":Math.round(D.cotE) },{ "Concepto":"Compras directas registradas","Monto":Math.round(D.dirE) },{ "Concepto":"Material enviado desde Bodega Central","Monto":Math.round(D.envT) },{ "Concepto":"(−) Devuelto a Bodega General","Monto":-Math.round(D.devT) },{ "Concepto":"Materiales — costo neto","Monto":Math.round(D.matEjec) }];
+  const res=[{ "Concepto":"Presupuesto (neto)","Monto":D.pres },{ "Concepto":"Compras (cotizaciones) recibidas","Monto":Math.round(D.cotE) },{ "Concepto":"Compras directas registradas","Monto":Math.round(D.dirE) },{ "Concepto":"Material enviado desde Bodega Central","Monto":Math.round(D.envT) },{ "Concepto":"Material ingresado al proyecto (bruto)","Monto":Math.round(D.matBruto) },{ "Concepto":"(−) Devuelto a Bodega General","Monto":-Math.round(D.devT) }];
+  if(D.base==="cons") res.push({ "Concepto":"(−) Aún en bodega del proyecto, sin consolidar","Monto":-Math.round(D.bodStock) });
+  res.push({ "Concepto":D.base==="cons"?"Material consolidado (costo del proyecto)":"Materiales — costo neto","Monto":Math.round(D.matEjec) });
   if(D.mo.ok) res.push({ "Concepto":"Mano de obra","Monto":Math.round(D.mo.costo) },{ "Concepto":"COSTO REAL TOTAL","Monto":Math.round(D.total) });
   res.push({ "Concepto":"Comprometido (por recibir)","Monto":Math.round(D.matComp) },{ "Concepto":"Material en bodega del proyecto (valor)","Monto":Math.round(D.bodStock) },{ "Concepto":"Material instalado (valor)","Monto":Math.round(D.instalado) });
   hoja("Resumen",res); hoja("Compras",D.filas.map(f=>({ "Tipo":f.cat,"Ref.":f.ref,"Detalle":f.det,"Estado":f.estado,"Ejecutado":Math.round(f.ejec),"Comprometido":Math.round(f.comp) })));
@@ -14490,7 +14494,9 @@ async function cpcPdf(){
   if(!_cpc) return; if(!(await asegurarPDF())){ toast("No se pudo cargar el generador de PDF.","danger"); return; }
   const D=_cpc, { jsPDF }=window.jspdf, doc=new jsPDF({orientation:"portrait",unit:"mm",format:"a4"}), r=n=>money(Math.round(n));
   tpPdfLogo(doc,210,10,6); doc.setFontSize(14); doc.setFont(undefined,"bold"); doc.text(`Costos del proyecto ${D.p.codigo}`,14,15); doc.setFontSize(10); doc.setFont(undefined,"normal"); doc.text(`${D.p.nombre} · ${D.p.cliente||""} · PM ${D.p.pm||""} · al ${fcF(D.fecha)}`,14,21);
-  const res=[["Presupuesto (neto)",D.pres?r(D.pres):"—"],["Compras (cotizaciones) recibidas",r(D.cotE)],["Compras directas registradas",r(D.dirE)],["Material enviado desde Bodega Central",r(D.envT)],["(−) Devuelto a Bodega General","-"+r(D.devT)],[{content:"Materiales, costo neto",styles:{fontStyle:"bold"}},{content:r(D.matEjec),styles:{fontStyle:"bold"}}]];
+  const res=[["Presupuesto (neto)",D.pres?r(D.pres):"—"],["Compras (cotizaciones) recibidas",r(D.cotE)],["Compras directas registradas",r(D.dirE)],["Material enviado desde Bodega Central",r(D.envT)],["Material ingresado al proyecto (bruto)",r(D.matBruto)],["(−) Devuelto a Bodega General","-"+r(D.devT)]];
+  if(D.base==="cons") res.push(["(−) Aún en bodega del proyecto, sin consolidar","-"+r(D.bodStock)]);
+  res.push([{content:D.base==="cons"?"Material consolidado (costo del proyecto)":"Materiales, costo neto",styles:{fontStyle:"bold"}},{content:r(D.matEjec),styles:{fontStyle:"bold"}}]);
   if(D.mo.ok) res.push([`Mano de obra (${tpHtxt(D.mo.h+D.mo.hx)} h)`,r(D.mo.costo)],[{content:"COSTO REAL TOTAL",styles:{fontStyle:"bold",fillColor:[250,243,234]}},{content:r(D.total),styles:{fontStyle:"bold",fillColor:[250,243,234]}}]);
   res.push(["Comprometido (por recibir)",r(D.matComp)]);
   doc.autoTable({ startY:26, body:res, theme:"grid", styles:{fontSize:9,cellPadding:1.8}, columnStyles:{1:{halign:"right"}}, margin:{left:14,right:14}, tableWidth:130 });

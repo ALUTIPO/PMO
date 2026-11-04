@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.24.0";
+const APP_VERSION = "3.25.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -1194,6 +1194,7 @@ const DB = {
   wmsOrigenes: [],
   planSemanal: {},
   jornadaCfg: null,
+  costosMO: null,
   acuerdos: [],
   usuariosAutorizados: {},
   personal: [],
@@ -1235,6 +1236,7 @@ function aplicarEstadoRemoto(data) {
   DB.wmsOrigenes = data.wmsOrigenes && data.wmsOrigenes.length ? data.wmsOrigenes : WMS_ORIGENES_DEF.slice();
   DB.planSemanal = data.planSemanal || {};
   DB.jornadaCfg = data.jornadaCfg || null;
+  DB.costosMO = data.costosMO || null;
   DB.solicitudesPanol = data.solicitudesPanol || [];
   // Firebase no guarda arrays vacíos: se normalizan al cargar.
   DB.acuerdos = (data.acuerdos || []).map(ac => {
@@ -1267,6 +1269,7 @@ function construirPayloadEstado() {
     wmsOrigenes: DB.wmsOrigenes || [],
     planSemanal: DB.planSemanal || {},
     jornadaCfg: DB.jornadaCfg || null,
+    costosMO: DB.costosMO || null,
     solicitudesPanol: DB.solicitudesPanol,
     acuerdos: DB.acuerdos || [],
     versionApp: APP_VERSION,
@@ -13755,6 +13758,7 @@ function NAV_ACTUAL() {
     {id:"tallerPrograma", label:"Programa de taller", icon:iconWrench()},
     {id:"protocolos", label:"Protocolos FAT / SAT", icon:iconCheck()},
     {id:"personal", label:"Personal", icon:iconUsers()},
+    {id:"costosMO", label:"Horas y costos de personal", icon:iconCoin(), roles: ROLES_COSTOS_MO},
   ]};
   const inteligencia = {group:"🧠 Inteligencia y control", items:[
     {id:"copiloto", label:"Alupin IA", icon:iconSpark()},
@@ -13963,7 +13967,7 @@ function renderAll() {
     dashboard: renderDashboard, miPanel: renderMiPanel, panelEquipo: renderPanelEquipo, bodegaGeneral: renderBodegaGeneral, personal: renderPersonal, proyecto360: renderProyecto360, planificacion: renderPlanificacion, compras: renderCompras,
     presupuesto: renderPresupuesto, bodega: renderBodega, reporteMateriales: renderReporteMateriales, comprasDirectas: renderComprasDirectas, punch: renderPunch, requerimientos: renderRequerimientos, galeria: renderGaleria, cuadroCarga: renderCuadroCarga,
     recepciones: renderRecepciones, resumenOC: renderResumenOC, panol: renderPanol, acuerdos: renderAcuerdos, informesAdmin: renderInformesAdmin, protocolos: renderProtocolos, finSemana: renderFinSemana, kickoff: renderKickoff, tallerPrograma: renderTallerPrograma,
-    fabricacion: renderFabricacion, terminados: renderTerminados,
+    fabricacion: renderFabricacion, terminados: renderTerminados, costosMO: renderCostosMO,
     reaperturas: renderReaperturas, copiloto: renderCopiloto, auditoria: renderAuditoria, actividad: renderActividad, respaldos: renderRespaldos,
   };
   const target = document.getElementById("page-"+currentPage);
@@ -13983,6 +13987,316 @@ function renderAll() {
   const contentEl = document.getElementById("content");
   if (contentEl) contentEl.scrollTop = scrollGuardado;
   wmsFabAsegurar();
+  cmBannerPoner();
+}
+
+/* =====================================================================
+   V3.25.0 — HORAS Y COSTOS DE PERSONAL (mano de obra real por proyecto)
+   - DB.costosMO.tarifas[pid]  = {valor, unidad:"hora"|"dia", factorExtra}
+   - DB.costosMO.semanas[lunes] = {estado:"borrador"|"confirmada", lineas:[{id,pid,fecha,proyectoId,lugar,h,hx,nota,origen}], confirmo, fechaConf, enviado}
+   - DB.costosMO.cfg = {responsables:[nombres], correos:{PM:email}}
+   Las horas se PROPONEN desde el programa (taller, terreno, plan semanal, horas extra)
+   y las personas responsables las corrigen y confirman cada semana.
+   ===================================================================== */
+const ROLES_COSTOS_VER = ["Jefe de Servicios Eléctricos","Gerencia","Jefe de Proyecto"];
+const ROLES_COSTOS_MO = ["Jefe de Servicios Eléctricos","Gerencia","Jefe de Proyecto","Líder de Terreno","Jefe de Taller"];
+function cmPuedeVer(){ return esAdministrador() || ROLES_COSTOS_VER.includes(DB.role); }
+function cmPuedeRegistrar(){ return esAdministrador() || ROLES_COSTOS_MO.includes(DB.role); }
+function cmDB(){ let c=DB.costosMO; if(!c||typeof c!=="object") c=DB.costosMO={}; c.tarifas=c.tarifas||{}; c.semanas=c.semanas||{}; c.cfg=c.cfg||{}; c.cfg.correos=c.cfg.correos||{}; if(!c.cfg.responsables) c.cfg.responsables=["Iván","Jair"]; c.cfg.responsables=exArr(c.cfg.responsables); return c; }
+let cmTab="registro", cmLunes="", cmDesde="", cmHasta="", cmInc=false, cmProy="", cmBannerOculto=false;
+function cmInicio(){
+  const h=hoyISO(), w=new Date(h+"T12:00:00Z").getUTCDay();
+  if(!cmLunes){ cmLunes=tpLunesDe(h); if(w===1||w===2) cmLunes=sumarDias(cmLunes,-7); }
+  if(!cmDesde){ cmDesde=h.slice(0,8)+"01"; cmHasta=h; }
+}
+function cmTarifa(pid){
+  const t=cmDB().tarifas[pid], per=DB.personal.find(p=>p.id===pid), ext=!!per&&per.tipo==="Externo";
+  if(!t||!(Number(t.valor)>0)) return { ok:false, hora:0, extra:0, ext };
+  const v=Number(t.valor), hora=t.unidad==="dia"?v/TP_HORAS_DIA:v, f=Number(t.factorExtra)>0?Number(t.factorExtra):(ext?1:1.5);
+  return { ok:true, hora, extra:hora*f, ext };
+}
+function cmKeyPM(pm){ return String(pm||'').replace(/[.$#\[\]\/]/g,'_'); }
+function cmNombre(pid){ const p=DB.personal.find(x=>x.id===pid); return p?p.nombre:"(eliminado)"; }
+function cmProyTxt(pid){ const p=pid?proy(pid):null; return p?p.codigo:"Sin proyecto (indirectos)"; }
+const CM_LUGARES={ taller:"Taller", terreno:"Terreno", indirecto:"Indirecto (aseo, inventario…)", otro:"Otro" };
+function cmId(){ return "L"+Math.random().toString(36).slice(2,8); }
+function cmR(x){ return Math.round(x*10)/10; }
+/* Propone las horas de la semana a partir del programa y de la jornada */
+function cmPropuesta(lunes){
+  const M=psModelo(lunes), D=psDatos(lunes), w=psLeer(lunes), out=[];
+  M.dias.forEach(d=>{
+    const fecha=d.fecha, cap=psCapDia(M.cfg,fecha), norm=psSalidaNormal(M.cfg,fecha);
+    d.gente.forEach(pid=>{
+      const es=D.ent[fecha].filter(e=>e.pid===pid), tal=es.filter(e=>e.origen==="taller"), ter=es.filter(e=>e.origen!=="taller");
+      const gen=w.generales.filter(g=>g.fecha===fecha&&g.pid===pid), pesos=[];
+      const Wt=tal.reduce((a,e)=>a+e.h,0); let resto=Math.max(0,cap-Wt);
+      tal.forEach(e=>pesos.push({ proyectoId:e.proyectoId||"", lugar:"taller", w:e.h, nota:e.det||"" }));
+      if(ter.length){ const r=resto>0.01?resto:cap*0.5; ter.forEach(e=>pesos.push({ proyectoId:e.proyectoId||"", lugar:"terreno", w:r/ter.length, nota:e.det||"" })); resto=Math.max(0,resto-r); }
+      if(resto>0.01) pesos.push({ proyectoId:"", lugar:"indirecto", w:resto, nota:gen.length?(gen[0].texto||"Aseo e inventario"):"" });
+      const W=pesos.reduce((a,p)=>a+p.w,0)||cap, j=d.jor[pid]||{modo:"normal",salida:norm};
+      const extraSal=j.modo==="extra"?Math.max(0,(psHM(j.salida)-psHM(norm))/60):0, extra=Math.max(extraSal,Math.max(0,W-cap));
+      pesos.forEach(p=>{ const f=p.w/W; out.push({ id:cmId(), pid, fecha, proyectoId:p.proyectoId, lugar:p.lugar, h:cmR(cap*f), hx:cmR(extra*f), nota:p.nota, origen:"auto" }); });
+    });
+  });
+  return out.filter(l=>l.h>0||l.hx>0);
+}
+function cmSemana(lunes,crear){
+  const c=cmDB(); let s=c.semanas[lunes];
+  if(!s){ if(!crear) return { estado:"propuesta", lineas:cmPropuesta(lunes), virtual:true }; s=c.semanas[lunes]={ estado:"borrador", lineas:cmPropuesta(lunes) }; }
+  s.lineas=exArr(s.lineas); return s;
+}
+/* Revisión de la semana: límites legales y calidad del dato */
+function cmValidar(lunes){
+  const s=cmSemana(lunes), cfg=psCfg(), out=[], dias=[0,1,2,3,4].map(k=>sumarDias(lunes,k)), pd={}, ps={};
+  s.lineas.forEach(l=>{ const k=l.pid+"|"+l.fecha; pd[k]=pd[k]||{pid:l.pid,fecha:l.fecha,h:0,hx:0}; pd[k].h+=Number(l.h)||0; pd[k].hx+=Number(l.hx)||0; ps[l.pid]=(ps[l.pid]||0)+(Number(l.h)||0); });
+  Object.values(pd).forEach(x=>{ const cap=psCapDia(cfg,x.fecha), dn=TP_DIAS_C[(new Date(x.fecha+"T12:00:00Z").getUTCDay()+6)%7]||x.fecha;
+    if(x.hx>TP_MAX_EXTRA_DIA+0.05) out.push({ n:"crit", t:`${cmNombre(x.pid)} · ${dn}: ${tpHtxt(x.hx)} h extra (máximo legal ${TP_MAX_EXTRA_DIA} h por día).` });
+    if(x.h>cap+0.05) out.push({ n:"crit", t:`${cmNombre(x.pid)} · ${dn}: ${tpHtxt(x.h)} h ordinarias, la jornada es de ${tpHtxt(cap)} h. Lo que sobra va como hora extra.` });
+    if(x.h+x.hx<cap-0.05 && x.h>0) out.push({ n:"aviso", t:`${cmNombre(x.pid)} · ${dn}: solo ${tpHtxt(x.h+x.hx)} h registradas de ${tpHtxt(cap)} h de jornada.` }); });
+  Object.keys(ps).forEach(pid=>{ if(ps[pid]>TP_MAX_SEMANA+0.05) out.push({ n:"crit", t:`${cmNombre(pid)}: ${tpHtxt(ps[pid])} h ordinarias en la semana (máximo ${TP_MAX_SEMANA} h).` }); });
+  if(cmPuedeVer()){ const sin=[...new Set(s.lineas.map(l=>l.pid))].filter(pid=>!cmTarifa(pid).ok); if(sin.length) out.push({ n:"aviso", t:`Sin tarifa: ${sin.map(cmNombre).join(", ")}. Sus horas no tienen costo hasta que la cargues en «Tarifas».` }); }
+  const prog=psModelo(lunes), faltan=[]; prog.dias.forEach(d=>d.gente.forEach(pid=>{ if(!s.lineas.some(l=>l.pid===pid&&l.fecha===d.fecha)&&!faltan.includes(pid)) faltan.push(pid); }));
+  if(!s.virtual&&faltan.length) out.push({ n:"aviso", t:`Estaban en el programa pero no tienen horas registradas: ${faltan.map(cmNombre).join(", ")}.` });
+  if(s.lineas.some(l=>(Number(l.hx)||0)>0)) out.push({ n:"info", t:"Las horas extra requieren pacto escrito (art. 32) y se pagan con recargo del 50 %. Las del personal externo dependen de su contratista." });
+  if(!s.lineas.length) out.push({ n:"aviso", t:"No hay horas para esta semana: no hay nadie programado." });
+  return out;
+}
+function cmLineasPeriodo(desde,hasta,inc,proyId){
+  const c=cmDB(), out=[]; let n=0;
+  for(let l=tpLunesDe(desde); l<=hasta && n<60; l=sumarDias(l,7), n++){
+    const s=c.semanas[l]; let ls, est;
+    if(s){ ls=exArr(s.lineas); est=s.estado; if(est!=="confirmada" && !inc) continue; } else if(inc){ ls=cmPropuesta(l); est="propuesta"; } else continue;
+    ls.filter(x=>x.fecha>=desde&&x.fecha<=hasta&&(!proyId||x.proyectoId===proyId)).forEach(x=>{ const t=cmTarifa(x.pid); out.push({ ...x, lunes:l, estado:est, costo:(Number(x.h)||0)*t.hora+(Number(x.hx)||0)*t.extra, tarifaOk:t.ok, ext:t.ext }); });
+  }
+  return out;
+}
+function cmResumen(ls){
+  const P={}, tot={h:0,hx:0,costo:0,int:0,ext:0,ind:0};
+  ls.forEach(l=>{ const k=l.proyectoId||""; const p=P[k]=P[k]||{ pid:k, h:0, hx:0, costo:0, int:0, ext:0, pers:{} };
+    const h=Number(l.h)||0, x=Number(l.hx)||0; p.h+=h; p.hx+=x; p.costo+=l.costo; if(l.ext) p.ext+=l.costo; else p.int+=l.costo;
+    const q=p.pers[l.pid]=p.pers[l.pid]||{ pid:l.pid, h:0, hx:0, costo:0, dias:{} }; q.h+=h; q.hx+=x; q.costo+=l.costo; const f=q.dias[l.fecha]=q.dias[l.fecha]||{h:0,hx:0}; f.h+=h; f.hx+=x;
+    tot.h+=h; tot.hx+=x; tot.costo+=l.costo; if(l.ext) tot.ext+=l.costo; else tot.int+=l.costo; if(!k) tot.ind+=h+x; });
+  const proys=Object.values(P).sort((a,b)=>(a.pid===""?1:0)-(b.pid===""?1:0)||cmProyTxt(a.pid).localeCompare(cmProyTxt(b.pid)));
+  return { proys, tot };
+}
+/* Matriz para el Gantt: filas proyecto → persona, columnas días (o semanas si el período es largo) */
+function cmMatriz(res,desde,hasta){
+  const dias=[]; for(let d=desde,n=0;d<=hasta&&n<400;d=sumarDias(d,1),n++){ const w=new Date(d+"T12:00:00Z").getUTCDay(); if(w>=1&&w<=5) dias.push(d); }
+  const semanal=dias.length>31, cols=semanal?[...new Set(dias.map(tpLunesDe))]:dias, kcol=d=>semanal?tpLunesDe(d):d;
+  const head=cols.map(c=>semanal?"Sem "+tpFechaCorta(c).split(" ").slice(1).join(" "):tpFechaCorta(c).replace(/^\S+ /,"")+"\n"+tpFechaCorta(c).slice(0,2));
+  const filas=[];
+  res.proys.forEach(p=>{
+    const sumP=cols.map(()=>({h:0,hx:0})); Object.values(p.pers).forEach(q=>Object.entries(q.dias).forEach(([d,v])=>{ const i=cols.indexOf(kcol(d)); if(i>=0){ sumP[i].h+=v.h; sumP[i].hx+=v.hx; } }));
+    filas.push({ tipo:"p", label:(p.pid?proy(p.pid).codigo+" · "+proy(p.pid).nombre:"Sin proyecto (indirectos)"), cells:sumP, h:p.h, hx:p.hx, costo:p.costo });
+    Object.values(p.pers).sort((a,b)=>cmNombre(a.pid).localeCompare(cmNombre(b.pid))).forEach(q=>{ const c=cols.map(()=>({h:0,hx:0})); Object.entries(q.dias).forEach(([d,v])=>{ const i=cols.indexOf(kcol(d)); if(i>=0){ c[i].h+=v.h; c[i].hx+=v.hx; } });
+      filas.push({ tipo:"x", label:cmNombre(q.pid)+(cmTarifa(q.pid).ext?" (externo)":""), cells:c, h:q.h, hx:q.hx, costo:q.costo }); });
+  });
+  return { head, cols, filas, semanal };
+}
+const cmTxtCel=c=>(c.h+c.hx)>0.01?(c.hx>0.01?tpHtxt(c.h+c.hx)+"⏱":tpHtxt(c.h)):"";
+function cmHtmlGantt(M,ver){
+  if(!M.filas.length) return `<div class="empty-state">Sin horas confirmadas en el período.</div>`;
+  const th="padding:2px 3px;border:1px solid #e3ddd4;background:#f1ece6;font-size:10px;text-align:center;white-space:pre-line", td="border:1px solid #e3ddd4;font-size:10.5px;text-align:center;padding:2px 3px;min-width:26px";
+  return `<div style="overflow:auto;border:1px solid var(--line);border-radius:8px;background:#fff"><table style="border-collapse:collapse;font-family:Arial,sans-serif;width:100%"><tr><th style="${th};text-align:left;min-width:200px">Proyecto / persona</th>${M.head.map(h=>`<th style="${th}">${escaparHtml(h)}</th>`).join("")}<th style="${th}">Horas</th>${ver?`<th style="${th}">Costo</th>`:''}</tr>
+  ${M.filas.map(f=>{ const p=f.tipo==="p"; return `<tr><td style="${td};text-align:left;${p?'background:#faf3ea;font-weight:bold;color:#a15a1d':'padding-left:14px'}">${escaparHtml(f.label)}</td>${f.cells.map(c=>{ const t=cmTxtCel(c); return `<td style="${td};${t?(c.hx>0.01?'background:#fde0b8;font-weight:bold;':(p?'background:#c9dcef;font-weight:bold;':'background:#dfeaf5;')):''}">${t}</td>`; }).join("")}<td style="${td};font-weight:${p?'bold':'normal'}">${tpHtxt(f.h+f.hx)}</td>${ver?`<td style="${td};text-align:right;font-weight:${p?'bold':'normal'}">${money(Math.round(f.costo))}</td>`:''}</tr>`; }).join("")}</table></div>
+  <div class="hint" style="margin-top:4px">Número = horas del día (⏱ = incluye horas extra). Azul = horas ordinarias · naranja = con horas extra${M.semanal?' · columnas por semana':''}.</div>`;
+}
+/* Calidad del dato del período */
+function cmCalidad(desde,hasta){
+  const c=cmDB(), out=[]; let n=0, sinConf=[];
+  for(let l=tpLunesDe(desde); l<=hasta && n<60; l=sumarDias(l,7), n++){ const s=c.semanas[l], ps=psModelo(l); const hay=ps.dias.some(d=>d.gente.length)||(s&&exArr(s.lineas).length);
+    if(hay && (!s||s.estado!=="confirmada")) sinConf.push(l); }
+  if(sinConf.length) out.push({ n:"crit", t:`${sinConf.length} semana(s) sin confirmar: ${sinConf.map(l=>distDiaTxt(l)).join(", ")}. Sus horas NO están en este informe.` });
+  const ls=cmLineasPeriodo(desde,hasta,false,""), sinT=[...new Set(ls.filter(l=>!l.tarifaOk).map(l=>l.pid))];
+  if(sinT.length) out.push({ n:"aviso", t:`Sin tarifa (costo $0): ${sinT.map(cmNombre).join(", ")}.` });
+  const ind=ls.filter(l=>!l.proyectoId).reduce((a,l)=>a+(Number(l.h)||0)+(Number(l.hx)||0),0), tot=ls.reduce((a,l)=>a+(Number(l.h)||0)+(Number(l.hx)||0),0);
+  if(tot&&ind/tot>0.2) out.push({ n:"aviso", t:`${Math.round(ind/tot*100)} % de las horas no están asignadas a un proyecto (indirectos).` });
+  return out;
+}
+/* ---------- Acciones ---------- */
+function cmEdit(id,campo,val){
+  if(!cmPuedeRegistrar()) return; const s=cmSemana(cmLunes,true); if(s.estado==="confirmada"){ toast("La semana está confirmada. Reábrela para editar.","danger"); return; }
+  const l=s.lineas.find(x=>x.id===id); if(!l) return;
+  if(campo==="h"||campo==="hx") l[campo]=Math.max(0,Number(String(val).replace(",","."))||0); else l[campo]=val;
+  if(campo==="lugar"&&val==="indirecto") l.proyectoId=""; l.origen="manual"; guardarEstado(); renderAll();
+}
+function cmQuitar(id){ if(!cmPuedeRegistrar()) return; const s=cmSemana(cmLunes,true); if(s.estado==="confirmada") return; s.lineas=s.lineas.filter(x=>x.id!==id); guardarEstado(); renderAll(); }
+function cmRecargar(){ if(!cmPuedeRegistrar()) return; const s=cmSemana(cmLunes,true); if(s.estado==="confirmada") return; if(!confirm("Se reemplazan las líneas de esta semana por la propuesta del programa. ¿Continuar?")) return; s.lineas=cmPropuesta(cmLunes); guardarEstado(); renderAll(); }
+function cmConfirmar(){
+  if(!cmPuedeRegistrar()) return; const s=cmSemana(cmLunes,true), v=cmValidar(cmLunes).filter(x=>x.n==="crit");
+  if(v.length && !confirm("⛔ Hay observaciones críticas:\n\n"+v.map(x=>"• "+x.t).join("\n")+"\n\n¿Confirmar de todas formas?")) return;
+  s.estado="confirmada"; s.confirmo=DB.usuario; s.fechaConf=hoyISO(); registrarHistorial({proyecto:"Costos", accion:"Modificar", detalle:`Horas de personal de la semana ${cmLunes} confirmadas`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"}); guardarEstado(); renderAll(); toast("Semana confirmada. Ya cuenta para el informe.","ok");
+}
+function cmReabrir(){ if(!cmPuedeVer()) return; const s=cmSemana(cmLunes,true); s.estado="borrador"; delete s.enviado; registrarHistorial({proyecto:"Costos", accion:"Modificar", detalle:`Horas de la semana ${cmLunes} reabiertas`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"}); guardarEstado(); renderAll(); }
+function cmModalLinea(){
+  if(!cmPuedeRegistrar()) return; const dias=[0,1,2,3,4].map(k=>sumarDias(cmLunes,k)), ids=[...new Set(DB.personal.map(p=>p.id))];
+  openModal(`<div class="modal-head"><h3>Agregar horas</h3><button class="close-x" onclick="closeModal()">✕</button></div><div class="modal-body" style="display:grid;gap:10px">
+    <label class="small muted">Persona<select id="cmLP">${DB.personal.map(p=>`<option value="${p.id}">${escaparHtml(p.nombre)}${p.tipo==="Externo"?" (externo)":""}</option>`).join("")}</select></label>
+    <label class="small muted">Día<select id="cmLF">${dias.map(d=>`<option value="${d}">${tpFechaCorta(d)}</option>`).join("")}</select></label>
+    <label class="small muted">Proyecto<select id="cmLY"><option value="">Sin proyecto (indirectos)</option>${DB.proyectos.filter(p=>!p.terminado).map(p=>`<option value="${p.id}">${escaparHtml(p.codigo+" · "+p.nombre)}</option>`).join("")}</select></label>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px"><label class="small muted">Lugar<select id="cmLL">${Object.entries(CM_LUGARES).map(([k,v])=>`<option value="${k}">${v.split(" (")[0]}</option>`).join("")}</select></label>
+    <label class="small muted">Horas<input type="number" id="cmLH" step="0.5" min="0" value="8"></label><label class="small muted">Extra<input type="number" id="cmLX" step="0.5" min="0" value="0"></label></div>
+    <label class="small muted">Nota<input type="text" id="cmLN"></label></div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="cmAgregarLinea()">Agregar</button></div>`,520);
+}
+function cmAgregarLinea(){
+  const s=cmSemana(cmLunes,true), g=id=>document.getElementById(id).value;
+  s.lineas.push({ id:cmId(), pid:g('cmLP'), fecha:g('cmLF'), proyectoId:g('cmLY'), lugar:g('cmLL'), h:Math.max(0,Number(g('cmLH'))||0), hx:Math.max(0,Number(g('cmLX'))||0), nota:g('cmLN'), origen:"manual" });
+  guardarEstado(); closeModal(); renderAll();
+}
+function cmTarifaSet(pid,campo,val){ if(!cmPuedeVer()) return; const t=cmDB().tarifas[pid]=cmDB().tarifas[pid]||{valor:0,unidad:"hora",factorExtra:0}; t[campo]=(campo==="unidad")?val:(Number(String(val).replace(/[^\d.,]/g,"").replace(",","."))||0); guardarEstado(); renderAll(); }
+function cmCfgCorreo(pm,val){ if(!cmPuedeVer()) return; cmDB().cfg.correos[cmKeyPM(pm)]=val.trim(); guardarEstado(); }
+function cmCfgResp(val){ if(!cmPuedeVer()) return; cmDB().cfg.responsables=val.split(",").map(x=>x.trim()).filter(Boolean); guardarEstado(); }
+function cmSemanaMover(n){ cmLunes=sumarDias(cmLunes,7*n); renderAll(); }
+function cmRango(tipo){ const h=hoyISO(), l=tpLunesDe(h);
+  if(tipo==="sem"){ cmDesde=sumarDias(l,-7); cmHasta=sumarDias(l,-3); } else if(tipo==="mes"){ cmDesde=h.slice(0,8)+"01"; cmHasta=h; } else if(tipo==="todo"){ cmDesde="2025-01-01"; cmHasta=h; }
+  renderAll(); }
+function cmMarcarEnviado(){ const ls=cmLineasPeriodo(cmDesde,cmHasta,false,cmProy), set=new Set(ls.map(l=>l.lunes)); set.forEach(l=>{ const s=cmDB().semanas[l]; if(s) s.enviado={ fecha:hoyISO(), por:DB.usuario }; }); registrarHistorial({proyecto:"Costos", accion:"Modificar", detalle:`Informe de costos enviado al PM (${cmDesde} a ${cmHasta})`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"}); guardarEstado(); renderAll(); toast("Marcado como enviado.","ok"); }
+function cmRecordarWA(){
+  const per=DB.personal.find(p=>/iv[aá]n/i.test(p.nombre)&&/terreno|l[ií]der/i.test(p.cargo+" "+p.nombre))||DB.personal.find(p=>/iv[aá]n/i.test(p.nombre)); const tel=per?fsTelefonoWA(per.telefono):"";
+  const t=`Hola ${per?tpPrimerNombre(per.nombre):"Iván"}, recuerda completar y confirmar en el PMO (Horas y costos de personal) las horas reales de la semana del ${distDiaTxt(cmLunes)}: en qué proyecto trabajó cada uno, horas extra y externos. El informe al PM sale el lunes. Gracias.`;
+  window.open("https://wa.me/"+tel+"?text="+encodeURIComponent(t),"_blank");
+}
+/* ---------- Página ---------- */
+function renderCostosMO(){
+  cmInicio(); const ver=cmPuedeVer();
+  const tabs=[["registro","📝 Registro semanal"],["informe","📊 Informe y Gantt"],...(ver?[["tarifas","💲 Tarifas"]]:[]),["envio","📤 Envío y recordatorios"]];
+  if(!tabs.some(t=>t[0]===cmTab)) cmTab="registro";
+  const cab=`<div class="page-head"><div><h1>Horas y costos de personal</h1><div class="page-desc">Qué hizo cada persona (internos y externos), en qué proyecto y cuánto costó. Se propone desde el programa; la completa y confirma cada semana quien está a cargo.</div></div></div>
+    <div class="mp-chips">${tabs.map(t=>`<button class="mp-chip ${cmTab===t[0]?'on':''}" onclick="cmTab='${t[0]}'; renderAll();">${t[1]}</button>`).join("")}</div>`;
+  return cab+({registro:cmHtmlRegistro,informe:cmHtmlInforme,tarifas:cmHtmlTarifas,envio:cmHtmlEnvio}[cmTab])();
+}
+function cmHtmlRegistro(){
+  const s=cmSemana(cmLunes), conf=s.estado==="confirmada", reg=cmPuedeRegistrar()&&!conf, ver=cmPuedeVer(), dias=[0,1,2,3,4].map(k=>sumarDias(cmLunes,k)), V=cmValidar(cmLunes);
+  const ls=s.lineas.slice().sort((a,b)=>cmNombre(a.pid).localeCompare(cmNombre(b.pid))||a.fecha.localeCompare(b.fecha));
+  const dis=reg?"":"disabled", opP=DB.proyectos.filter(p=>!p.terminado);
+  const estado=conf?`<span class="badge b-verde"><span class="dot"></span>Confirmada · ${escaparHtml(s.confirmo||"")} ${s.fechaConf||""}</span>`:(s.virtual?`<span class="badge b-amarillo"><span class="dot"></span>Propuesta del programa (sin guardar)</span>`:`<span class="badge b-amarillo"><span class="dot"></span>Borrador</span>`);
+  const tot=ls.reduce((a,l)=>{ const t=cmTarifa(l.pid); a.h+=Number(l.h)||0; a.x+=Number(l.hx)||0; a.c+=(Number(l.h)||0)*t.hora+(Number(l.hx)||0)*t.extra; return a; },{h:0,x:0,c:0});
+  const aud=V.length?`<div style="border:1px solid ${V.some(x=>x.n==='crit')?'#e6b3ae':'#e8dcc0'};background:${V.some(x=>x.n==='crit')?'#fff4f3':'#fffaf0'};border-radius:8px;padding:8px 10px;margin:8px 0;font-size:12.5px"><b>🔎 Revisión de la semana</b>${V.map(x=>`<div style="color:${x.n==='crit'?'#b3261e':(x.n==='aviso'?'#8a5a00':'#555')}">${x.n==='crit'?'⛔':(x.n==='aviso'?'⚠':'ℹ')} ${escaparHtml(x.t)}</div>`).join("")}</div>`:`<div style="margin:8px 0;color:var(--ok)">✔ Sin observaciones.</div>`;
+  const fila=l=>{ const t=cmTarifa(l.pid), c=(Number(l.h)||0)*t.hora+(Number(l.hx)||0)*t.extra, ex=(Number(l.hx)||0)>0;
+    return `<tr${l.origen==='manual'?' style="background:#fbf7ee"':''}><td><b>${escaparHtml(cmNombre(l.pid))}</b>${t.ext?' <span class="small muted">ext.</span>':''}</td>
+    <td><select ${dis} onchange="cmEdit('${l.id}','fecha',this.value)">${dias.map(d=>`<option value="${d}" ${d===l.fecha?'selected':''}>${tpFechaCorta(d)}</option>`).join("")}</select></td>
+    <td><select ${dis} onchange="cmEdit('${l.id}','proyectoId',this.value)"><option value="">Sin proyecto (indirectos)</option>${opP.map(p=>`<option value="${p.id}" ${p.id===l.proyectoId?'selected':''}>${escaparHtml(p.codigo)}</option>`).join("")}</select></td>
+    <td><select ${dis} onchange="cmEdit('${l.id}','lugar',this.value)">${Object.entries(CM_LUGARES).map(([k,v])=>`<option value="${k}" ${k===l.lugar?'selected':''}>${v.split(" (")[0]}</option>`).join("")}</select></td>
+    <td><input type="number" ${dis} step="0.5" min="0" value="${l.h}" style="width:64px" onchange="cmEdit('${l.id}','h',this.value)"></td>
+    <td><input type="number" ${dis} step="0.5" min="0" value="${l.hx}" style="width:64px;${ex?'background:#fde6c8':''}" onchange="cmEdit('${l.id}','hx',this.value)"></td>
+    <td><input type="text" ${dis} value="${escaparHtml(l.nota||"")}" style="width:150px" onchange="cmEdit('${l.id}','nota',this.value)"></td>
+    ${ver?`<td style="text-align:right">${t.ok?money(Math.round(c)):'<span class="muted small">sin tarifa</span>'}</td>`:''}${reg?`<td><button class="btn btn-sm" onclick="cmQuitar('${l.id}')">🗑</button></td>`:''}</tr>`; };
+  return `<div class="card" style="margin-top:10px"><div class="flex-between" style="flex-wrap:wrap;gap:8px"><div class="flex-gap"><button class="btn btn-sm" onclick="cmSemanaMover(-1)">◀</button><b>Semana del ${distDiaTxt(cmLunes)} al ${distDiaTxt(sumarDias(cmLunes,4))}</b><button class="btn btn-sm" onclick="cmSemanaMover(1)">▶</button> ${estado}</div>
+    <div class="flex-gap">${reg?`<button class="btn btn-sm" onclick="cmModalLinea()">+ Agregar horas</button><button class="btn btn-sm" onclick="cmRecargar()">↻ Recargar propuesta</button><button class="btn btn-sm btn-primary" onclick="cmConfirmar()">✔ Confirmar semana</button>`:''}${conf&&ver?`<button class="btn btn-sm" onclick="cmReabrir()">Reabrir</button>`:''}</div></div>
+    ${aud}
+    <div class="hint" style="margin-bottom:6px">Corrige lo que no fue como se programó: a qué proyecto fue cada hora, horas extra reales, externos. Las filas amarillas son cambios tuyos.</div>
+    <div style="overflow:auto"><table class="tbl"><thead><tr><th>Persona</th><th>Día</th><th>Proyecto</th><th>Lugar</th><th>Horas</th><th>Extra</th><th>Nota</th>${ver?'<th style="text-align:right">Costo</th>':''}${reg?'<th></th>':''}</tr></thead><tbody>${ls.map(fila).join("")||'<tr><td colspan="9" class="muted">Sin horas.</td></tr>'}</tbody>
+    <tfoot><tr><td colspan="4"><b>Total semana</b></td><td><b>${tpHtxt(tot.h)}</b></td><td><b>${tpHtxt(tot.x)}</b></td><td></td>${ver?`<td style="text-align:right"><b>${money(Math.round(tot.c))}</b></td>`:''}${reg?'<td></td>':''}</tr></tfoot></table></div></div>`;
+}
+function cmHtmlTarifas(){
+  if(!cmPuedeVer()) return ""; const c=cmDB(), g=(t)=>DB.personal.filter(p=>(p.tipo==="Externo")===t);
+  const tab=(lista,tit)=>`<div style="margin-top:10px"><b>${tit}</b><table class="tbl" style="margin-top:4px"><thead><tr><th>Persona</th><th>Valor (CLP)</th><th>Unidad</th><th>Factor hora extra</th><th>Equivale a</th></tr></thead><tbody>${lista.map(p=>{ const t=c.tarifas[p.id]||{}, tf=cmTarifa(p.id);
+    return `<tr><td><b>${escaparHtml(p.nombre)}</b><div class="small muted">${escaparHtml(p.cargo||"")}</div></td><td><input type="text" value="${t.valor||""}" style="width:100px" onchange="cmTarifaSet('${p.id}','valor',this.value)"></td>
+    <td><select onchange="cmTarifaSet('${p.id}','unidad',this.value)"><option value="hora" ${t.unidad!=='dia'?'selected':''}>por hora</option><option value="dia" ${t.unidad==='dia'?'selected':''}>por día (${TP_HORAS_DIA} h)</option></select></td>
+    <td><input type="text" value="${t.factorExtra||""}" placeholder="${p.tipo==='Externo'?'1':'1,5'}" style="width:60px" onchange="cmTarifaSet('${p.id}','factorExtra',this.value)"></td>
+    <td class="small">${tf.ok?`${money(Math.round(tf.hora))}/h · extra ${money(Math.round(tf.extra))}/h`:'<span class="muted">sin tarifa</span>'}</td></tr>`; }).join("")}</tbody></table></div>`;
+  return `<div class="card" style="margin-top:10px"><div class="hint">Para internos usa el <b>costo empresa por hora</b> (sueldo + leyes sociales + beneficios, dividido en las horas del mes). Para externos, lo que te cobra el contratista por hora o por día. La hora extra de internos va con recargo del 50 % (factor 1,5) salvo que indiques otro; la de externos, factor 1.</div>
+    ${tab(g(false),"Personal interno")}${tab(g(true),"Personal externo")}
+    <div class="hint" style="margin-top:8px">⚠ Las tarifas se guardan en la misma base del PMO: se ocultan a los roles sin permiso en la pantalla, pero no están cifradas. La tarifa vigente se aplica a todo el historial.</div></div>`;
+}
+function cmHtmlInforme(){
+  const ver=cmPuedeVer(), ls=cmLineasPeriodo(cmDesde,cmHasta,cmInc,cmProy), R=cmResumen(ls), M=cmMatriz(R,cmDesde,cmHasta), Q=cmCalidad(cmDesde,cmHasta);
+  const pm=DB.proyectos.filter(p=>!p.terminado);
+  const kpi=(t,v)=>`<div class="card" style="padding:8px 12px;min-width:130px"><div class="small muted">${t}</div><div style="font-size:18px;font-weight:bold">${v}</div></div>`;
+  const tabla=`<table class="tbl"><thead><tr><th>Proyecto</th><th style="text-align:right">Horas</th><th style="text-align:right">Extra</th>${ver?'<th style="text-align:right">Internos</th><th style="text-align:right">Externos</th><th style="text-align:right">Total</th>':''}</tr></thead><tbody>${R.proys.map(p=>`<tr><td><b>${escaparHtml(cmProyTxt(p.pid))}</b>${p.pid?`<div class="small muted">${escaparHtml(proy(p.pid).nombre)}</div>`:''}</td><td style="text-align:right">${tpHtxt(p.h)}</td><td style="text-align:right">${tpHtxt(p.hx)}</td>${ver?`<td style="text-align:right">${money(Math.round(p.int))}</td><td style="text-align:right">${money(Math.round(p.ext))}</td><td style="text-align:right"><b>${money(Math.round(p.costo))}</b></td>`:''}</tr>`).join("")||'<tr><td colspan="6" class="muted">Sin datos confirmados.</td></tr>'}</tbody></table>`;
+  return `<div class="card" style="margin-top:10px"><div class="flex-gap" style="flex-wrap:wrap;gap:8px;align-items:end"><label class="small muted">Desde<input type="date" value="${cmDesde}" onchange="cmDesde=this.value; renderAll()"></label><label class="small muted">Hasta<input type="date" value="${cmHasta}" onchange="cmHasta=this.value; renderAll()"></label>
+    <button class="btn btn-sm" onclick="cmRango('sem')">Semana pasada</button><button class="btn btn-sm" onclick="cmRango('mes')">Este mes</button><button class="btn btn-sm" onclick="cmRango('todo')">Todo</button>
+    <label class="small muted">Proyecto<select onchange="cmProy=this.value; renderAll()"><option value="">Todos</option>${pm.map(p=>`<option value="${p.id}" ${p.id===cmProy?'selected':''}>${escaparHtml(p.codigo)}</option>`).join("")}</select></label>
+    <label class="small flex-gap"><input type="checkbox" ${cmInc?'checked':''} onchange="cmInc=this.checked; renderAll()"> Incluir semanas sin confirmar (propuesta)</label></div>
+    ${Q.length?`<div style="margin:8px 0;padding:8px 10px;border-radius:8px;background:#fffaf0;border:1px solid #e8dcc0;font-size:12.5px"><b>🔎 Calidad del dato</b>${Q.map(x=>`<div style="color:${x.n==='crit'?'#b3261e':'#8a5a00'}">${x.n==='crit'?'⛔':'⚠'} ${escaparHtml(x.t)}</div>`).join("")}</div>`:'<div style="margin:8px 0;color:var(--ok)">✔ Todas las semanas del período están confirmadas.</div>'}
+    <div class="flex-gap" style="flex-wrap:wrap;margin:8px 0">${kpi("Horas",tpHtxt(R.tot.h+R.tot.hx))}${kpi("Horas extra",tpHtxt(R.tot.hx))}${ver?kpi("Costo total",money(Math.round(R.tot.costo)))+kpi("Internos",money(Math.round(R.tot.int)))+kpi("Externos",money(Math.round(R.tot.ext))):''}${kpi("Indirectos",tpHtxt(R.tot.ind)+" h")}</div>
+    ${tabla}<div style="margin:12px 0 4px"><b>Gantt por fechas</b></div>${cmHtmlGantt(M,ver)}
+    <div class="flex-gap" style="margin-top:10px;flex-wrap:wrap"><button class="btn" onclick="cmExcel()">📊 Excel</button><button class="btn" onclick="cmPdf()">📄 PDF</button><button class="btn btn-primary" onclick="cmModalCorreo()">✉ Enviar al PM</button></div></div>`;
+}
+function cmHtmlEnvio(){
+  const c=cmDB(), ver=cmPuedeVer(), pms=[...new Set(DB.proyectos.filter(p=>!p.terminado).map(p=>p.pm).filter(Boolean))];
+  const sem=[0,1,2,3,4,5].map(i=>sumarDias(tpLunesDe(hoyISO()),-7*i));
+  const filas=sem.map(l=>{ const s=c.semanas[l], hay=psModelo(l).dias.some(d=>d.gente.length)||(s&&exArr(s.lineas).length);
+    return `<tr><td>${distDiaTxt(l)}</td><td>${!hay?'<span class="muted">sin actividad</span>':(s&&s.estado==="confirmada"?'<span class="badge b-verde"><span class="dot"></span>Confirmada</span>':(s?'<span class="badge b-amarillo"><span class="dot"></span>Borrador</span>':'<span class="badge b-rojo"><span class="dot"></span>Sin registrar</span>'))}</td><td>${s&&s.enviado?`Enviada ${s.enviado.fecha}`:'—'}</td><td><button class="btn btn-sm" onclick="cmLunes='${l}'; cmTab='registro'; renderAll()">Abrir</button></td></tr>`; }).join("");
+  return `<div class="card" style="margin-top:10px"><b>Ritmo semanal</b><div class="hint" style="margin:4px 0 8px">Jueves y viernes: quien está a cargo registra y confirma las horas de la semana. Lunes: se envía al PM el informe de la semana anterior (el de la semana confirmada).</div>
+    <table class="tbl"><thead><tr><th>Semana</th><th>Estado</th><th>Envío al PM</th><th></th></tr></thead><tbody>${filas}</tbody></table>
+    <div class="flex-gap" style="margin-top:10px;flex-wrap:wrap"><button class="btn" onclick="cmRecordarWA()">📲 Recordar a Iván por WhatsApp</button></div></div>
+    ${ver?`<div class="card" style="margin-top:10px"><b>Quién recibe los recordatorios en el PMO</b><div class="hint" style="margin:4px 0">Nombres (separados por coma) de quienes verán el aviso para completar y confirmar las horas.</div><input type="text" value="${escaparHtml(c.cfg.responsables.join(", "))}" style="width:100%;max-width:420px" onchange="cmCfgResp(this.value)">
+    <div style="margin-top:12px"><b>Correo de cada PM</b></div>${pms.map(pm=>`<label class="small muted" style="display:block;margin-top:4px">${escaparHtml(pm)}<input type="text" value="${escaparHtml(c.cfg.correos[cmKeyPM(pm)]||"")}" placeholder="correo@empresa.cl" style="width:100%;max-width:420px" onchange="cmCfgCorreo(this.dataset.pm,this.value)" data-pm="${escaparHtml(pm)}"></label>`).join("")||'<div class="muted small">Sin PM en los proyectos vigentes.</div>'}</div>`:''}`;
+}
+/* ---------- Banner de recordatorio ---------- */
+function cmBannerHtml(){
+  try{
+    if(cmBannerOculto||!DB.usuario||!(cmPuedeRegistrar())) return ""; const c=cmDB(), u=navNorm(DB.usuario), resp=c.cfg.responsables.some(r=>u.includes(navNorm(r))), h=hoyISO(), w=new Date(h+"T12:00:00Z").getUTCDay(), l0=tpLunesDe(h);
+    const lun=(w===1||w===2)?sumarDias(l0,-7):l0, s=c.semanas[lun], hay=psModelo(lun).dias.some(d=>d.gente.length);
+    const tocaRegistrar=resp && hay && (!s||s.estado!=="confirmada") && w!==3;
+    if(tocaRegistrar) return `<div id="cmBanner" style="margin:0 0 10px;padding:8px 12px;border-radius:8px;background:#fff4dc;border:1px solid #e6cf99;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span>📝 <b>Falta confirmar las horas y costos de personal</b> de la semana del ${distDiaTxt(lun)}.</span><button class="btn btn-sm btn-primary" onclick="cmLunes='${lun}'; cmTab='registro'; goTo('costosMO')">Completar ahora</button><button class="btn btn-sm" onclick="cmBannerOculto=true; renderAll()">Después</button></div>`;
+    if(w===1 && cmPuedeVer() && s && s.estado==="confirmada" && !s.enviado) return `<div id="cmBanner" style="margin:0 0 10px;padding:8px 12px;border-radius:8px;background:#e8f1fb;border:1px solid #b7cde8;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span>📤 <b>Hoy toca enviar el informe de costos al PM</b> (semana del ${distDiaTxt(lun)}).</span><button class="btn btn-sm btn-primary" onclick="cmDesde='${lun}'; cmHasta='${sumarDias(lun,4)}'; cmTab='informe'; goTo('costosMO')">Preparar envío</button><button class="btn btn-sm" onclick="cmBannerOculto=true; renderAll()">Después</button></div>`;
+  }catch(e){}
+  return "";
+}
+function cmBannerPoner(){ const old=document.getElementById("cmBanner"); if(old) old.remove(); const h=cmBannerHtml(), c=document.getElementById("content"); if(h&&c) c.insertAdjacentHTML("afterbegin",h); }
+/* ---------- Exportar ---------- */
+function cmFilasExcel(){
+  const ver=cmPuedeVer(), ls=cmLineasPeriodo(cmDesde,cmHasta,cmInc,cmProy), R=cmResumen(ls), M=cmMatriz(R,cmDesde,cmHasta);
+  const resumen=R.proys.map(p=>({ "Proyecto":cmProyTxt(p.pid), "Nombre":p.pid?proy(p.pid).nombre:"", "Horas ordinarias":cmR(p.h), "Horas extra":cmR(p.hx), ...(ver?{ "Costo internos":Math.round(p.int), "Costo externos":Math.round(p.ext), "Costo total":Math.round(p.costo) }:{}) }));
+  const personas=[]; R.proys.forEach(p=>Object.values(p.pers).forEach(q=>personas.push({ "Proyecto":cmProyTxt(p.pid), "Persona":cmNombre(q.pid), "Tipo":cmTarifa(q.pid).ext?"Externo":"Interno", "Horas ordinarias":cmR(q.h), "Horas extra":cmR(q.hx), ...(ver?{ "Costo":Math.round(q.costo) }:{}) })));
+  const lineas=ls.map(l=>({ "Semana":l.lunes, "Fecha":l.fecha, "Persona":cmNombre(l.pid), "Tipo":l.ext?"Externo":"Interno", "Proyecto":cmProyTxt(l.proyectoId), "Lugar":(CM_LUGARES[l.lugar]||l.lugar).split(" (")[0], "Horas":Number(l.h)||0, "Horas extra":Number(l.hx)||0, "Estado":l.estado, "Nota":l.nota||"", ...(ver?{ "Costo":Math.round(l.costo) }:{}) }));
+  const gantt=M.filas.map(f=>{ const o={ "Proyecto / persona":(f.tipo==="x"?"   ":"")+f.label }; M.cols.forEach((c,i)=>{ o[M.semanal?"Sem "+c:c]=cmTxtCel(f.cells[i]); }); o["Horas"]=cmR(f.h+f.hx); if(ver) o["Costo"]=Math.round(f.costo); return o; });
+  return { resumen, personas, lineas, gantt, R, M, ver };
+}
+async function cmExcel(){
+  if(!(await asegurarXLSX())){ toast("No se pudo cargar el generador de Excel.","danger"); return; }
+  const F=cmFilasExcel(), wb=XLSX.utils.book_new(); const hoja=(n,d)=>XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(d.length?d:[{"(sin datos)":""}]),n);
+  hoja("Resumen por proyecto",F.resumen); hoja("Detalle por persona",F.personas); hoja("Gantt por fechas",F.gantt); hoja("Líneas",F.lineas);
+  XLSX.writeFile(wb,`Costos_personal_${cmDesde}_${cmHasta}.xlsx`);
+}
+async function cmPdf(){
+  if(!(await asegurarPDF())){ toast("No se pudo cargar el generador de PDF.","danger"); return; }
+  const ver=cmPuedeVer(), ls=cmLineasPeriodo(cmDesde,cmHasta,cmInc,cmProy), R=cmResumen(ls), M=cmMatriz(R,cmDesde,cmHasta), { jsPDF }=window.jspdf, doc=new jsPDF({orientation:"landscape",unit:"mm",format:"a4"});
+  tpPdfLogo(doc,297,10,6); doc.setFontSize(15); doc.setFont(undefined,"bold"); doc.text("ALUTIPO — Horas y costos de personal",14,15); doc.setFontSize(10); doc.setFont(undefined,"normal");
+  doc.text(`Período ${cmDesde} a ${cmHasta}${cmProy?" · "+cmProyTxt(cmProy):""} · Emitido ${hoyISO()} por ${DB.usuario||""}${cmInc?" · incluye semanas sin confirmar":""}`,14,21);
+  doc.autoTable({ startY:25, head:[["Proyecto","Horas","Extra",...(ver?["Internos","Externos","Total"]:[])]], body:R.proys.map(p=>[cmProyTxt(p.pid)+(p.pid?" · "+proy(p.pid).nombre:""),tpHtxt(p.h),tpHtxt(p.hx),...(ver?[money(Math.round(p.int)),money(Math.round(p.ext)),money(Math.round(p.costo))]:[])]).concat(ver?[[{content:"TOTAL",styles:{fontStyle:"bold"}},tpHtxt(R.tot.h),tpHtxt(R.tot.hx),money(Math.round(R.tot.int)),money(Math.round(R.tot.ext)),{content:money(Math.round(R.tot.costo)),styles:{fontStyle:"bold"}}]]:[]), theme:"grid", styles:{fontSize:8.5,cellPadding:1.8}, headStyles:{fillColor:[193,113,46]}, margin:{left:10,right:10} });
+  if(M.filas.length){ doc.addPage("a4","landscape"); tpPdfLogo(doc,297,10,6); doc.setFontSize(13); doc.setFont(undefined,"bold"); doc.text("Gantt por fechas — horas por persona y proyecto",14,14); doc.setFont(undefined,"normal");
+    const cw=Math.max(5,Math.min(9,(297-20-75-(ver?24:0)-12)/M.cols.length)), cs={0:{cellWidth:75}}; M.cols.forEach((c,i)=>{ cs[i+1]={cellWidth:cw,halign:"center"}; });
+    doc.autoTable({ startY:18, head:[["Proyecto / persona",...M.head.map(h=>h.replace("\n"," ")),"Horas",...(ver?["Costo"]:[])]], body:M.filas.map(f=>[{content:(f.tipo==="x"?"   ":"")+f.label,styles:f.tipo==="p"?{fontStyle:"bold",fillColor:[250,243,234],textColor:[161,90,29]}:{}},...f.cells.map(c=>({content:cmTxtCel(c),styles:{fillColor:(c.h+c.hx)>0.01?(c.hx>0.01?[253,224,184]:(f.tipo==="p"?[201,220,239]:[223,234,245])):[255,255,255]}})),tpHtxt(f.h+f.hx),...(ver?[money(Math.round(f.costo))]:[])]), theme:"grid", styles:{fontSize:6.5,cellPadding:0.8,overflow:"ellipsize"}, headStyles:{fillColor:[241,236,230],textColor:[60,60,60],fontSize:6,halign:"center"}, columnStyles:cs, margin:{left:10,right:10} });
+    doc.setFontSize(7); doc.text("Número = horas del día (⏱ incluye horas extra). Azul = ordinarias · naranja = con horas extra.",14,(doc.lastAutoTable.finalY||190)+5); }
+  doc.save(`Costos_personal_${cmDesde}_${cmHasta}.pdf`);
+}
+/* ---------- Correo al PM ---------- */
+function cmHtmlCorreo(){
+  const ver=cmPuedeVer(), ls=cmLineasPeriodo(cmDesde,cmHasta,cmInc,cmProy), R=cmResumen(ls), M=cmMatriz(R,cmDesde,cmHasta), esc=escaparHtml;
+  const th="border:1px solid #ddd;background:#f1ece6;padding:3px 6px;font-size:11px;text-align:left", td="border:1px solid #ddd;padding:3px 6px;font-size:12px";
+  const pm=cmProy?(proy(cmProy)||{}).pm:"";
+  const bloques=R.proys.map(p=>`<div style="margin:12px 0 2px;font-weight:bold;color:#a15a1d">${esc(cmProyTxt(p.pid))}${p.pid?' · '+esc(proy(p.pid).nombre):''}</div><table style="border-collapse:collapse;width:100%"><tr><th style="${th}">Persona</th><th style="${th}">Tipo</th><th style="${th};text-align:right">Horas</th><th style="${th};text-align:right">Extra</th>${ver?`<th style="${th};text-align:right">Costo</th>`:''}</tr>
+    ${Object.values(p.pers).sort((a,b)=>cmNombre(a.pid).localeCompare(cmNombre(b.pid))).map(q=>`<tr><td style="${td}">${esc(cmNombre(q.pid))}</td><td style="${td}">${cmTarifa(q.pid).ext?'Externo':'Interno'}</td><td style="${td};text-align:right">${tpHtxt(q.h)}</td><td style="${td};text-align:right">${tpHtxt(q.hx)}</td>${ver?`<td style="${td};text-align:right">${money(Math.round(q.costo))}</td>`:''}</tr>`).join("")}
+    <tr><td style="${td}" colspan="2"><b>Total proyecto</b></td><td style="${td};text-align:right"><b>${tpHtxt(p.h)}</b></td><td style="${td};text-align:right"><b>${tpHtxt(p.hx)}</b></td>${ver?`<td style="${td};text-align:right"><b>${money(Math.round(p.costo))}</b></td>`:''}</tr></table>`).join("");
+  return `<div style="font-family:Arial,Helvetica,sans-serif;color:#222;font-size:13px;max-width:980px"><div style="font-size:17px;font-weight:bold">Horas y costos de personal — ${esc(distDiaTxt(cmDesde))} al ${esc(distDiaTxt(cmHasta))}</div>
+    ${pm?`<div style="color:#555;margin:2px 0">Para: ${esc(pm)}</div>`:''}<div style="margin:6px 0">Horas totales: <b>${tpHtxt(R.tot.h+R.tot.hx)}</b> (extra ${tpHtxt(R.tot.hx)})${ver?` · Costo total: <b>${money(Math.round(R.tot.costo))}</b> (internos ${money(Math.round(R.tot.int))}, externos ${money(Math.round(R.tot.ext))})`:''}</div>
+    ${bloques||'<div>Sin horas confirmadas en el período.</div>'}<div style="margin:14px 0 4px;font-weight:bold">Gantt por fechas</div>${cmHtmlGantt(M,ver).replace(/<div class="hint"[^>]*>/,'<div style="font-size:11px;color:#777">')}
+    <div style="margin-top:8px;font-size:11px;color:#777">Horas reales confirmadas por el equipo${cmInc?' (incluye semanas aún sin confirmar)':''}. Costos con tarifa vigente; internos con costo empresa, externos según contrato.</div></div>`;
+}
+function cmModalCorreo(){
+  if(!cmPuedeVer()){ toast("Tu rol no puede enviar costos.","danger"); return; }
+  const pmN=cmProy?(proy(cmProy)||{}).pm:"", para=pmN?(cmDB().cfg.correos[cmKeyPM(pmN)]||""):"";
+  openModal(`<div class="modal-head"><h3>Enviar costos de personal al PM</h3><button class="close-x" onclick="closeModal()">✕</button></div><div class="modal-body" style="display:grid;gap:10px">
+    <label class="small muted">Para<input type="text" id="cmPara" value="${escaparHtml(para)}" placeholder="correo del PM"></label>
+    <label class="small muted">Asunto<input type="text" id="cmAsunto" value="${escaparHtml("Horas y costos de personal – "+(cmProy?cmProyTxt(cmProy)+" – ":"")+distDiaTxt(cmDesde)+" al "+distDiaTxt(cmHasta))}"></label>
+    <div class="hint">Pulsa <b>Copiar con formato</b>, abre el correo y pega con Ctrl+V (adjunta el Excel o el PDF si lo quieres con detalle).</div>
+    <div id="cmPrev" style="border:1px solid var(--line);border-radius:8px;background:#fff;padding:12px;max-height:340px;overflow:auto">${cmHtmlCorreo()}</div></div>
+    <div class="modal-foot" style="flex-wrap:wrap;gap:6px"><button class="btn" onclick="closeModal()">Cerrar</button><button class="btn" onclick="cmExcel()">📊 Excel</button><button class="btn" onclick="cmPdf()">📄 PDF</button><button class="btn" onclick="cmMarcarEnviado(); closeModal()">✔ Marcar como enviado</button><button class="btn" onclick="cmCorreoAbrir()">✉ Outlook web</button><button class="btn btn-primary" onclick="cmCorreoCopiar()">📋 Copiar con formato</button></div>`,900);
+}
+function cmCorreoConfirmar(){ const Q=cmCalidad(cmDesde,cmHasta).filter(x=>x.n==="crit"); return !Q.length||confirm("⛔ Antes de enviar:\n\n"+Q.map(x=>"• "+x.t).join("\n")+"\n\n¿Enviar de todas formas?"); }
+async function cmCorreoCopiar(sil){
+  if(!sil&&!cmCorreoConfirmar()) return false; const html=cmHtmlCorreo(), div=document.createElement("div"); div.innerHTML=html; const txt=div.innerText;
+  try{ await navigator.clipboard.write([new ClipboardItem({"text/html":new Blob([html],{type:"text/html"}),"text/plain":new Blob([txt],{type:"text/plain"})})]); if(!sil) toast("Copiado con formato. Pégalo en el correo con Ctrl+V.","ok"); return true; }
+  catch(e){ try{ const el=document.getElementById("cmPrev"), r=document.createRange(); r.selectNodeContents(el); const s=window.getSelection(); s.removeAllRanges(); s.addRange(r); const ok=document.execCommand("copy"); s.removeAllRanges(); if(!sil) toast(ok?"Copiado.":"No se pudo copiar.",ok?"ok":"danger"); return ok; }catch(e2){ return false; } }
+}
+async function cmCorreoAbrir(){
+  if(!cmCorreoConfirmar()) return; await cmCorreoCopiar(true); const para=document.getElementById("cmPara").value.trim(), asu=document.getElementById("cmAsunto").value;
+  window.open(`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(para)}&subject=${encodeURIComponent(asu)}&body=${encodeURIComponent("Pega aquí el informe con Ctrl+V (ya quedó copiado).")}`,"_blank");
+  toast("Informe copiado. En el correo, pega con Ctrl+V. Luego marca la semana como enviada en «Envío y recordatorios».","ok");
 }
 
 /* =====================================================================

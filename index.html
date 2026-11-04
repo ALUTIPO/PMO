@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.25.1";
+const APP_VERSION = "3.26.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -979,7 +979,8 @@ function presupuesto(p) {
     if(c.estado==="Recibido") ejecutado += montoNeto;
   });
   (p.comprasDirectas||[]).forEach(cd => {
-    if(cd.estado==="Registrada") ejecutado += Number(cd.montoReal)||0;
+    if(cd.estado==="Registrada") ejecutado += cdNetoReal(cd);
+    else if(cd.estado==="Autorizada") comprometido += Number(cd.montoEstimado)||0;
   });
   const emerUsada = (p.emergenciaUsada||0);
   const realUsado = comprometido+ejecutado;
@@ -4111,11 +4112,14 @@ function registrarCompraDirecta(pid, id, datos) {
   if (!datos.metodoPago) { toast("Indica el método de pago.", "danger"); return false; }
   if (datos.metodoPago==="Tarjeta" && !(datos.codigoVoucher||"").trim()) { toast("Indica el código del voucher.", "danger"); return false; }
   if (datos.metodoPago==="Efectivo" && !(datos.numeroFactura||"").trim()) { toast("Indica el N° de factura o boleta.", "danger"); return false; }
+  if (!(cdNum(datos.montoReal) > 0)) { toast("Indica el monto real pagado.", "danger"); return false; }
   Object.assign(cd, {
     metodoPago: datos.metodoPago,
     codigoVoucher: datos.metodoPago==="Tarjeta" ? datos.codigoVoucher.trim() : "",
     numeroFactura: datos.metodoPago==="Efectivo" ? datos.numeroFactura.trim() : "",
-    montoReal: Number(datos.montoReal)||0,
+    montoReal: cdNum(datos.montoReal),
+    incluyeIva: datos.incluyeIva!==false,
+    montoNeto: Math.round(datos.incluyeIva!==false ? cdNum(datos.montoReal)/(1+CD_IVA) : cdNum(datos.montoReal)),
     proveedor: (datos.proveedor||"").trim(),
     fechaCompra: datos.fechaCompra || hoyISO(),
     archivoComprobante: datos.archivoComprobante||"",
@@ -4123,9 +4127,77 @@ function registrarCompraDirecta(pid, id, datos) {
     estado: "Registrada",
   });
   registrarHistorial({proyecto:p.codigo, accion:"Modificar", detalle:`Compra directa registrada: ${resumenItemsCompraDirecta(cd.items,80)} — ${money(cd.montoReal)} (${cd.metodoPago})`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"});
-  toast("Compra registrada y sumada al presupuesto ejecutado.", "ok");
+  const nIng = datos.destinos ? cdIngresar(p, cd, datos.destinos) : 0;
+  toast(`Compra registrada: ${money(cdNetoReal(cd))} netos al presupuesto ejecutado${nIng?` y ${nIng} producto(s) ingresado(s)`:' (falta ingresar el material a bodega)'}.`, "ok");
   guardarEstado();
   return true;
+}
+
+/* ---- V3.26.0: Compras directas → bodega + presupuesto consolidados ---- */
+const CD_IVA = 0.19;
+const CD_DESTINOS = { proyecto:"Bodega del proyecto", central:"Bodega Central (general)", consumo:"Consumo directo (no se almacena)" };
+function cdNum(v){
+  let t=String(v==null?"":v).replace(/[^\d.,-]/g,"");
+  if(t.includes(",")) t=t.replace(/\./g,"").replace(",",".");
+  else if(/^-?\d{1,3}(\.\d{3})+$/.test(t)) t=t.replace(/\./g,"");
+  return Number(t)||0;
+}
+function cdNetoReal(cd){ return Number(cd.montoNeto)>0 ? Number(cd.montoNeto) : (Number(cd.montoReal)||0); }
+function cdFactorReal(cd){   // cuánto del precio estimado fue lo realmente pagado (neto)
+  const est=(cd.items||[]).reduce((a,it)=>a+(Number(it.montoNeto)||0),0), real=cdNetoReal(cd);
+  return est>0&&real>0 ? real/est : 1;
+}
+function cdPendienteIngreso(cd){ return cd.estado==="Registrada" && (cd.items||[]).some(it=>!it.ingresado); }
+function cdPendientes(){
+  const out=[]; proyectosDelAreaTodos().forEach(p=>(p.comprasDirectas||[]).forEach(cd=>{ if(cdPendienteIngreso(cd)) out.push({p,cd}); })); return out;
+}
+/* Ingresa los productos de una compra directa registrada al destino elegido */
+function cdIngresar(p,cd,destinos){
+  const k=cdFactorReal(cd), doc=cd.numeroFactura||cd.codigoVoucher||cd.id, hechos=[];
+  (cd.items||[]).forEach((it,i)=>{
+    const d=destinos[i]; if(!d||it.ingresado) return; const qty=Number(d.cantidad!==undefined?d.cantidad:it.cantidad)||0; if(qty<=0||!CD_DESTINOS[d.destino]) return;
+    const cod=(d.codigo||it.codigo||"").trim(), unit=Math.round((Number(it.costoNeto)||0)*k*100)/100;
+    if(d.destino==="proyecto"){
+      ingresarBodegaPorRecepcion(p,[{ descripcion:it.descripcion, cantidad:qty, unidad:it.unidad||"unidad", codigo:cod, costoNeto:unit }], "compra directa "+doc);
+    } else if(d.destino==="central"){
+      let b=(cod?buscarBodegaGeneralPorCodigo(cod):null)||buscarBodegaGeneralPorNombre(it.descripcion);
+      if(!b){ b={ codigo:cod||("MAT-G-"+String(1000+DB.bodegaGeneral.length+Math.floor(Math.random()*900))), material:it.descripcion, stock:0, unidad:it.unidad||"unidad", minimo:0, precioUnitario:0 }; DB.bodegaGeneral.push(b); }
+      const antes=Number(b.stock)||0; if(unit>0) b.precioUnitario=antes>0&&b.precioUnitario?Math.round((antes*b.precioUnitario+qty*unit)/(antes+qty)):Math.round(unit); b.stock=antes+qty;
+      registrarMovimientoBodega({ tipo:"Ingreso por compra directa", signo:1, codigo:b.codigo, material:it.descripcion, unidad:it.unidad||"", cantidad:qty, costoUnitario:unit, total:Math.round(qty*unit), documento:doc, compraDirectaId:cd.id, proyectoCodigo:p.codigo, origenTipo:"Proveedor", origenDetalle:cd.proveedor||"", ubicDestino:"Por ubicar", estadoInforme:"No aplica" });
+    }
+    it.ingresado=true; it.ingresadoA=CD_DESTINOS[d.destino]; it.ingresadoFecha=hoyISO(); it.cantidadIngresada=qty; it.ingresadoPor=DB.usuario; hechos.push(`${it.descripcion} ×${qty} → ${CD_DESTINOS[d.destino]}`);
+  });
+  if(hechos.length){ cd.ingresoBodega={ fecha:hoyISO(), por:DB.usuario };
+    registrarHistorial({proyecto:p.codigo, accion:"Modificar", detalle:`Compra directa ${cd.id} ingresada: ${hechos.join("; ")}`.slice(0,300), usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"}); }
+  return hechos.length;
+}
+function cdModalIngreso(pid,id){
+  const p=proy(pid), cd=p&&(p.comprasDirectas||[]).find(x=>x.id===id); if(!cd) return;
+  if(!(puedeGestionarBodega()||puedeRegistrarCompraDirecta(cd))){ toast("Tu rol no puede ingresar material a bodega.","danger"); return; }
+  const filas=(cd.items||[]).map((it,i)=>it.ingresado?`<tr><td>${escaparHtml(it.descripcion)}</td><td>${it.cantidad} ${escaparHtml(it.unidad||"")}</td><td colspan="2" class="small" style="color:var(--ok)">✔ ya ingresado a ${escaparHtml(it.ingresadoA||"")} el ${it.ingresadoFecha||""}</td></tr>`
+    :`<tr><td>${escaparHtml(it.descripcion)}</td><td><input type="number" min="0" step="1" id="cdIQ_${i}" value="${it.cantidad}" style="width:80px"> ${escaparHtml(it.unidad||"")}</td><td><input type="text" id="cdIC_${i}" value="${escaparHtml(it.codigo||"")}" placeholder="código (opcional)" style="width:130px"></td>
+    <td><select id="cdID_${i}">${Object.entries(CD_DESTINOS).map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}</select></td></tr>`).join("");
+  openModal(`<div class="modal-head"><h3>Ingresar a bodega — ${escaparHtml(cd.id)}</h3><button class="close-x" onclick="closeModal()">✕</button></div><div class="modal-body">
+    <p class="small muted">Compra de ${escaparHtml(cd.proveedor||"—")} (${escaparHtml(cd.numeroFactura||cd.codigoVoucher||"sin doc.")}). Elige dónde queda cada producto. El costo unitario se calcula con lo realmente pagado (neto): ${money(Math.round(cdNetoReal(cd)))}.</p>
+    <div class="table-wrap"><table><tr><th>Producto</th><th>Cantidad</th><th>Código</th><th>Destino</th></tr>${filas}</table></div></div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="cdAplicarIngreso('${pid}','${id}')">Ingresar</button></div>`,760);
+}
+function cdAplicarIngreso(pid,id){
+  const p=proy(pid), cd=p.comprasDirectas.find(x=>x.id===id); if(!cd) return;
+  const dest=(cd.items||[]).map((it,i)=>{ const q=document.getElementById('cdIQ_'+i); return q?{ cantidad:q.value, codigo:document.getElementById('cdIC_'+i).value, destino:document.getElementById('cdID_'+i).value }:null; });
+  const n=cdIngresar(p,cd,dest); if(!n){ toast("No hay cantidades para ingresar.","danger"); return; }
+  guardarEstado(); closeModal(); renderAll(); toast(`${n} producto(s) ingresado(s).`,"ok");
+}
+function cdAvisoPendientes(){
+  const L=cdPendientes(); if(!L.length) return "";
+  return `<div class="card" style="border-color:#e6cf99;background:#fff8e6;margin-bottom:12px"><b>📦 ${L.length} compra(s) directa(s) registrada(s) con material sin ingresar a bodega</b>
+    <div class="small" style="margin-top:4px">${L.map(({p,cd})=>`<div style="margin-top:3px"><b>${escaparHtml(p.codigo)}</b> · ${escaparHtml(resumenItemsCompraDirecta(cd.items,70))} · ${money(Math.round(cdNetoReal(cd)))} <button class="btn btn-sm" onclick="DB.proyectoActivo='${p.id}'; cdModalIngreso('${p.id}','${cd.id}')">Ingresar</button></div>`).join("")}</div></div>`;
+}
+function cdTablaPresupuesto(p){
+  const L=(p.comprasDirectas||[]).filter(cd=>cd.estado!=="Rechazada"); if(!L.length) return "";
+  return `<div class="section-label" style="margin-top:16px">Compras directas (montos netos, sin IVA)</div><div class="table-wrap"><table><tr><th>ID</th><th>Productos</th><th>Estado</th><th>Monto neto</th><th>Clasificación presupuestaria</th><th>Bodega</th></tr>
+    ${L.map(cd=>{ const reg=cd.estado==="Registrada", cl=reg?"Ejecutado":(cd.estado==="Autorizada"?"Comprometido (estimado)":"Sin comprometer");
+      return `<tr><td class="mono">${cd.id}</td><td class="small">${escaparHtml(resumenItemsCompraDirecta(cd.items,80))}</td><td>${badgeCompraDirecta(cd.estado)}</td><td class="mono small">${money(Math.round(reg?cdNetoReal(cd):(Number(cd.montoEstimado)||0)))}</td><td class="small">${cl}</td><td class="small">${reg?(cdPendienteIngreso(cd)?'<span style="color:#b3261e">⚠ sin ingresar</span>':'✔ ingresado'):'—'}</td></tr>`; }).join("")}</table></div>`;
 }
 
 let _cdEditItems = [];
@@ -4261,7 +4333,11 @@ function modalRegistrarCompraDirecta(pid, id) {
         <input type="text" id="cdFactura" placeholder="Ej: Boleta 4521">
       </div>
       <label class="field-label">Monto real pagado</label>
-      <input type="text" id="cdMontoReal" value="${cd.montoEstimado||0}">
+      <input type="text" id="cdMontoReal" value="${Math.round((cd.montoEstimado||0)*(1+CD_IVA))}">
+      <label class="small flex-gap" style="margin-top:4px"><input type="checkbox" id="cdIncluyeIva" checked> El monto pagado incluye IVA (el presupuesto se lleva en neto)</label>
+      <div class="hint">Estimado neto ${money(cd.montoEstimado||0)} · con IVA ≈ ${money(Math.round((cd.montoEstimado||0)*(1+CD_IVA)))}</div>
+      <label class="field-label" style="margin-top:10px">¿Dónde queda el material?</label>
+      <div class="table-wrap"><table>${(cd.items||[]).map((it,i)=>`<tr><td class="small">${escaparHtml(it.descripcion)} (${it.cantidad} ${escaparHtml(it.unidad||'')})</td><td><select id="cdRD_${i}">${Object.entries(CD_DESTINOS).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></td></tr>`).join('')}</table></div>
       <label class="field-label">Proveedor / tienda</label>
       <input type="text" id="cdProveedor" placeholder="Ej: Ferretería Central">
       <label class="field-label">Fecha de compra</label>
@@ -4293,7 +4369,8 @@ async function registrarCompraDirectaConArchivo(pid, id) {
       numeroFactura: document.getElementById('cdFactura').value,
       montoReal: document.getElementById('cdMontoReal').value,
       proveedor, fechaCompra: document.getElementById('cdFechaCompra').value,
-      archivoComprobante,
+      archivoComprobante, incluyeIva: document.getElementById('cdIncluyeIva').checked,
+      destinos: (cd.items||[]).map((it,i)=>({ destino: (document.getElementById('cdRD_'+i)||{}).value||'proyecto' })),
     });
     if (ok) { closeModal(); renderAll(); }
     else if (btn) { btn.disabled = false; btn.textContent = "Registrar compra"; }
@@ -4342,6 +4419,7 @@ function renderComprasDirectas() {
     </div>
     <div class="flex-gap">${selectorProyectos()}<button class="btn btn-primary" onclick="modalSolicitarCompraDirecta('${p.id}')">+ Solicitar compra</button></div>
   </div>
+  ${cdAvisoPendientes()}
   <div class="stack">
   ${lista.length ? lista.map(cd => `
     <div class="card">
@@ -4352,13 +4430,14 @@ function renderComprasDirectas() {
           <p class="hint" style="margin-top:2px;">${cd.motivo||'sin motivo detallado'}</p>
           <p class="small">Solicitado por <b>${cd.solicitadoPor}</b> · ${cd.items.length} producto(s) · Estimado ${money(cd.montoEstimado)}</p>
           ${cd.estado!=="Solicitada" ? `<p class="small muted">${cd.estado==="Rechazada"?"Rechazada":"Autorizada"} por ${cd.autorizadoPor} el ${cd.fechaAutorizacion}${cd.comentarioAutorizacion?': "'+cd.comentarioAutorizacion+'"':''}</p>` : ''}
-          ${cd.estado==="Registrada" ? `<p class="small">Compra real: <b>${money(cd.montoReal)}</b> · ${cd.metodoPago}${cd.metodoPago==="Tarjeta"?(' · voucher '+cd.codigoVoucher):(' · factura/boleta '+cd.numeroFactura)} · ${cd.proveedor} · ${cd.fechaCompra}${cd.archivoComprobante?` · <a href="${cd.archivoComprobante}" target="_blank" rel="noopener">[ver comprobante]</a>`:''}</p>` : ''}
+          ${cd.estado==="Registrada" ? `<p class="small">Compra real: <b>${money(cd.montoReal)}</b>${cd.montoNeto?` (neto ${money(cd.montoNeto)})`:''} · ${cd.metodoPago}${cd.metodoPago==="Tarjeta"?(' · voucher '+cd.codigoVoucher):(' · factura/boleta '+cd.numeroFactura)} · ${cd.proveedor} · ${cd.fechaCompra}${cd.archivoComprobante?` · <a href="${cd.archivoComprobante}" target="_blank" rel="noopener">[ver comprobante]</a>`:''}</p>` : ''}
         </div>
-        <div class="flex-gap">${badgeCompraDirecta(cd.estado)}</div>
+        <div class="flex-gap">${badgeCompraDirecta(cd.estado)}${cd.estado==="Registrada"?(cdPendienteIngreso(cd)?'<span class="badge b-amarillo"><span class="dot"></span>Sin ingresar a bodega</span>':'<span class="badge b-verde"><span class="dot"></span>En bodega</span>'):''}</div>
       </div>
       <div class="flex-gap" style="margin-top:10px; flex-wrap:wrap;">
         ${cd.estado==="Solicitada" && puedeAutorizarCompraDirecta() ? `<button class="btn btn-sm btn-primary" onclick="modalAutorizarCompraDirecta('${p.id}','${cd.id}')">Revisar y autorizar</button>` : ''}
         ${cd.estado==="Autorizada" && puedeRegistrarCompraDirecta(cd) ? `<button class="btn btn-sm btn-primary" onclick="modalRegistrarCompraDirecta('${p.id}','${cd.id}')">Registrar compra</button>` : ''}
+        ${cdPendienteIngreso(cd) && (puedeGestionarBodega()||puedeRegistrarCompraDirecta(cd)) ? `<button class="btn btn-sm btn-primary" onclick="cdModalIngreso('${p.id}','${cd.id}')">📦 Ingresar a bodega</button>` : ''}
         <button class="btn btn-sm btn-ghost" onclick="avisarWhatsAppCompraDirecta('${p.id}','${cd.id}')" title="${cd.estado==='Solicitada'?'Avisar al PM para que la autorice':'Avisar el resultado a quien la solicitó'}">💬 WhatsApp</button>
       </div>
     </div>
@@ -6223,6 +6302,7 @@ function renderPresupuesto() {
       }).join('') : `<tr><td colspan="5"><div class="empty-state">Sin cotizaciones registradas aún.</div></td></tr>`}
     </table>
   </div>
+  ${cdTablaPresupuesto(p)}
   `;
 }
 

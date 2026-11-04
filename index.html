@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.23.0";
+const APP_VERSION = "3.24.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -13332,32 +13332,139 @@ function tpPrimerNombre(n){ return String(n).split(" ")[0]; }
 function tpProyEtiq(pid){ const p=pid?proy(pid):null; return p?`${p.codigo} · ${p.nombre}`:"Sin proyecto"; }
 function tpProyCod(pid){ const p=pid?proy(pid):null; return p?p.codigo:"Sin proyecto"; }
 function tpAgrupaPorProyecto(lista,fpid){ const m={}, orden=[]; lista.forEach(x=>{ const k=fpid(x); if(!m[k]){ m[k]=[]; orden.push(k); } m[k].push(x); }); return orden.map(k=>({pid:k,items:m[k]})); }
-function tpHtmlGerencia(plan,quien){
-  const items=tpItemsDe(plan,quien).filter(i=>i.ini&&i.fin); const per=quien==="equipo"?null:DB.personal.find(p=>p.id===quien);
-  if(!items.length) return `<div style="font-family:Arial,sans-serif">Sin trabajos programados.</div>`;
-  const dias=tpResumenDias(items), semanas=tpSemanasResumen(items), g=tpGrupos({items});
-  const pids=[...new Set(items.map(i=>i.proyectoId||""))], unico=pids.length===1;
-  const personas=[...new Set(items.flatMap(i=>tpNombres(i)))], rango=tpRango(plan,items);
-  const nom=["Lunes","Martes","Miércoles","Jueves","Viernes"], mes=["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
-  const celda=d=>{ const dt=new Date(d+"T12:00:00Z"), e=Object.values(dias[d]||{});
-    const cuerpo=tpAgrupaPorProyecto(e,x=>x.pid).map(gp=>`${unico?'':`<div style="font-size:10px;font-weight:bold;color:#a15a1d;margin:2px 0 3px">${escaparHtml(tpProyCod(gp.pid))}</div>`}${gp.items.map(x=>`<div style="margin-bottom:5px"><b>${escaparHtml(x.nombre)}</b><br><span style="color:#444">${escaparHtml(x.personas.join(", ")||"sin asignar")}</span></div>`).join("")}`).join("");
-    return `<td style="width:20%;vertical-align:top;border:1px solid #d9d2c9;padding:0;font-family:Arial,Helvetica,sans-serif"><div style="background:#c1712e;color:#fff;font-size:11px;font-weight:bold;padding:3px 6px">${nom[dt.getUTCDay()-1]} ${dt.getUTCDate()} ${mes[dt.getUTCMonth()]}</div>
-      <div style="padding:5px 6px;font-size:12px;min-height:40px">${e.length?cuerpo:'<span style="color:#aaa">—</span>'}</div></td>`; };
-  const fil=(x)=>{ const its=x.items, f=tpIniFinGrupo(its), hh=its.reduce((a,i)=>a+tpHorasEf(i),0), av=hh?Math.round(its.reduce((a,i)=>a+(Number(i.horas)||0)*(Number(i.avance)||0),0)/Math.max(1,its.reduce((a,i)=>a+(Number(i.horas)||0),0))):0;
-    const td="border:1px solid #ddd;padding:3px 6px;font-size:12px"; return `<tr><td style="${td}"><b>${escaparHtml(its[0].tablero||"Trabajos varios")}</b></td><td style="${td}">${escaparHtml([...new Set(its.flatMap(i=>tpNombres(i)))].join(", ")||"sin asignar")}</td><td style="${td};white-space:nowrap">${distDiaTxt(f.ini)} → ${distDiaTxt(f.fin)}</td><td style="${td};text-align:right">${av}%</td></tr>`; };
-  const resumen=tpAgrupaPorProyecto(g,x=>x.items[0].proyectoId||"").map(gp=>`${unico?'':`<tr><td colspan="4" style="background:#faf3ea;border:1px solid #ddd;padding:3px 6px;font-size:12px;font-weight:bold;color:#a15a1d">${escaparHtml(tpProyEtiq(gp.pid))}</td></tr>`}${gp.items.map(fil).join("")}`).join("");
-  return `<div style="font-family:Arial,Helvetica,sans-serif;color:#222;font-size:13px;max-width:900px">
-    <div style="font-size:17px;font-weight:bold">Programa de taller – ${escaparHtml(rango)}${per?' – '+escaparHtml(per.nombre):''}</div>
-    ${unico?`<div style="margin-top:2px;font-weight:bold;color:#a15a1d">${escaparHtml(tpProyEtiq(pids[0]))}</div>`:''}
-    <div style="margin:4px 0 10px;color:#555">${g.length} tablero(s) · ${personas.length} persona(s): ${escaparHtml(personas.map(tpPrimerNombre).join(", "))}</div>
-    ${semanas.map(s=>`<table style="border-collapse:collapse;width:100%;table-layout:fixed;margin-bottom:8px"><tr>${s.map(celda).join("")}</tr></table>`).join("")}
-    <div style="margin:12px 0 4px;font-weight:bold">Fechas de término por tablero</div>
-    <table style="border-collapse:collapse;width:100%"><tr>${["Tablero","Quién","Fechas","Avance"].map(t=>`<th style="border:1px solid #ddd;background:#f1ece6;padding:3px 6px;font-size:11px;text-align:left">${t}</th>`).join("")}</tr>${resumen}</table></div>`;
+/* ---- V3.24.0: Correo a gerencia rediseñado (calendario por proyecto, entregas según Gantt, personal y horas extra) ---- */
+const TP_MAX_EXTRA_DIA = 2;     // Código del Trabajo, art. 31: máximo 2 horas extra por día
+const TP_MAX_SEMANA = 42;       // jornada ordinaria semanal máxima vigente desde abril de 2026
+const TP_DIAS_C = ["Lunes","Martes","Miércoles","Jueves","Viernes"];
+function tpHtxt(h){ return String(Math.round(h*10)/10).replace(".",","); }
+function tpFechaCorta(d){ const dt=new Date(d+"T12:00:00Z"); return TP_DIAS_C[dt.getUTCDay()-1].slice(0,3)+" "+dt.getUTCDate()+" "+DIST_MESES[dt.getUTCMonth()]; }
+function tpGerSemanas(plan){
+  const its=plan.items.filter(i=>i.ini&&i.fin); if(!its.length) return [plan.lunes];
+  const ini=its.reduce((m,i)=>i.ini<m?i.ini:m,its[0].ini), fin=its.reduce((m,i)=>i.fin>m?i.fin:m,its[0].fin), out=[];
+  for(let l=tpLunesDe(ini),n=0;l<=fin&&n<12;l=sumarDias(l,7),n++) out.push(l);
+  return out.length?out:[plan.lunes];
 }
-function tpTextoGerencia(plan,quien){
-  const items=tpItemsDe(plan,quien).filter(i=>i.ini&&i.fin); if(!items.length) return "Sin trabajos programados.";
-  const dias=tpResumenDias(items), ds=Object.keys(dias).sort(), unico=new Set(items.map(i=>i.proyectoId||"")).size===1;
-  return `Programa de taller – ${tpRango(plan,items)}\n${unico?tpProyEtiq(items[0].proyectoId||"")+"\n":""}\n`+ds.map(d=>`${distDiaTxt(d)}\n`+tpAgrupaPorProyecto(Object.values(dias[d]),x=>x.pid).map(gp=>`${unico?"":"  "+tpProyCod(gp.pid)+"\n"}`+gp.items.map(x=>`  • ${x.nombre}: ${x.personas.join(", ")||"sin asignar"}`).join("\n")).join("\n")).join("\n\n");
+function tpGerModelo(plan,quien,lunes){
+  lunes=lunes||plan.lunes;
+  const todos=tpItemsDe(plan,quien).filter(i=>i.ini&&i.fin), dias=[0,1,2,3,4].map(k=>sumarDias(lunes,k));
+  const semana=todos.filter(i=>tpDias(i.ini,i.fin).some(d=>dias.includes(d)));
+  /* calendario: proyecto -> día -> tableros (sin personas) */
+  const pm={}, orden=[];
+  semana.forEach(it=>{ const pid=it.proyectoId||""; if(!pm[pid]){ pm[pid]={ pid, dias:{} }; orden.push(pid); }
+    tpDias(it.ini,it.fin).forEach(d=>{ if(!dias.includes(d)) return; const a=pm[pid].dias[d]=pm[pid].dias[d]||[], n=it.tablero||"Trabajos varios"; if(!a.includes(n)) a.push(n); }); });
+  orden.sort((a,b)=>tpProyCod(a).localeCompare(tpProyCod(b)));
+  const proys=orden.map(k=>pm[k]);
+  /* personal con su horario real (plan semanal) */
+  const M=psModelo(lunes), ids=new Set(semana.flatMap(i=>i.responsables));
+  const personas=[...ids].map(id=>DB.personal.find(p=>p.id===id)).filter(Boolean).map(p=>{
+    const cel=M.dias.map((d,k)=>{
+      if(!d.gente.includes(p.id)) return { trab:false, txt:"—", nivel:0, extra:0, k };
+      const j=d.jor[p.id], hT=d.hT[p.id]||0, norm=psSalidaNormal(M.cfg,d.fecha), cap=psCapDia(M.cfg,d.fecha);
+      const extraSal=j.modo==="extra"?Math.max(0,(psHM(j.salida)-psHM(norm))/60):0, extraNec=Math.max(0,hT-cap), extra=Math.max(extraSal,extraNec);
+      const finMin=psHM(norm)+extra*60, hasta=extra<=0.01?norm:((j.modo==="extra"&&extraSal>=extraNec)?j.salida:(finMin<1440?psTxtHM(finMin):"más de 24:00"));
+      const nivel=extra>TP_MAX_EXTRA_DIA+0.01?2:(extra>0.01?1:0);
+      const txt=M.cfg.inicio+" – "+(hasta==="más de 24:00"?"sin cierre posible":hasta)+(nivel===0?"":" · +"+tpHtxt(extra)+" h"+(nivel===2?" ⚠":""));
+      return { trab:true, txt, nivel, extra, hT, cap, desde:M.cfg.inicio, hasta, hastaMin:(hasta==='más de 24:00'?finMin:psHM(hasta)), k, manualNormal:(j.modo==="normal"&&extraNec>0.01) };
+    });
+    return { pid:p.id, nombre:p.nombre, cargo:p.cargo||"", ext:p.tipo==="Externo", cel, extraSem:cel.reduce((a,c)=>a+c.extra,0) };
+  }).sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  /* horario de cada día (para la fila de salida) */
+  const horario={}; M.dias.forEach((d,k)=>{ const tr=personas.filter(p=>p.cel[k].trab);
+    if(!tr.length){ horario[d.fecha]="—"; return; }
+    const mxMin=Math.max(...tr.map(p=>p.cel[k].hastaMin)), norm=psSalidaNormal(M.cfg,d.fecha);
+    horario[d.fecha]=tr.some(p=>p.cel[k].extra>0.01)?"⏱ Horas extra · "+(mxMin<1440?"hasta "+psTxtHM(mxMin):"jornada inviable"):"Salida "+norm; });
+  /* entregas comprometidas: todo el ciclo del tablero, en todas las semanas, contrastado con el Gantt del proyecto */
+  const hoy=hoyISO(), claves=[...new Set(semana.map(tpKey))];
+  const entregas=claves.map(k=>{
+    const par=tpPlanes().flatMap(pl=>pl.items.filter(i=>i.ini&&i.fin&&tpKey(i)===k).map(it=>({pl,it}))), its=par.map(x=>x.it);
+    const hh=its.reduce((a,i)=>a+(Number(i.horas)||0),0), av=Math.round(hh?its.reduce((a,i)=>a+(Number(i.horas)||0)*(Number(i.avance)||0),0)/hh:its.reduce((a,i)=>a+(Number(i.avance)||0),0)/its.length);
+    const f=tpIniFinGrupo(its), pid=its[0].proyectoId||"", p=pid?proy(pid):null;
+    const gt=p?(p.planificacion||[]).filter(t=>par.some(x=>t.origenTaller===x.pl.id&&t.origenTallerItem===x.it.id)):[];
+    const gFin=gt.length?gt.reduce((m,t)=>t.fin>m?t.fin:m,gt[0].fin):"";
+    return { key:k, pid, tablero:its[0].tablero||"Trabajos varios", ini:f.ini, fin:f.fin, av, gantt:!!gt.length, gFin, difiere:!!gt.length&&gFin!==f.fin,
+      estado:av>=100?"Listo":(f.fin<hoy?"Atrasado":"En plazo") };
+  }).sort((a,b)=>tpProyCod(a.pid).localeCompare(tpProyCod(b.pid))||a.fin.localeCompare(b.fin));
+  return { plan, quien, lunes, dias, semana, proys, personas, horario, entregas, cfg:M.cfg, M };
+}
+/* Revisión previa al envío: legalidad de las horas extra y calidad de las proyecciones */
+function tpGerAuditoria(mod){
+  const crit=[], avis=[], info=[], M=mod.M;
+  mod.personas.forEach(p=>p.cel.forEach((c,k)=>{
+    if(c.nivel===2){
+      const libres=DB.personal.filter(x=>x.tipo!=="Externo" && x.id!==p.pid && !M.dias[k].gente.includes(x.id)).slice(0,4).map(x=>x.nombre.split(" ")[0]);
+      crit.push({ t:`${p.nombre} · ${TP_DIAS_C[k]}: ${tpHtxt(c.extra)} h extra ${c.hasta==='más de 24:00'?'(no caben en el día)':'(hasta '+c.hasta+')'}. El máximo legal es ${TP_MAX_EXTRA_DIA} h por día.`,
+        s:`Reparte horas a otro día o suma un ayudante${libres.length?` (sin actividad ese día: ${libres.join(", ")})`:""}. Puedes usar «Ajustar por carga».` });
+    } else if(c.manualNormal){
+      avis.push({ t:`${p.nombre} · ${TP_DIAS_C[k]}: tiene ${tpHtxt(c.hT)} h de taller y jornada normal de ${tpHtxt(c.cap)} h.`, s:"Marca horas extra ese día en el Plan semanal o redistribuye." });
+    }
+  }));
+  const sinResp=mod.semana.filter(i=>!i.responsables.length);
+  if(sinResp.length) crit.push({ t:`${sinResp.length} trabajo(s) sin responsable: ${[...new Set(sinResp.map(i=>i.tablero||"Trabajos varios"))].join(", ")}.`, s:"Asigna personal antes de enviar: sin él no se puede proyectar el horario." });
+  const finde=mod.semana.filter(i=>{ const d=tpDias(i.ini,i.fin)[0], w=new Date(d+"T12:00:00Z").getUTCDay(); return w===0||w===6; });
+  if(finde.length) avis.push({ t:`Hay trabajo en fin de semana: ${[...new Set(finde.map(i=>i.tablero||"Trabajos varios"))].join(", ")}.`, s:"Sábado y domingo no están en la jornada ordinaria; requieren pacto de horas extra." });
+  const hs=psHorasSemana(M.cfg,mod.lunes);
+  if(hs>TP_MAX_SEMANA+0.01) avis.push({ t:`La jornada configurada suma ${tpHtxt(hs)} h a la semana; el máximo ordinario vigente es ${TP_MAX_SEMANA} h.`, s:"Revisa el horario base en el Plan semanal." });
+  mod.personas.forEach(p=>{ const dx=p.cel.filter(c=>c.extra>0.01).length;
+    if(p.extraSem>=6 || dx>=4) avis.push({ t:`${p.nombre}: ${tpHtxt(p.extraSem)} h extra acumuladas en ${dx} día(s) de la semana.`, s:"Carga sostenida; conviene repartirla." }); });
+  const hayExtra=mod.personas.some(p=>p.extraSem>0.01);
+  if(hayExtra) info.push({ t:"Las horas extra requieren pacto escrito con cada trabajador (art. 32 del Código del Trabajo) y se pagan con recargo del 50 %." });
+  if(mod.personas.some(p=>p.ext&&p.extraSem>0.01)) info.push({ t:"El personal externo con horas extra depende de su empleador (contratista): confirma que ellos las respalden." });
+  mod.entregas.forEach(e=>{
+    if(e.estado==="Atrasado") avis.push({ t:`${e.tablero}: la fecha de entrega (${distDiaTxt(e.fin)}) ya pasó y va en ${e.av} %.`, s:"Define una nueva fecha comprometida." });
+    if(!e.pid) avis.push({ t:`${e.tablero}: no tiene proyecto asociado, por lo que no está en ningún Gantt.`, s:"Asócialo a un proyecto para que la entrega quede comprometida." });
+    else if(!e.gantt) avis.push({ t:`${e.tablero}: no aparece en el Gantt del proyecto; se informa la fecha del programa (${distDiaTxt(e.fin)}).`, s:"Guarda el programa para sincronizarlo al Gantt." });
+    else if(e.difiere) avis.push({ t:`${e.tablero}: el Gantt del proyecto dice ${distDiaTxt(e.gFin)} y el programa ${distDiaTxt(e.fin)}.`, s:"Se informa la fecha del programa; revisa cuál es la correcta." });
+  });
+  return { crit, avis, info, ok:!crit.length };
+}
+function tpHtmlAuditoria(A,planId){
+  const esc=escaparHtml, li=(x,c,ic)=>`<div style="padding:3px 0;color:${c}">${ic} ${esc(x.t)}${x.s?`<div class="small muted" style="margin-left:18px">💡 ${esc(x.s)}</div>`:''}</div>`;
+  const cab=A.crit.length?`<b style="color:#b3261e">⛔ ${A.crit.length} observación(es) legal(es) o crítica(s)</b>`:`<b style="color:#2e7d32">✔ Sin observaciones legales</b>`;
+  return `<div style="border:1px solid ${A.crit.length?'#e6b3ae':'#cfe3d0'};background:${A.crit.length?'#fff4f3':'#f4faf4'};border-radius:8px;padding:8px 10px;font-size:12.5px;">
+    <div class="flex-between" style="gap:8px;flex-wrap:wrap"><div>🔎 Revisión previa al envío · ${cab}${A.avis.length?` · <span style="color:#8a5a00">${A.avis.length} aviso(s)</span>`:''}</div>
+    <button class="btn btn-sm" onclick="tpModalAjuste('${planId}')">Ajustar por carga</button></div>
+    <div style="max-height:150px;overflow:auto;margin-top:4px">${A.crit.map(x=>li(x,'#b3261e','⛔')).join("")}${A.avis.map(x=>li(x,'#8a5a00','⚠')).join("")}${A.info.map(x=>li(x,'#555','ℹ')).join("")}</div></div>`;
+}
+function tpHtmlGerencia(plan,quien,lunes,mod){
+  mod=mod||tpGerModelo(plan,quien,lunes); const per=quien==="equipo"?null:DB.personal.find(p=>p.id===quien), esc=escaparHtml;
+  if(!mod.semana.length) return `<div style="font-family:Arial,sans-serif">Sin trabajos programados esta semana.</div>`;
+  const th="border:1px solid #d9d2c9;background:#c1712e;color:#fff;font-size:11.5px;padding:4px 6px;text-align:left", td="border:1px solid #d9d2c9;padding:4px 6px;font-size:12px;vertical-align:top";
+  const sub="border:1px solid #ddd;background:#f1ece6;padding:3px 6px;font-size:11px;text-align:left", tc="border:1px solid #ddd;padding:3px 6px;font-size:12px;vertical-align:top";
+  const cal=`<table style="border-collapse:collapse;width:100%;table-layout:fixed;margin-top:6px"><tr><th style="${th};width:19%">Proyecto</th>${mod.dias.map(d=>`<th style="${th}">${tpFechaCorta(d)}</th>`).join("")}</tr>
+    ${mod.proys.map(p=>{ const pr=p.pid?proy(p.pid):null; return `<tr><td style="${td};background:#faf3ea"><b style="color:#a15a1d">${esc(pr?pr.codigo:"Sin proyecto")}</b>${pr?`<div style="font-size:11px;color:#555">${esc(pr.nombre)}</div>`:''}</td>${mod.dias.map(d=>`<td style="${td}">${(p.dias[d]||[]).map(n=>`<div style="margin-bottom:3px"><b>${esc(n)}</b></div>`).join("")||'<span style="color:#aaa">—</span>'}</td>`).join("")}</tr>`; }).join("")}
+    <tr><td style="${td};background:#f1ece6"><b>Horario</b></td>${mod.dias.map(d=>{ const h=mod.horario[d], ex=h.startsWith("⏱"); return `<td style="${td};font-size:11px;font-weight:bold;background:${ex?'#fde6c8':'#eef1f4'};color:${ex?'#8a4b0f':'#555'}">${esc(h)}</td>`; }).join("")}</tr></table>`;
+  const ent=`<table style="border-collapse:collapse;width:100%;margin-top:4px"><tr>${["Proyecto","Tablero","Inicio","Entrega comprometida","Avance","Estado"].map(t=>`<th style="${sub}">${t}</th>`).join("")}</tr>
+    ${mod.entregas.map(e=>{ const col=e.estado==="Atrasado"?"#b3261e":(e.estado==="Listo"?"#2e7d32":"#444"); return `<tr><td style="${tc}">${esc(tpProyCod(e.pid))}</td><td style="${tc}"><b>${esc(e.tablero)}</b></td><td style="${tc};white-space:nowrap">${distDiaTxt(e.ini)}</td><td style="${tc};white-space:nowrap"><b>${distDiaTxt(e.fin)}</b></td><td style="${tc};text-align:right">${e.av}%</td><td style="${tc};color:${col};font-weight:bold">${e.estado}</td></tr>`; }).join("")}</table>`;
+  const tablaPers=(lista,tit)=>{ if(!lista.length) return `<div style="margin:10px 0 2px;font-weight:bold">${tit} (0)</div><div style="color:#777;font-size:12px">Sin personal programado.</div>`;
+    return `<div style="margin:10px 0 2px;font-weight:bold">${tit} (${lista.length})</div><table style="border-collapse:collapse;width:100%;table-layout:fixed"><tr><th style="${sub};width:19%">Persona</th>${mod.dias.map(d=>`<th style="${sub}">${tpFechaCorta(d)}</th>`).join("")}<th style="${sub};width:9%;text-align:right">Extra sem.</th></tr>
+    ${lista.map(p=>`<tr><td style="${tc}"><b>${esc(p.nombre)}</b>${p.cargo?`<div style="font-size:10.5px;color:#666">${esc(p.cargo)}</div>`:''}</td>${p.cel.map(c=>{ const bg=c.nivel===2?"#f8d7d4":(c.nivel===1?"#fde6c8":"#fff"), co=c.nivel===2?"#b3261e":(c.nivel===1?"#8a4b0f":(c.trab?"#222":"#aaa")); return `<td style="${tc};background:${bg};color:${co};font-size:11.5px;${c.nivel?'font-weight:bold':''}">${esc(c.txt)}</td>`; }).join("")}<td style="${tc};text-align:right;${p.extraSem>0.01?'font-weight:bold;color:#8a4b0f':'color:#aaa'}">${p.extraSem>0.01?tpHtxt(p.extraSem)+" h":"—"}</td></tr>`).join("")}</table>`; };
+  const ints=mod.personas.filter(p=>!p.ext), exts=mod.personas.filter(p=>p.ext), conEx=mod.personas.filter(p=>p.extraSem>0.01), totEx=conEx.reduce((a,p)=>a+p.extraSem,0);
+  const resEx=conEx.length?`<div style="margin:6px 0;padding:5px 8px;background:#fde6c8;color:#8a4b0f;font-size:12px"><b>⏱ Horas extra proyectadas:</b> ${conEx.length} persona(s), ${tpHtxt(totEx)} h en total (máximo legal: ${TP_MAX_EXTRA_DIA} h por día por persona).</div>`:`<div style="margin:6px 0;padding:5px 8px;background:#e6f3ec;color:#2e5d3a;font-size:12px">✔ Sin horas extra proyectadas esta semana.</div>`;
+  return `<div style="font-family:Arial,Helvetica,sans-serif;color:#222;font-size:13px;max-width:960px">
+    <div style="font-size:17px;font-weight:bold">Programa de taller – semana ${distDiaTxt(mod.dias[0])} al ${distDiaTxt(mod.dias[4])}${per?' – '+esc(per.nombre):''}</div>
+    <div style="margin:4px 0 4px;color:#555">${mod.entregas.length} tablero(s) · ${mod.personas.length} persona(s) · ${mod.proys.length} proyecto(s)</div>
+    ${cal}
+    <div style="margin:14px 0 0;font-weight:bold">Fechas comprometidas de entrega por tablero (según Gantt)</div>${ent}
+    <div style="margin:14px 0 0;font-size:14px;font-weight:bold">Personal y horarios de la semana</div>${resEx}
+    ${tablaPers(ints,"Personal interno")}${tablaPers(exts,"Personal externo")}
+    <div style="margin-top:8px;font-size:11px;color:#777">Horario normal: ${mod.cfg.inicio} a ${mod.cfg.salida} (viernes hasta ${mod.cfg.salidaViernes}), con ${mod.cfg.colacion} min de colación. Horas extra: máximo ${TP_MAX_EXTRA_DIA} h por día.</div></div>`;
+}
+function tpTextoGerencia(plan,quien,lunes,mod){
+  mod=mod||tpGerModelo(plan,quien,lunes); if(!mod.semana.length) return "Sin trabajos programados esta semana.";
+  const L=[`Programa de taller – semana ${distDiaTxt(mod.dias[0])} al ${distDiaTxt(mod.dias[4])}`,""];
+  mod.proys.forEach(p=>{ L.push(tpProyEtiq(p.pid)); mod.dias.forEach(d=>{ if((p.dias[d]||[]).length) L.push(`  ${tpFechaCorta(d)}: ${p.dias[d].join(", ")}`); }); L.push(""); });
+  L.push("HORARIO"); mod.dias.forEach(d=>L.push(`  ${tpFechaCorta(d)}: ${mod.horario[d].replace("⏱ ","")}`)); L.push("");
+  L.push("FECHAS COMPROMETIDAS DE ENTREGA (según Gantt)"); mod.entregas.forEach(e=>L.push(`  ${tpProyCod(e.pid)} · ${e.tablero}: ${distDiaTxt(e.fin)} · avance ${e.av}% · ${e.estado}`)); L.push("");
+  [["PERSONAL INTERNO",mod.personas.filter(p=>!p.ext)],["PERSONAL EXTERNO",mod.personas.filter(p=>p.ext)]].forEach(([t,l])=>{ L.push(`${t} (${l.length})`); if(!l.length) L.push("  Sin personal programado.");
+    l.forEach(p=>{ L.push(`  ${p.nombre}`); p.cel.forEach((c,k)=>{ if(c.trab) L.push(`    ${tpFechaCorta(mod.dias[k])}: ${c.txt.replace(" ⚠"," (excede el máximo legal)")}`); }); }); L.push(""); });
+  const ex=mod.personas.filter(p=>p.extraSem>0.01);
+  L.push(ex.length?`HORAS EXTRA PROYECTADAS: ${ex.length} persona(s), ${tpHtxt(ex.reduce((a,p)=>a+p.extraSem,0))} h (máximo legal ${TP_MAX_EXTRA_DIA} h por día).`:"Sin horas extra proyectadas esta semana.");
+  return L.join("\n");
+}
+/* Pide confirmación si la revisión previa encontró observaciones críticas */
+function tpCorreoConfirmar(e){
+  if(!e.ger || !e.aud || e.aud.ok) return true;
+  return confirm("⛔ Antes de enviar, revisa esto:\n\n"+e.aud.crit.map(x=>"• "+x.t).join("\n")+"\n\n¿Enviar de todas formas?");
 }
 /* ---- Versión para correo y PDF (V3.7.2) ---- */
 let tpCorreoPara = "";
@@ -13386,17 +13493,19 @@ function tpTextoCorreo(plan,quien){
 }
 function tpCorreoEstado(){
   const plan=tpPlan(tpPlanId); const quien=document.getElementById('tpCorreoQuien').value, gantt=document.getElementById('tpCorreoGantt').checked;
-  const ger=document.getElementById('tpCorreoFmt').value==="gerencia";
-  return { plan, quien, gantt, ger, html:ger?tpHtmlGerencia(plan,quien):tpHtmlCorreo(plan,quien,gantt), texto:ger?tpTextoGerencia(plan,quien):tpTextoCorreo(plan,quien),
+  const ger=document.getElementById('tpCorreoFmt').value==="gerencia", ss=document.getElementById('tpCorreoSem'), lunes=(ss&&ss.value)?ss.value:plan.lunes;
+  const mod=tpGerModelo(plan,quien,lunes), aud=tpGerAuditoria(mod);
+  return { plan, quien, gantt, ger, lunes, mod, aud, html:ger?tpHtmlGerencia(plan,quien,lunes,mod):tpHtmlCorreo(plan,quien,gantt), texto:ger?tpTextoGerencia(plan,quien,lunes,mod):tpTextoCorreo(plan,quien),
     asunto:document.getElementById('tpCorreoAsunto').value, para:document.getElementById('tpCorreoPara').value.trim() };
 }
 function tpCorreoAsuntoAuto(){
   const plan=tpPlan(tpPlanId), quien=document.getElementById('tpCorreoQuien').value, per=quien==="equipo"?null:DB.personal.find(p=>p.id===quien);
-  document.getElementById('tpCorreoAsunto').value=`Programa de taller – ${tpRango(plan,tpItemsDe(plan,quien))}${per?' – '+per.nombre:''}`;
+  const ss=document.getElementById('tpCorreoSem'), fm=document.getElementById('tpCorreoFmt'), l=(ss&&ss.value)?ss.value:plan.lunes;
+  document.getElementById('tpCorreoAsunto').value=`Programa de taller – ${(fm&&fm.value==='gerencia')?'semana '+distDiaTxt(l)+' al '+distDiaTxt(sumarDias(l,4)):tpRango(plan,tpItemsDe(plan,quien))}${per?' – '+per.nombre:''}`;
 }
 function tpCorreoRefrescar(cambioDestino){
   if(cambioDestino) tpCorreoAsuntoAuto();
-  const e=tpCorreoEstado(); document.getElementById('tpCorreoPrev').innerHTML=e.html;
+  const e=tpCorreoEstado(); document.getElementById('tpCorreoPrev').innerHTML=e.html; const au=document.getElementById('tpCorreoAud'); if(au) au.innerHTML=tpHtmlAuditoria(e.aud,e.plan.id);
 }
 function tpModalCorreo(planId){
   const plan=tpPlan(planId); if(!plan) return; tpPlanId=planId;
@@ -13409,8 +13518,10 @@ function tpModalCorreo(planId){
           <select id="tpCorreoQuien" onchange="tpCorreoRefrescar(true)"><option value="equipo">Todo el equipo (programa completo)</option>${personas.map(p=>`<option value="${p.id}">Solo lo de ${escaparHtml(p.nombre)}</option>`).join("")}</select></label>
         <label class="small muted">Para (correos, separados por coma)<input type="text" id="tpCorreoPara" value="${escaparHtml(tpCorreoPara)}" placeholder="nombre@empresa.cl" oninput="tpCorreoPara=this.value"></label></div>
       <label class="small muted">Asunto<input type="text" id="tpCorreoAsunto"></label>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;"><label class="small muted">Formato<select id="tpCorreoFmt" onchange="tpCorreoRefrescar()"><option value="gerencia">Resumen por día (para gerencia)</option><option value="detalle">Detalle completo (tareas, horas, metas)</option></select></label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;"><label class="small muted">Formato<select id="tpCorreoFmt" onchange="tpCorreoRefrescar(true)"><option value="gerencia">Resumen semanal para gerencia</option><option value="detalle">Detalle completo (tareas, horas, metas)</option></select></label>
       <label class="small flex-gap"><input type="checkbox" id="tpCorreoGantt" checked onchange="tpCorreoRefrescar()"> Detalle: incluir carta Gantt</label></div>
+      ${tpGerSemanas(plan).length>1?`<label class="small muted">Semana a enviar<select id="tpCorreoSem" onchange="tpCorreoRefrescar(true)">${tpGerSemanas(plan).map(l=>`<option value="${l}" ${l===plan.lunes?'selected':''}>Semana del ${distDiaTxt(l)} al ${distDiaTxt(sumarDias(l,4))}</option>`).join("")}</select></label>`:''}
+      <div id="tpCorreoAud"></div>
       <div class="hint">Para que llegue con tablas y colores: pulsa <b>Copiar con formato</b>, abre el correo y pega con Ctrl+V. Los botones de Outlook abren el borrador con la versión en texto simple (los programas de correo no aceptan tablas por enlace).</div>
       <div id="tpCorreoPrev" style="border:1px solid var(--line);border-radius:8px;background:#fff;padding:12px;max-height:340px;overflow:auto;"></div>
     </div>
@@ -13422,7 +13533,7 @@ function tpModalCorreo(planId){
   tpCorreoRefrescar(true);
 }
 async function tpCorreoCopiar(silencioso){
-  const e=tpCorreoEstado();
+  const e=tpCorreoEstado(); if(!silencioso && !tpCorreoConfirmar(e)) return false;
   try{
     if(!(navigator.clipboard && window.ClipboardItem)) throw new Error("sin ClipboardItem");
     await navigator.clipboard.write([new ClipboardItem({"text/html":new Blob([e.html],{type:"text/html"}),"text/plain":new Blob([e.texto],{type:"text/plain"})})]);
@@ -13434,7 +13545,7 @@ async function tpCorreoCopiar(silencioso){
   }
 }
 async function tpCorreoAbrir(modo){
-  const e=tpCorreoEstado(); await tpCorreoCopiar(true);
+  const e=tpCorreoEstado(); if(!tpCorreoConfirmar(e)) return; await tpCorreoCopiar(true);
   if(modo==="app"){ window.location.href=`mailto:${e.para}?subject=${encodeURIComponent(e.asunto)}&body=${encodeURIComponent(e.texto.replace(/\r?\n/g,"\r\n"))}`; }
   else { let cuerpo=e.texto; const base=`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(e.para)}&subject=${encodeURIComponent(e.asunto)}&body=`;
     if(base.length+encodeURIComponent(cuerpo).length>1900) cuerpo=cuerpo.slice(0,700)+"\n\n[...] Pega aquí el programa completo con Ctrl+V.";
@@ -13444,20 +13555,36 @@ async function tpCorreoAbrir(modo){
 }
 async function tpCorreoPdf(){
   if(!(await asegurarPDF())){ toast("No se pudo cargar el generador de PDF. Revisa tu conexión.","danger"); return; }
-  const e=tpCorreoEstado(), plan=e.plan, items=tpItemsDe(plan,e.quien).slice().sort((a,b)=>a.ini.localeCompare(b.ini)||(a.tablero||"").localeCompare(b.tablero||""));
+  const e=tpCorreoEstado(); if(!tpCorreoConfirmar(e)) return;
+  const plan=e.plan, items=tpItemsDe(plan,e.quien).slice().sort((a,b)=>a.ini.localeCompare(b.ini)||(a.tablero||"").localeCompare(b.tablero||""));
   const { jsPDF } = window.jspdf; const doc=new jsPDF({orientation:"landscape",unit:"mm",format:"a4"});
   tpPdfLogo(doc,297,10,6); doc.setFontSize(15); doc.setFont(undefined,"bold"); doc.text("ALUTIPO — Programa de taller",14,15);
   doc.setFontSize(10); doc.setFont(undefined,"normal"); doc.text(`${tpRango(plan,items)}${e.quien==="equipo"?"":" · "+((DB.personal.find(p=>p.id===e.quien)||{}).nombre||"")} · Emitido ${hoyISO()} por ${DB.usuario||""}`,14,21);
   if(e.ger){
-    const its=items.filter(i=>i.ini&&i.fin), dias=tpResumenDias(its), nom=["Lunes","Martes","Miércoles","Jueves","Viernes"], mes=["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
-    const sem=its.length?tpSemanasResumen(its):[]; let y=25;
-    const personas=[...new Set(its.flatMap(i=>tpNombres(i)))]; const pidsP=[...new Set(its.map(i=>i.proyectoId||""))], unicoP=pidsP.length===1; doc.setFontSize(9); doc.text((unicoP?tpProyEtiq(pidsP[0])+" · ":"")+`${tpGrupos({items:its}).length} tablero(s) · ${personas.length} persona(s)`,14,y); y+=3;
-    sem.forEach(s=>{ doc.autoTable({ startY:y+1, head:[s.map(d=>{ const dt=new Date(d+"T12:00:00Z"); return nom[dt.getUTCDay()-1]+" "+dt.getUTCDate()+" "+mes[dt.getUTCMonth()]; })],
-      body:[s.map(d=>tpAgrupaPorProyecto(Object.values(dias[d]||{}),x=>x.pid).map(gp=>(unicoP?"":tpProyCod(gp.pid)+"\n")+gp.items.map(x=>x.nombre+": "+(x.personas.join(", ")||"sin asignar")).join("\n")).join("\n\n")||"—")], theme:"grid", styles:{fontSize:8.5,cellPadding:2,overflow:"linebreak",valign:"top"}, headStyles:{fillColor:[193,113,46]}, margin:{left:10,right:10}, tableWidth:277, pageBreak:"avoid" }); y=doc.lastAutoTable.finalY+2; });
-    const filasRes=[]; tpAgrupaPorProyecto(tpGrupos({items:its}),x=>x.items[0].proyectoId||"").forEach(gp=>{ if(!unicoP) filasRes.push([{content:tpProyEtiq(gp.pid),colSpan:4,styles:{fillColor:[250,243,234],fontStyle:"bold",textColor:[161,90,29]}}]);
-      gp.items.forEach(x=>{ const f=tpIniFinGrupo(x.items), hh=x.items.reduce((a,i)=>a+(Number(i.horas)||0),0), av=hh?Math.round(x.items.reduce((a,i)=>a+(Number(i.horas)||0)*(Number(i.avance)||0),0)/hh):0; filasRes.push([x.items[0].tablero||"—",[...new Set(x.items.flatMap(i=>tpNombres(i)))].join(", "),distDiaTxt(f.ini)+" → "+distDiaTxt(f.fin),av+"%"]); }); });
-    doc.autoTable({ startY:y+4, head:[["Tablero","Quién","Fechas","Avance"]], body:filasRes, theme:"grid", styles:{fontSize:8,cellPadding:1.5}, headStyles:{fillColor:[100,100,100]}, margin:{left:10,right:10} });
-    doc.save(`Programa_taller_gerencia_${plan.lunes}.pdf`); return;
+    const M=e.mod, esc0=x=>x; let y=26;
+    doc.setFontSize(10); doc.setFont(undefined,"bold"); doc.text(`Semana ${distDiaTxt(M.dias[0])} al ${distDiaTxt(M.dias[4])}`,14,y); doc.setFont(undefined,"normal");
+    const fill=n=>n===2?[248,215,212]:(n===1?[253,230,200]:null);
+    const body=M.proys.map(p=>{ const pr=p.pid?proy(p.pid):null; return [(pr?pr.codigo+"\n"+pr.nombre:"Sin proyecto"),...M.dias.map(d=>(p.dias[d]||[]).join("\n")||"—")]; });
+    body.push(["Horario",...M.dias.map(d=>({content:M.horario[d].replace("⏱ ",""),styles:{fontStyle:"bold",fillColor:M.horario[d].startsWith("⏱")?[253,230,200]:[238,241,244]}}))]);
+    doc.autoTable({ startY:y+2, head:[["Proyecto",...M.dias.map(tpFechaCorta)]], body, theme:"grid", styles:{fontSize:8.5,cellPadding:2,overflow:"linebreak",valign:"top"}, headStyles:{fillColor:[193,113,46]}, columnStyles:{0:{cellWidth:48,fontStyle:"bold"}}, margin:{left:10,right:10} });
+    y=doc.lastAutoTable.finalY+7; if(y>175){ doc.addPage("a4","landscape"); y=16; }
+    doc.setFontSize(10); doc.setFont(undefined,"bold"); doc.text("Fechas comprometidas de entrega por tablero (según Gantt)",14,y); doc.setFont(undefined,"normal");
+    doc.autoTable({ startY:y+2, head:[["Proyecto","Tablero","Inicio","Entrega comprometida","Avance","Estado"]], body:M.entregas.map(x=>[tpProyCod(x.pid),x.tablero,distDiaTxt(x.ini),{content:distDiaTxt(x.fin),styles:{fontStyle:"bold"}},x.av+"%",{content:x.estado,styles:{textColor:x.estado==="Atrasado"?[179,38,30]:(x.estado==="Listo"?[46,125,50]:[60,60,60]),fontStyle:"bold"}}]),
+      theme:"grid", styles:{fontSize:8,cellPadding:1.5}, headStyles:{fillColor:[100,100,100]}, margin:{left:10,right:10} });
+    y=doc.lastAutoTable.finalY+7; if(y>165){ doc.addPage("a4","landscape"); y=16; }
+    const conEx=M.personas.filter(p=>p.extraSem>0.01);
+    doc.setFontSize(10); doc.setFont(undefined,"bold"); doc.text("Personal y horarios de la semana",14,y); doc.setFont(undefined,"normal"); doc.setFontSize(8.5);
+    doc.text(conEx.length?`Horas extra proyectadas: ${conEx.length} persona(s), ${tpHtxt(conEx.reduce((a,p)=>a+p.extraSem,0))} h en total (máximo legal ${TP_MAX_EXTRA_DIA} h por día por persona).`:"Sin horas extra proyectadas esta semana.",14,y+5); y+=7;
+    [["Personal interno",M.personas.filter(p=>!p.ext)],["Personal externo",M.personas.filter(p=>p.ext)]].forEach(([t,l])=>{
+      if(y>170){ doc.addPage("a4","landscape"); y=16; }
+      doc.setFontSize(9); doc.setFont(undefined,"bold"); doc.text(`${t} (${l.length})`,14,y+3); doc.setFont(undefined,"normal");
+      if(!l.length){ doc.setFontSize(8); doc.text("Sin personal programado.",14,y+8); y+=12; return; }
+      doc.autoTable({ startY:y+5, head:[["Persona",...M.dias.map(tpFechaCorta),"Extra sem."]],
+        body:l.map(p=>[p.nombre+(p.cargo?"\n"+p.cargo:""),...p.cel.map(c=>({content:c.txt.replace(" ⚠"," (excede 2 h)"),styles:{fillColor:fill(c.nivel)||[255,255,255],textColor:c.nivel===2?[179,38,30]:(c.nivel===1?[138,75,15]:(c.trab?[30,30,30]:[170,170,170])),fontStyle:c.nivel?"bold":"normal"}})),p.extraSem>0.01?tpHtxt(p.extraSem)+" h":"—"]),
+        theme:"grid", styles:{fontSize:8,cellPadding:1.5,overflow:"linebreak"}, headStyles:{fillColor:[100,100,100]}, columnStyles:{0:{cellWidth:44}}, margin:{left:10,right:10} });
+      y=doc.lastAutoTable.finalY+6; });
+    doc.setFontSize(7); doc.text(`Horario normal ${M.cfg.inicio} a ${M.cfg.salida} (viernes hasta ${M.cfg.salidaViernes}), colación ${M.cfg.colacion} min. Horas extra: máximo ${TP_MAX_EXTRA_DIA} h por día.`,14,Math.min(y+2,200));
+    doc.save(`Programa_taller_gerencia_${e.lunes}.pdf`); return;
   }
   const unicoD=new Set(items.map(i=>i.proyectoId||"")).size<=1, cuerpoD=[];
   tpAgrupaPorProyecto(items.slice().sort((a,b)=>(a.proyectoId||"")<(b.proyectoId||"")?-1:(a.proyectoId||"")>(b.proyectoId||"")?1:0),x=>x.proyectoId||"").forEach(gp=>{ if(!unicoD) cuerpoD.push([{content:tpProyEtiq(gp.pid),colSpan:6,styles:{fillColor:[250,243,234],fontStyle:"bold",textColor:[161,90,29]}}]); gp.items.forEach(i=>cuerpoD.push([ (i.tablero||"—")+(tpDespuesDe(tpItemsGrupo(plan,tpKey(i)))?"\n(después de "+tpNombreKey(tpDespuesDe(tpItemsGrupo(plan,tpKey(i))))+")":""), i.tarea+(i.prioridad==="urgente"?" [URGENTE]":""), tpNombres(i).join(", ")||"sin asignar", i.ini===i.fin?distDiaTxt(i.ini):distDiaTxt(i.ini)+" → "+distDiaTxt(i.fin), (i.enLote?"conjunto":i.horas), (i.meta||"")+(i.nota?" · "+i.nota:"") ])); });

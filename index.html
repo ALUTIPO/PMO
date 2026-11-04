@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.21.0";
+const APP_VERSION = "3.22.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -740,7 +740,8 @@ const ESCALA_PERMISOS = {
    Proyecto 360°, Punch List, etc.) son el mismo código para las dos;
    lo único que cambia es el filtro de qué proyectos entran. */
 let areaActiva = "electrico"; // "electrico" | "fabricacion"
-function proyectosDelArea() { return DB.proyectos.filter(p => (p.tipo||"electrico") === areaActiva); }
+function proyectosDelAreaTodos() { return DB.proyectos.filter(p => (p.tipo||"electrico") === areaActiva); }
+function proyectosDelArea() { return proyectosDelAreaTodos().filter(p => !p.terminado); }
 function personalDelArea(tipoProyecto) { return DB.personal.filter(per => per.area===tipoProyecto || per.area==='ambas' || per.area===undefined); }
 function cambiarArea(nueva) {
   areaActiva = nueva;
@@ -3268,7 +3269,7 @@ function badgeStock(e) {
 
 function selectorProyectos() {
   return `<select onchange="DB.proyectoActivo=this.value; renderAll();" style="font-family:inherit;font-size:12.5px;padding:7px 10px;border-radius:7px;border:1px solid var(--line);background:var(--card)">
-    ${proyectosDelArea().map(p=>`<option value="${p.id}" ${p.id===DB.proyectoActivo?'selected':''}>${p.modoCierre?'🏁 ':''}${p.codigo} — ${p.nombre}</option>`).join('')}
+    ${proyectosDelArea().concat(proyectosDelAreaTodos().filter(p => p.terminado && p.id === DB.proyectoActivo)).map(p=>`<option value="${p.id}" ${p.id===DB.proyectoActivo?'selected':''}>${p.terminado?'📁 ':''}${p.modoCierre?'🏁 ':''}${p.codigo} — ${p.nombre}${p.terminado?' (terminado)':''}</option>`).join('')}
   </select>`;
 }
 
@@ -3430,13 +3431,103 @@ function renderFabricacion() {
   `;
 }
 
+/* =====================================================================
+   PROYECTOS TERMINADOS (V3.22) — un proyecto terminado sale de los
+   selectores, el dashboard y las listas de trabajo, pero queda guardado
+   con todo su historial en la pestaña «Proyectos terminados».
+   ===================================================================== */
+function puedeCerrarProyecto() { return esAdministrador() || ["Jefe de Proyecto", "Gerencia", "Jefe de Servicios Eléctricos"].includes(DB.role); }
+function proyectosVigentes() { return DB.proyectos.filter(p => !p.terminado); }
+function proyectosTerminadosArea() { return proyectosDelAreaTodos().filter(p => p.terminado).sort((a, b) => String(b.fechaTermino || "").localeCompare(String(a.fechaTermino || ""))); }
+function cierreChequeo(p) {
+  const postas = p.postas || [], hechas = postas.filter(t => t.estado === "Completado").length;
+  const punch = (p.punch || []).filter(x => x.estado !== "Completado").length;
+  const compras = (p.cotizaciones || []).filter(c => c.estado !== "Recibido").length;
+  const stock = (p.bodega || []).filter(b => Number(b.stock) > 0);
+  const pano = (DB.solicitudesPanol || []).filter(s => s.proyectoId === p.id && s.estado === "Pendiente").length;
+  const valorStock = stock.reduce((s, b) => s + (Number(b.stock) || 0) * (Number(b.precioUnitario) || 0), 0);
+  return [
+    { ok: postas.length > 0 && hechas === postas.length, txt: `Postas completadas: ${hechas} de ${postas.length}`, tipo: "postas" },
+    { ok: punch === 0, txt: punch ? `${punch} ítem(s) abiertos en el Punch List` : "Punch List sin pendientes", tipo: "punch" },
+    { ok: compras === 0, txt: compras ? `${compras} compra(s) sin recibir` : "Todas las compras recibidas", tipo: "compras" },
+    { ok: stock.length === 0, txt: stock.length ? `${stock.length} material(es) con stock en la bodega del proyecto${valorStock ? " (" + money(Math.round(valorStock)) + ")" : ""}: instalar o devolver a Bodega General` : "Bodega del proyecto consolidada", tipo: "bodega" },
+    { ok: pano === 0, txt: pano ? `${pano} orden(es) de retiro de Pañol pendientes` : "Sin retiros de Pañol pendientes", tipo: "panol" },
+  ];
+}
+function modalTerminarProyecto(pid) {
+  const p = proy(pid); if (!p) return; if (!puedeCerrarProyecto()) { toast(`Tu rol (${DB.role}) no puede terminar proyectos.`, "danger"); return; }
+  const ch = cierreChequeo(p), pend = ch.filter(c => !c.ok).length;
+  openModal(`<div class="modal-head"><h3>Terminar proyecto — ${escaparHtml(p.codigo)}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body"><p class="small muted">${escaparHtml(p.nombre)}. El proyecto sale de los selectores y listas de trabajo, y pasa a <b>Proyectos terminados</b> con todo su historial. Se puede reabrir cuando quieras.</p>
+      <div class="card" style="margin:10px 0;"><b>Revisión de cierre</b>${ch.map(c => `<div class="small" style="margin-top:6px;">${c.ok ? '✅' : '⚠️'} ${escaparHtml(c.txt)}${!c.ok && c.tipo === 'bodega' && puedeGestionarBodega() ? ` <button class="btn btn-sm" onclick="closeModal(); modalConsolidarBodegaProyecto('${p.id}')">Consolidar bodega</button>` : ''}</div>`).join('')}</div>
+      ${pend ? `<div class="ai-note" style="background:var(--warn-bg); color:var(--copper-dark);">Hay ${pend} punto(s) pendiente(s). Puedes terminar igual, pero queda anotado en el historial.</div>` : ''}
+      <label class="field-label">Fecha de término</label><input type="date" id="tpFecha" value="${hoyISO()}">
+      <label class="field-label">Nota de cierre (opcional)</label><textarea id="tpNota" rows="3" placeholder="Ej: entregado y firmado el acta; queda pendiente solo la garantía"></textarea></div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="terminarProyecto('${p.id}')">✅ Terminar y archivar</button></div>`, 560);
+}
+function terminarProyecto(pid) {
+  const p = proy(pid); if (!p || !puedeCerrarProyecto()) return;
+  const pend = cierreChequeo(p).filter(c => !c.ok).map(c => c.txt);
+  p.terminado = true; p.estadoProyecto = "Terminado"; p.fechaTermino = (document.getElementById("tpFecha") || {}).value || hoyISO(); p.notaCierre = ((document.getElementById("tpNota") || {}).value || "").trim(); p.terminadoPor = DB.usuario;
+  p.pendientesAlCierre = pend;
+  if (DB.proyectoActivo === pid) { const o = proyectosDelArea().find(x => x.id !== pid); DB.proyectoActivo = o ? o.id : pid; }
+  registrarHistorial({ proyecto: p.codigo, accion: "Modificar", detalle: `Proyecto terminado y archivado (${p.fechaTermino})${pend.length ? " con pendientes: " + pend.join("; ") : ""}${p.notaCierre ? ". Nota: " + p.notaCierre : ""}`, usuario: DB.usuario + " · " + DB.role, criticidad: "Media" });
+  guardarEstado("Proyecto terminado"); closeModal(); goTo("terminados"); toast(`${p.codigo} pasó a Proyectos terminados.`, "ok");
+}
+function reabrirProyecto(pid) {
+  const p = proy(pid); if (!p || !puedeCerrarProyecto()) { toast(`Tu rol (${DB.role}) no puede reabrir proyectos.`, "danger"); return; } if (!confirm(`¿Reabrir ${p.codigo}? Volverá a los selectores y listas de trabajo.`)) return;
+  p.terminado = false; p.estadoProyecto = "Activo"; p.fechaReapertura = hoyISO();
+  registrarHistorial({ proyecto: p.codigo, accion: "Modificar", detalle: "Proyecto reabierto (estaba terminado desde " + (p.fechaTermino || "?") + ")", usuario: DB.usuario + " · " + DB.role, criticidad: "Media" });
+  guardarEstado("Proyecto reabierto"); renderAll(); toast(`${p.codigo} reabierto.`, "ok");
+}
+function abrirProyectoTerminado(pid, pagina) { DB.proyectoActivo = pid; goTo(pagina || "proyecto360"); }
+let termBusca = "", termAnio = "";
+function htmlBannerTerminado(p) {
+  if (!p.terminado) return "";
+  return `<div class="card" style="margin-bottom:14px; border-left:4px solid var(--blueprint);"><div class="flex-between" style="flex-wrap:wrap; gap:10px;"><div><b>🏁 Proyecto terminado</b> el ${fcF(p.fechaTermino)}${p.terminadoPor ? ' · por ' + escaparHtml(p.terminadoPor) : ''}${p.notaCierre ? `<div class="small muted">${escaparHtml(p.notaCierre)}</div>` : ''}<div class="small muted">Está archivado: no aparece en los selectores ni en el dashboard. Lo ves aquí en modo consulta.</div></div>
+    <div class="flex-gap"><button class="btn" onclick="goTo('terminados')">← Proyectos terminados</button>${puedeCerrarProyecto() ? `<button class="btn btn-primary" onclick="reabrirProyecto('${p.id}')">↩ Reabrir</button>` : ''}</div></div></div>`;
+}
+function renderTerminados() {
+  const todos = proyectosTerminadosArea(), q = navNorm(termBusca.trim()), verMontos = puedeVerMontosProyecto();
+  const anios = [...new Set(todos.map(p => String(p.fechaTermino || "").slice(0, 4)).filter(Boolean))].sort().reverse();
+  const lista = todos.filter(p => (!termAnio || String(p.fechaTermino || "").startsWith(termAnio)) && (!q || navNorm([p.codigo, p.nombre, p.cliente, p.clienteFinal, p.pm].join(" ")).includes(q)));
+  const dur = p => p.fechaKickoff && p.fechaTermino ? Math.max(0, diasEntre(p.fechaKickoff, p.fechaTermino)) : null;
+  const durs = lista.map(dur).filter(d => d !== null), prom = durs.length ? Math.round(durs.reduce((a, b) => a + b, 0) / durs.length) : null;
+  const sugeridos = proyectosDelArea().filter(p => (p.postas || []).length && avanceGlobal(p) >= 100);
+  const esFab = areaActiva === "fabricacion";
+  return `<div class="page-head"><div><h1>🏁 Proyectos terminados ${esFab ? '· Fabricación' : '· Eléctrico'}</h1><div class="page-desc">Archivo de proyectos cerrados. Se guardan con su historial, bodega, compras y documentos; no estorban en el trabajo diario y se pueden reabrir.</div></div>
+    <div class="flex-gap"><button class="btn" onclick="termExcel()">⬇ Excel</button></div></div>
+  ${sugeridos.length ? `<div class="card" style="margin-bottom:14px; border-left:4px solid var(--copper);"><b>Listos para archivar</b> <span class="small muted">· tienen todas sus postas completadas</span>${sugeridos.map(p => `<div class="flex-between" style="margin-top:8px; gap:8px;"><div class="small"><b>${escaparHtml(p.codigo)}</b> — ${escaparHtml(p.nombre)}</div>${puedeCerrarProyecto() ? `<button class="btn btn-sm btn-primary" onclick="modalTerminarProyecto('${p.id}')">Terminar…</button>` : ''}</div>`).join('')}</div>` : ''}
+  <div class="grid" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; margin-bottom:14px;">
+    <div class="card"><div class="muted small">Proyectos terminados</div><div style="font-size:24px;font-weight:700;">${todos.length}</div><div class="small muted">${anios.length ? 'años: ' + anios.join(', ') : ''}</div></div>
+    <div class="card"><div class="muted small">Duración promedio</div><div style="font-size:24px;font-weight:700;">${prom === null ? '—' : prom + ' días'}</div><div class="small muted">desde el kick-off</div></div>
+    ${verMontos ? `<div class="card"><div class="muted small">Presupuesto total terminado</div><div style="font-size:20px;font-weight:700;">${money(lista.reduce((s, p) => s + (Number(p.presupuestoTotal) || 0), 0))}</div><div class="small muted">${lista.length} proyecto(s) en la vista</div></div>` : ''}
+    <div class="card"><div class="muted small">Con pendientes al cierre</div><div style="font-size:24px;font-weight:700;">${todos.filter(p => cierreChequeo(p).slice(1).some(c => !c.ok)).length}</div><div class="small muted">bodega, compras, punch o pañol</div></div></div>
+  <div class="card" style="margin-bottom:12px;"><div class="flex-gap" style="flex-wrap:wrap; align-items:flex-end;">
+    <div style="flex:1; min-width:220px;"><label class="field-label">Buscar</label><input type="search" id="termBuscador" value="${escaparHtml(termBusca)}" placeholder="código, nombre, cliente o PM…" oninput="termBusca=this.value; renderAll(); const e=document.getElementById('termBuscador'); if(e){e.focus(); e.setSelectionRange(e.value.length,e.value.length);}"></div>
+    <div><label class="field-label">Año de término</label><select onchange="termAnio=this.value; renderAll();"><option value="">Todos</option>${anios.map(a => `<option ${termAnio === a ? 'selected' : ''}>${a}</option>`).join('')}</select></div></div></div>
+  ${lista.length ? `<div class="card card-flush"><div class="table-wrap"><table><tr><th>Proyecto</th><th>Cliente</th><th>PM</th><th>Kick-off → término</th><th>Duración</th><th>Avance</th>${verMontos ? '<th>Presupuesto</th>' : ''}<th>Pendientes</th><th></th></tr>
+    ${lista.map(p => { const ch = cierreChequeo(p), pend = ch.filter(c => !c.ok), d = dur(p);
+      return `<tr><td><b>${escaparHtml(p.codigo)}</b><div class="small muted">${escaparHtml(p.nombre)}</div></td><td class="small">${escaparHtml(p.cliente || '')}${p.clienteFinal ? `<div class="muted">${escaparHtml(p.clienteFinal)}</div>` : ''}</td><td class="small">${escaparHtml(p.pm || '')}</td>
+      <td class="small">${fcF(p.fechaKickoff)} → ${fcF(p.fechaTermino)}</td><td>${d === null ? '—' : d + ' d'}</td><td>${avanceGlobal(p)}%</td>${verMontos ? `<td>${money(p.presupuestoTotal)}</td>` : ''}
+      <td class="small">${pend.length ? pend.map(c => `<div style="color:var(--copper-dark);">⚠ ${escaparHtml(c.txt)}</div>`).join('') : '<span style="color:#166534;">✔ Sin pendientes</span>'}${p.notaCierre ? `<div class="muted">📝 ${escaparHtml(p.notaCierre)}</div>` : ''}</td>
+      <td style="white-space:nowrap;"><button class="btn btn-sm" onclick="abrirProyectoTerminado('${p.id}')">Ver 360°</button> ${(p.bodega || []).some(b => Number(b.stock) > 0) && puedeGestionarBodega() ? `<button class="btn btn-sm" onclick="modalConsolidarBodegaProyecto('${p.id}')">Consolidar bodega</button> ` : ''}${puedeCerrarProyecto() ? `<button class="btn btn-sm btn-ghost" onclick="reabrirProyecto('${p.id}')">↩ Reabrir</button>` : ''}</td></tr>`; }).join('')}</table></div></div>`
+    : `<div class="empty-state card">${todos.length ? 'Ningún proyecto coincide con la búsqueda.' : 'Aún no hay proyectos terminados. Cuando termines uno desde <b>Proyecto 360°</b> (botón «✅ Terminar proyecto»), aparecerá aquí.'}</div>`}`;
+}
+async function termExcel() {
+  if (!(await asegurarXLSX())) { toast("No se pudo cargar el generador de Excel.", "danger"); return; }
+  const filas = proyectosTerminadosArea().map(p => ({ "Código": p.codigo, "Nombre": p.nombre, "Cliente": p.cliente, "Cliente final": p.clienteFinal || "", "PM": p.pm, "Kick-off": p.fechaKickoff, "Término": p.fechaTermino, "Duración (días)": p.fechaKickoff && p.fechaTermino ? diasEntre(p.fechaKickoff, p.fechaTermino) : "", "Avance %": avanceGlobal(p), "Presupuesto": puedeVerMontosProyecto() ? p.presupuestoTotal : "", "Pendientes al cierre": cierreChequeo(p).filter(c => !c.ok).map(c => c.txt).join(" | "), "Nota de cierre": p.notaCierre || "" }));
+  const wb = XLSX.utils.book_new(), ws = XLSX.utils.json_to_sheet(filas.length ? filas : [{ "Código": "(sin proyectos terminados)" }]); ws["!cols"] = [{ wch: 16 }, { wch: 44 }, { wch: 20 }, { wch: 20 }, { wch: 18 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 9 }, { wch: 14 }, { wch: 60 }, { wch: 40 }];
+  XLSX.utils.book_append_sheet(wb, ws, "Terminados"); XLSX.writeFile(wb, `Proyectos_terminados_${areaActiva}_${hoyISO()}.xlsx`);
+}
 function renderProyecto360() {
-  if (!proyectosDelArea().length) {
+  if (!proyectosDelAreaTodos().length) {
     return `<div class="page-head"><div><h1>Proyecto 360°</h1></div></div>
     <div class="empty-state card">Aún no hay proyectos en el tablero. <button class="btn btn-primary" style="margin-top:10px;" onclick="modalNuevoProyecto()">+ Crear el primer proyecto</button></div>`;
   }
 
   const p = proy();
+  if (!p || ((p.tipo || "electrico") !== areaActiva)) { const o = proyectosDelArea()[0]; if (o) { DB.proyectoActivo = o.id; return renderProyecto360(); } return `<div class="page-head"><div><h1>Proyecto 360°</h1></div></div><div class="empty-state card">No hay proyectos vigentes. <button class="btn" onclick="goTo('terminados')">Ver proyectos terminados</button></div>`; }
   p.avanceCache = avanceGlobal(p); p.semaforoCache = semaforo(p);
   const pres = presupuesto(p);
   const esFabricacion = p.tipo === "fabricacion";
@@ -3477,9 +3568,9 @@ function renderProyecto360() {
       <h1>${esFabricacion?'Fabricación':'Proyecto'} 360° ${esFabricacion?'<span class="badge b-blue" style="margin-left:6px;"><span class="dot"></span>🔧 Perfilería de aluminio</span>':''}</h1>
       <div class="page-desc">${esFabricacion ? 'Flujo de taller de 10 postas — de la validación del plano al despacho, con cascada de dependencias y avance ponderado.' : 'Flujo completo de las 19 postas con cascada de dependencias, avance ponderado y bloqueo con motivo obligatorio.'}</div>
     </div>
-    ${selectorProyectos()}
+    <div class="flex-gap" style="flex-wrap:wrap;">${selectorProyectos()}<button class="btn btn-sm" onclick="goTo('terminados')" title="Proyectos terminados y archivados">📁 Terminados (${proyectosTerminadosArea().length})</button></div>
   </div>
-
+  ${htmlBannerTerminado(p)}
   <div class="card" style="margin-bottom:18px;">
     <div class="flex-between" style="flex-wrap:wrap; gap:14px;">
       <div>
@@ -3490,6 +3581,7 @@ function renderProyecto360() {
       <div class="flex-gap">
         ${badgeSemaforo(p.semaforoCache)}
         <span class="tag-role">${p.prioridad}</span>
+        ${(!p.terminado && puedeCerrarProyecto()) ? `<button class="btn btn-sm btn-primary" onclick="modalTerminarProyecto('${p.id}')">✅ Terminar proyecto</button>` : ''}
       </div>
     </div>
     <div class="divider"></div>
@@ -7601,7 +7693,7 @@ function modalAsignarAProyecto(codigo) {
     <div class="modal-body">
       <p class="small muted">${b.material} · disponible: <b>${b.stock} ${b.unidad}</b></p>
       <label class="field-label">Proyecto destino</label>
-      <select id="asigProyecto">${DB.proyectos.map(p => `<option value="${p.id}">${p.codigo} — ${p.nombre}</option>`).join('')}</select>
+      <select id="asigProyecto">${proyectosVigentes().map(p => `<option value="${p.id}">${p.codigo} — ${p.nombre}</option>`).join('')}</select>
       <label class="field-label">Cantidad a asignar</label>
       <input type="text" id="asigCantidad" value="${b.stock}">
       <div class="hint">Se resta de la bodega general y queda sumado en la bodega del proyecto elegido.</div>
@@ -8982,7 +9074,7 @@ function renderCuadroCarga() {
 }
 
 function renderGaleria() {
-  const idsArea = new Set(proyectosDelArea().map(p=>p.id));
+  const idsArea = new Set(proyectosDelAreaTodos().map(p=>p.id));
   const todasEntradas = [];
   Object.entries(DB.bitacoraPunch||{}).forEach(([proyectoId, dictClaves]) => {
     if (!idsArea.has(proyectoId)) return;
@@ -9036,7 +9128,7 @@ function renderGaleria() {
     <div class="flex-gap">
       <select onchange="filtroGaleriaProyecto=this.value; renderAll();" style="width:auto; font-size:12.5px; padding:8px 11px; border-radius:8px; border:1px solid var(--line); background:var(--card);">
         <option value="todos" ${filtroGaleriaProyecto==='todos'?'selected':''}>Todos los proyectos</option>
-        ${proyectosDelArea().map(p=>`<option value="${p.id}" ${filtroGaleriaProyecto===p.id?'selected':''}>${p.nombre}</option>`).join('')}
+        ${proyectosDelAreaTodos().map(p=>`<option value="${p.id}" ${filtroGaleriaProyecto===p.id?'selected':''}>${p.nombre}${p.terminado?' (terminado)':''}</option>`).join('')}
       </select>
     </div>
   </div>
@@ -9378,7 +9470,7 @@ function renderMensajesReq() {
 }
 
 function renderPanelRequerimientos() {
-  const idsPermitidos = new Set(['general', ...proyectosDelArea().map(p=>p.id)]);
+  const idsPermitidos = new Set(['general', ...proyectosDelAreaTodos().map(p=>p.id)]);
   const todos = [];
   Object.entries(DB.mensajes||{}).forEach(([salaId, dict]) => {
     if (!idsPermitidos.has(salaId)) return;
@@ -10038,11 +10130,11 @@ function renderActividad() {
    que el reporte nunca diga algo distinto de lo que ve la app.
    ===================================================================== */
 function datosReporteKPIs() {
-  const activos = DB.proyectos.filter(p => p.estadoProyecto==="Activo").length;
-  const comprasPendientes = DB.proyectos.reduce((a,p) => a + p.cotizaciones.filter(c => c.estado!=="Recibido").length, 0);
-  const punchAbiertos = DB.proyectos.reduce((a,p) => a + p.punch.filter(x => x.estado!=="Completado").length, 0);
-  const longLeadAlerta = DB.proyectos.reduce((a,p) => a + p.cotizaciones.filter(c => c.alerta).length, 0);
-  const proyectosTabla = DB.proyectos.map(p => ({
+  const activos = DB.proyectos.filter(p => !p.terminado).filter(p => p.estadoProyecto==="Activo").length;
+  const comprasPendientes = DB.proyectos.filter(p => !p.terminado).reduce((a,p) => a + p.cotizaciones.filter(c => c.estado!=="Recibido").length, 0);
+  const punchAbiertos = DB.proyectos.filter(p => !p.terminado).reduce((a,p) => a + p.punch.filter(x => x.estado!=="Completado").length, 0);
+  const longLeadAlerta = DB.proyectos.filter(p => !p.terminado).reduce((a,p) => a + p.cotizaciones.filter(c => c.alerta).length, 0);
+  const proyectosTabla = DB.proyectos.filter(p => !p.terminado).map(p => ({
     codigo: p.codigo, nombre: p.nombre, cliente: p.cliente, pm: p.pm,
     avance: avanceGlobal(p), semaforo: semaforo(p),
     posta: p.modoCierre ? `Punch List ${avancePunchProyecto(p)}%` : ((p.postas.find(t=>t.estado==="En Progreso"||t.estado==="Bloqueado")||p.postas.slice().reverse().find(t=>t.estado==="Completado"))?.nombre || '—'),
@@ -10071,7 +10163,7 @@ function datosReporteKPIs() {
 
   return {
     fecha: new Date().toLocaleString('es-CL',{dateStyle:'long', timeStyle:'short'}),
-    dashboard: { totalProyectos: DB.proyectos.length, activos, comprasPendientes, punchAbiertos, longLeadAlerta, proyectosTabla },
+    dashboard: { totalProyectos: DB.proyectos.filter(p => !p.terminado).length, activos, comprasPendientes, punchAbiertos, longLeadAlerta, proyectosTabla },
     actividad: { totalUsuarios: usuarios.length, conectadosAhora, nuncaIngresaron, sinUso7dias, usuariosTabla },
   };
 }
@@ -12655,7 +12747,7 @@ function tpHtmlResp(sel,clase){ clase=clase||'tpResp';
   return `<div style="display:flex;flex-wrap:wrap;gap:6px 14px;">${orden.map(p=>`<label class="small flex-gap"><input type="checkbox" class="${clase}" value="${p.id}" ${sel.includes(p.id)?'checked':''}> ${escaparHtml(p.nombre)}</label>`).join("")}</div>`;
 }
 function tpLeerResp(clase){ return Array.from(document.querySelectorAll('.'+(clase||'tpResp')+':checked')).map(x=>x.value); }
-function tpOptProy(sel){ return `<option value="">(sin proyecto / interno)</option>${DB.proyectos.map(p=>`<option value="${p.id}" ${sel===p.id?'selected':''}>${escaparHtml(p.codigo)} · ${escaparHtml(p.nombre.slice(0,40))}</option>`).join("")}`; }
+function tpOptProy(sel){ return `<option value="">(sin proyecto / interno)</option>${proyectosVigentes().map(p=>`<option value="${p.id}" ${sel===p.id?'selected':''}>${escaparHtml(p.codigo)} · ${escaparHtml(p.nombre.slice(0,40))}</option>`).join("")}`; }
 function tpModalItem(planId,itemId,gi){
   if(!tpPuede()) return; const plan=tpPlan(planId); const it=itemId?plan.items.find(x=>x.id===itemId):null;
   const pre=(!it&&gi!=null&&tpGrupoKeys[gi]!=null)?tpGrupoKeys[gi].split("||"):null; const preResp=pre?[...new Set(tpItemsGrupo(plan,tpGrupoKeys[gi]).flatMap(i=>i.responsables))]:[];
@@ -13383,6 +13475,7 @@ function NAV_ACTUAL() {
     {id:"punch", label:"Punch List", icon:iconCheck()},
     {id:"requerimientos", label:"Requerimientos", icon:iconChat()},
     {id:"galeria", label:"Galería", icon:iconGallery()},
+    {id:"terminados", label:"Proyectos terminados", icon:iconArchive()},
   ] : [
     {id:"dashboard", label:"Dashboard", icon:iconGrid()},
     {id:"proyecto360", label:"Proyecto 360°", icon:iconLayers()},
@@ -13395,6 +13488,7 @@ function NAV_ACTUAL() {
     {id:"galeria", label:"Galería", icon:iconGallery()},
     {id:"cuadroCarga", label:"Herramienta Eléctrica", icon:iconBolt()},
     {id:"reaperturas", label:"Reaperturas", icon:iconRefresh()},
+    {id:"terminados", label:"Proyectos terminados", icon:iconArchive()},
   ]};
   const abastecimiento = {group:"🛒 Abastecimiento", items:[
     {id:"compras", label:"Compras", icon:iconCart()},
@@ -13622,7 +13716,7 @@ function renderAll() {
     dashboard: renderDashboard, miPanel: renderMiPanel, panelEquipo: renderPanelEquipo, bodegaGeneral: renderBodegaGeneral, personal: renderPersonal, proyecto360: renderProyecto360, planificacion: renderPlanificacion, compras: renderCompras,
     presupuesto: renderPresupuesto, bodega: renderBodega, reporteMateriales: renderReporteMateriales, comprasDirectas: renderComprasDirectas, punch: renderPunch, requerimientos: renderRequerimientos, galeria: renderGaleria, cuadroCarga: renderCuadroCarga,
     recepciones: renderRecepciones, resumenOC: renderResumenOC, panol: renderPanol, acuerdos: renderAcuerdos, informesAdmin: renderInformesAdmin, protocolos: renderProtocolos, finSemana: renderFinSemana, kickoff: renderKickoff, tallerPrograma: renderTallerPrograma,
-    fabricacion: renderFabricacion,
+    fabricacion: renderFabricacion, terminados: renderTerminados,
     reaperturas: renderReaperturas, copiloto: renderCopiloto, auditoria: renderAuditoria, actividad: renderActividad, respaldos: renderRespaldos,
   };
   const target = document.getElementById("page-"+currentPage);
@@ -13773,7 +13867,7 @@ function wmsOpcionesUb(sel, extra) {
 /* mini formulario para crear una ubicación al vuelo (en Mover, Ingresar o Ubicaciones) */
 function wmsFormNuevaUb(src) {
   const t = wmsV("nu_tipo", "epn");
-  const proyOpts = DB.proyectos.map(p => `<option value="${p.id}" ${wmsV("nu_proy")===p.id?"selected":""}>${escaparHtml(p.codigo)} — ${escaparHtml(p.nombre)}</option>`).join("");
+  const proyOpts = proyectosVigentes().map(p => `<option value="${p.id}" ${wmsV("nu_proy")===p.id?"selected":""}>${escaparHtml(p.codigo)} — ${escaparHtml(p.nombre)}</option>`).join("");
   const tabs = [...new Set(tpPlanes().flatMap(pl => (pl.items||[]).filter(i => i.proyectoId===wmsV("nu_proy") && i.tablero).map(i => i.tablero)))];
   return `<div class="wms-box">
     <div class="wms-g2">

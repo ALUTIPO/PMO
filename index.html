@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.25.0";
+const APP_VERSION = "3.25.1";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -14003,7 +14003,7 @@ const ROLES_COSTOS_MO = ["Jefe de Servicios Eléctricos","Gerencia","Jefe de Pro
 function cmPuedeVer(){ return esAdministrador() || ROLES_COSTOS_VER.includes(DB.role); }
 function cmPuedeRegistrar(){ return esAdministrador() || ROLES_COSTOS_MO.includes(DB.role); }
 function cmDB(){ let c=DB.costosMO; if(!c||typeof c!=="object") c=DB.costosMO={}; c.tarifas=c.tarifas||{}; c.semanas=c.semanas||{}; c.cfg=c.cfg||{}; c.cfg.correos=c.cfg.correos||{}; if(!c.cfg.responsables) c.cfg.responsables=["Iván","Jair"]; c.cfg.responsables=exArr(c.cfg.responsables); return c; }
-let cmTab="registro", cmLunes="", cmDesde="", cmHasta="", cmInc=false, cmProy="", cmBannerOculto=false;
+let cmEntrega="horas", cmTab="registro", cmLunes="", cmDesde="", cmHasta="", cmInc=false, cmProy="", cmBannerOculto=false;
 function cmInicio(){
   const h=hoyISO(), w=new Date(h+"T12:00:00Z").getUTCDay();
   if(!cmLunes){ cmLunes=tpLunesDe(h); if(w===1||w===2) cmLunes=sumarDias(cmLunes,-7); }
@@ -14127,7 +14127,7 @@ function cmConfirmar(){
   if(v.length && !confirm("⛔ Hay observaciones críticas:\n\n"+v.map(x=>"• "+x.t).join("\n")+"\n\n¿Confirmar de todas formas?")) return;
   s.estado="confirmada"; s.confirmo=DB.usuario; s.fechaConf=hoyISO(); registrarHistorial({proyecto:"Costos", accion:"Modificar", detalle:`Horas de personal de la semana ${cmLunes} confirmadas`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"}); guardarEstado(); renderAll(); toast("Semana confirmada. Ya cuenta para el informe.","ok");
 }
-function cmReabrir(){ if(!cmPuedeVer()) return; const s=cmSemana(cmLunes,true); s.estado="borrador"; delete s.enviado; registrarHistorial({proyecto:"Costos", accion:"Modificar", detalle:`Horas de la semana ${cmLunes} reabiertas`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"}); guardarEstado(); renderAll(); }
+function cmReabrir(){ if(!cmPuedeVer()) return; const s=cmSemana(cmLunes,true); s.estado="borrador"; delete s.enviado; delete s.envios; registrarHistorial({proyecto:"Costos", accion:"Modificar", detalle:`Horas de la semana ${cmLunes} reabiertas`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"}); guardarEstado(); renderAll(); }
 function cmModalLinea(){
   if(!cmPuedeRegistrar()) return; const dias=[0,1,2,3,4].map(k=>sumarDias(cmLunes,k)), ids=[...new Set(DB.personal.map(p=>p.id))];
   openModal(`<div class="modal-head"><h3>Agregar horas</h3><button class="close-x" onclick="closeModal()">✕</button></div><div class="modal-body" style="display:grid;gap:10px">
@@ -14151,7 +14151,7 @@ function cmSemanaMover(n){ cmLunes=sumarDias(cmLunes,7*n); renderAll(); }
 function cmRango(tipo){ const h=hoyISO(), l=tpLunesDe(h);
   if(tipo==="sem"){ cmDesde=sumarDias(l,-7); cmHasta=sumarDias(l,-3); } else if(tipo==="mes"){ cmDesde=h.slice(0,8)+"01"; cmHasta=h; } else if(tipo==="todo"){ cmDesde="2025-01-01"; cmHasta=h; }
   renderAll(); }
-function cmMarcarEnviado(){ const ls=cmLineasPeriodo(cmDesde,cmHasta,false,cmProy), set=new Set(ls.map(l=>l.lunes)); set.forEach(l=>{ const s=cmDB().semanas[l]; if(s) s.enviado={ fecha:hoyISO(), por:DB.usuario }; }); registrarHistorial({proyecto:"Costos", accion:"Modificar", detalle:`Informe de costos enviado al PM (${cmDesde} a ${cmHasta})`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"}); guardarEstado(); renderAll(); toast("Marcado como enviado.","ok"); }
+function cmMarcarEnviado(){ const ls=cmLineasPeriodo(cmDesde,cmHasta,false,cmProy), set=new Set(ls.map(l=>l.lunes)); set.forEach(l=>{ const s=cmDB().semanas[l]; if(s){ s.envios=s.envios||{}; s.envios[cmEntrega]={ fecha:hoyISO(), por:DB.usuario }; s.enviado=s.envios[cmEntrega]; } }); registrarHistorial({proyecto:"Costos", accion:"Modificar", detalle:`${cmEntrega==='def'?'Entrega definitiva de costos':'Entrega de horas hombre'} enviada al PM (${cmDesde} a ${cmHasta})`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"}); guardarEstado(); renderAll(); toast("Marcado como enviado.","ok"); }
 function cmRecordarWA(){
   const per=DB.personal.find(p=>/iv[aá]n/i.test(p.nombre)&&/terreno|l[ií]der/i.test(p.cargo+" "+p.nombre))||DB.personal.find(p=>/iv[aá]n/i.test(p.nombre)); const tel=per?fsTelefonoWA(per.telefono):"";
   const t=`Hola ${per?tpPrimerNombre(per.nombre):"Iván"}, recuerda completar y confirmar en el PMO (Horas y costos de personal) las horas reales de la semana del ${distDiaTxt(cmLunes)}: en qué proyecto trabajó cada uno, horas extra y externos. El informe al PM sale el lunes. Gracias.`;
@@ -14200,12 +14200,13 @@ function cmHtmlTarifas(){
     ${tab(g(false),"Personal interno")}${tab(g(true),"Personal externo")}
     <div class="hint" style="margin-top:8px">⚠ Las tarifas se guardan en la misma base del PMO: se ocultan a los roles sin permiso en la pantalla, pero no están cifradas. La tarifa vigente se aplica a todo el historial.</div></div>`;
 }
+function cmVerCostos(){ return cmPuedeVer() && cmEntrega==='def'; }
 function cmHtmlInforme(){
-  const ver=cmPuedeVer(), ls=cmLineasPeriodo(cmDesde,cmHasta,cmInc,cmProy), R=cmResumen(ls), M=cmMatriz(R,cmDesde,cmHasta), Q=cmCalidad(cmDesde,cmHasta);
+  const ver=cmVerCostos(), ls=cmLineasPeriodo(cmDesde,cmHasta,cmInc,cmProy), R=cmResumen(ls), M=cmMatriz(R,cmDesde,cmHasta), Q=cmCalidad(cmDesde,cmHasta);
   const pm=DB.proyectos.filter(p=>!p.terminado);
   const kpi=(t,v)=>`<div class="card" style="padding:8px 12px;min-width:130px"><div class="small muted">${t}</div><div style="font-size:18px;font-weight:bold">${v}</div></div>`;
   const tabla=`<table class="tbl"><thead><tr><th>Proyecto</th><th style="text-align:right">Horas</th><th style="text-align:right">Extra</th>${ver?'<th style="text-align:right">Internos</th><th style="text-align:right">Externos</th><th style="text-align:right">Total</th>':''}</tr></thead><tbody>${R.proys.map(p=>`<tr><td><b>${escaparHtml(cmProyTxt(p.pid))}</b>${p.pid?`<div class="small muted">${escaparHtml(proy(p.pid).nombre)}</div>`:''}</td><td style="text-align:right">${tpHtxt(p.h)}</td><td style="text-align:right">${tpHtxt(p.hx)}</td>${ver?`<td style="text-align:right">${money(Math.round(p.int))}</td><td style="text-align:right">${money(Math.round(p.ext))}</td><td style="text-align:right"><b>${money(Math.round(p.costo))}</b></td>`:''}</tr>`).join("")||'<tr><td colspan="6" class="muted">Sin datos confirmados.</td></tr>'}</tbody></table>`;
-  return `<div class="card" style="margin-top:10px"><div class="flex-gap" style="flex-wrap:wrap;gap:8px;align-items:end"><label class="small muted">Desde<input type="date" value="${cmDesde}" onchange="cmDesde=this.value; renderAll()"></label><label class="small muted">Hasta<input type="date" value="${cmHasta}" onchange="cmHasta=this.value; renderAll()"></label>
+  return `<div class="card" style="margin-top:10px"><div class="mp-chips" style="margin-bottom:8px"><button class="mp-chip ${cmEntrega==='horas'?'on':''}" onclick="cmEntrega='horas'; renderAll()">1ª entrega · Horas hombre</button>${cmPuedeVer()?`<button class="mp-chip ${cmEntrega==='def'?'on':''}" onclick="cmEntrega='def'; renderAll()">Entrega definitiva · con costos</button>`:''}</div><div class="flex-gap" style="flex-wrap:wrap;gap:8px;align-items:end"><label class="small muted">Desde<input type="date" value="${cmDesde}" onchange="cmDesde=this.value; renderAll()"></label><label class="small muted">Hasta<input type="date" value="${cmHasta}" onchange="cmHasta=this.value; renderAll()"></label>
     <button class="btn btn-sm" onclick="cmRango('sem')">Semana pasada</button><button class="btn btn-sm" onclick="cmRango('mes')">Este mes</button><button class="btn btn-sm" onclick="cmRango('todo')">Todo</button>
     <label class="small muted">Proyecto<select onchange="cmProy=this.value; renderAll()"><option value="">Todos</option>${pm.map(p=>`<option value="${p.id}" ${p.id===cmProy?'selected':''}>${escaparHtml(p.codigo)}</option>`).join("")}</select></label>
     <label class="small flex-gap"><input type="checkbox" ${cmInc?'checked':''} onchange="cmInc=this.checked; renderAll()"> Incluir semanas sin confirmar (propuesta)</label></div>
@@ -14218,9 +14219,9 @@ function cmHtmlEnvio(){
   const c=cmDB(), ver=cmPuedeVer(), pms=[...new Set(DB.proyectos.filter(p=>!p.terminado).map(p=>p.pm).filter(Boolean))];
   const sem=[0,1,2,3,4,5].map(i=>sumarDias(tpLunesDe(hoyISO()),-7*i));
   const filas=sem.map(l=>{ const s=c.semanas[l], hay=psModelo(l).dias.some(d=>d.gente.length)||(s&&exArr(s.lineas).length);
-    return `<tr><td>${distDiaTxt(l)}</td><td>${!hay?'<span class="muted">sin actividad</span>':(s&&s.estado==="confirmada"?'<span class="badge b-verde"><span class="dot"></span>Confirmada</span>':(s?'<span class="badge b-amarillo"><span class="dot"></span>Borrador</span>':'<span class="badge b-rojo"><span class="dot"></span>Sin registrar</span>'))}</td><td>${s&&s.enviado?`Enviada ${s.enviado.fecha}`:'—'}</td><td><button class="btn btn-sm" onclick="cmLunes='${l}'; cmTab='registro'; renderAll()">Abrir</button></td></tr>`; }).join("");
-  return `<div class="card" style="margin-top:10px"><b>Ritmo semanal</b><div class="hint" style="margin:4px 0 8px">Jueves y viernes: quien está a cargo registra y confirma las horas de la semana. Lunes: se envía al PM el informe de la semana anterior (el de la semana confirmada).</div>
-    <table class="tbl"><thead><tr><th>Semana</th><th>Estado</th><th>Envío al PM</th><th></th></tr></thead><tbody>${filas}</tbody></table>
+    return `<tr><td>${distDiaTxt(l)}</td><td>${!hay?'<span class="muted">sin actividad</span>':(s&&s.estado==="confirmada"?'<span class="badge b-verde"><span class="dot"></span>Confirmada</span>':(s?'<span class="badge b-amarillo"><span class="dot"></span>Borrador</span>':'<span class="badge b-rojo"><span class="dot"></span>Sin registrar</span>'))}</td><td>${s&&s.envios&&s.envios.horas?`Enviada ${s.envios.horas.fecha}`:'—'}</td><td>${s&&s.envios&&s.envios.def?`Enviada ${s.envios.def.fecha}`:'—'}</td><td><button class="btn btn-sm" onclick="cmLunes='${l}'; cmTab='registro'; renderAll()">Abrir</button></td></tr>`; }).join("");
+  return `<div class="card" style="margin-top:10px"><b>Ritmo semanal</b><div class="hint" style="margin:4px 0 8px">Jueves y viernes: quien está a cargo registra y confirma las horas de la semana. Lunes: 1ª entrega al PM con las horas hombre de la semana anterior. Después, con las tarifas cargadas, la entrega definitiva con costos.</div>
+    <table class="tbl"><thead><tr><th>Semana</th><th>Estado</th><th>1ª entrega (horas)</th><th>Definitiva (costos)</th><th></th></tr></thead><tbody>${filas}</tbody></table>
     <div class="flex-gap" style="margin-top:10px;flex-wrap:wrap"><button class="btn" onclick="cmRecordarWA()">📲 Recordar a Iván por WhatsApp</button></div></div>
     ${ver?`<div class="card" style="margin-top:10px"><b>Quién recibe los recordatorios en el PMO</b><div class="hint" style="margin:4px 0">Nombres (separados por coma) de quienes verán el aviso para completar y confirmar las horas.</div><input type="text" value="${escaparHtml(c.cfg.responsables.join(", "))}" style="width:100%;max-width:420px" onchange="cmCfgResp(this.value)">
     <div style="margin-top:12px"><b>Correo de cada PM</b></div>${pms.map(pm=>`<label class="small muted" style="display:block;margin-top:4px">${escaparHtml(pm)}<input type="text" value="${escaparHtml(c.cfg.correos[cmKeyPM(pm)]||"")}" placeholder="correo@empresa.cl" style="width:100%;max-width:420px" onchange="cmCfgCorreo(this.dataset.pm,this.value)" data-pm="${escaparHtml(pm)}"></label>`).join("")||'<div class="muted small">Sin PM en los proyectos vigentes.</div>'}</div>`:''}`;
@@ -14232,14 +14233,15 @@ function cmBannerHtml(){
     const lun=(w===1||w===2)?sumarDias(l0,-7):l0, s=c.semanas[lun], hay=psModelo(lun).dias.some(d=>d.gente.length);
     const tocaRegistrar=resp && hay && (!s||s.estado!=="confirmada") && w!==3;
     if(tocaRegistrar) return `<div id="cmBanner" style="margin:0 0 10px;padding:8px 12px;border-radius:8px;background:#fff4dc;border:1px solid #e6cf99;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span>📝 <b>Falta confirmar las horas y costos de personal</b> de la semana del ${distDiaTxt(lun)}.</span><button class="btn btn-sm btn-primary" onclick="cmLunes='${lun}'; cmTab='registro'; goTo('costosMO')">Completar ahora</button><button class="btn btn-sm" onclick="cmBannerOculto=true; renderAll()">Después</button></div>`;
-    if(w===1 && cmPuedeVer() && s && s.estado==="confirmada" && !s.enviado) return `<div id="cmBanner" style="margin:0 0 10px;padding:8px 12px;border-radius:8px;background:#e8f1fb;border:1px solid #b7cde8;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span>📤 <b>Hoy toca enviar el informe de costos al PM</b> (semana del ${distDiaTxt(lun)}).</span><button class="btn btn-sm btn-primary" onclick="cmDesde='${lun}'; cmHasta='${sumarDias(lun,4)}'; cmTab='informe'; goTo('costosMO')">Preparar envío</button><button class="btn btn-sm" onclick="cmBannerOculto=true; renderAll()">Después</button></div>`;
+    if(w===1 && cmPuedeRegistrar() && s && s.estado==="confirmada" && !(s.envios&&s.envios.horas)) return `<div id="cmBanner" style="margin:0 0 10px;padding:8px 12px;border-radius:8px;background:#e8f1fb;border:1px solid #b7cde8;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span>📤 <b>Hoy toca enviar al PM las horas hombre</b> (semana del ${distDiaTxt(lun)}).</span><button class="btn btn-sm btn-primary" onclick="cmDesde='${lun}'; cmHasta='${sumarDias(lun,4)}'; cmEntrega='horas'; cmTab='informe'; goTo('costosMO')">Preparar envío</button><button class="btn btn-sm" onclick="cmBannerOculto=true; renderAll()">Después</button></div>`;
+    if(cmPuedeVer() && s && s.envios && s.envios.horas && !s.envios.def) return `<div id="cmBanner" style="margin:0 0 10px;padding:8px 12px;border-radius:8px;background:#e8f1fb;border:1px solid #b7cde8;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span>💲 <b>Falta la entrega definitiva con costos</b> de la semana del ${distDiaTxt(lun)} (las horas ya se enviaron).</span><button class="btn btn-sm btn-primary" onclick="cmDesde='${lun}'; cmHasta='${sumarDias(lun,4)}'; cmEntrega='def'; cmTab='informe'; goTo('costosMO')">Preparar</button><button class="btn btn-sm" onclick="cmBannerOculto=true; renderAll()">Después</button></div>`;
   }catch(e){}
   return "";
 }
 function cmBannerPoner(){ const old=document.getElementById("cmBanner"); if(old) old.remove(); const h=cmBannerHtml(), c=document.getElementById("content"); if(h&&c) c.insertAdjacentHTML("afterbegin",h); }
 /* ---------- Exportar ---------- */
 function cmFilasExcel(){
-  const ver=cmPuedeVer(), ls=cmLineasPeriodo(cmDesde,cmHasta,cmInc,cmProy), R=cmResumen(ls), M=cmMatriz(R,cmDesde,cmHasta);
+  const ver=cmVerCostos(), ls=cmLineasPeriodo(cmDesde,cmHasta,cmInc,cmProy), R=cmResumen(ls), M=cmMatriz(R,cmDesde,cmHasta);
   const resumen=R.proys.map(p=>({ "Proyecto":cmProyTxt(p.pid), "Nombre":p.pid?proy(p.pid).nombre:"", "Horas ordinarias":cmR(p.h), "Horas extra":cmR(p.hx), ...(ver?{ "Costo internos":Math.round(p.int), "Costo externos":Math.round(p.ext), "Costo total":Math.round(p.costo) }:{}) }));
   const personas=[]; R.proys.forEach(p=>Object.values(p.pers).forEach(q=>personas.push({ "Proyecto":cmProyTxt(p.pid), "Persona":cmNombre(q.pid), "Tipo":cmTarifa(q.pid).ext?"Externo":"Interno", "Horas ordinarias":cmR(q.h), "Horas extra":cmR(q.hx), ...(ver?{ "Costo":Math.round(q.costo) }:{}) })));
   const lineas=ls.map(l=>({ "Semana":l.lunes, "Fecha":l.fecha, "Persona":cmNombre(l.pid), "Tipo":l.ext?"Externo":"Interno", "Proyecto":cmProyTxt(l.proyectoId), "Lugar":(CM_LUGARES[l.lugar]||l.lugar).split(" (")[0], "Horas":Number(l.h)||0, "Horas extra":Number(l.hx)||0, "Estado":l.estado, "Nota":l.nota||"", ...(ver?{ "Costo":Math.round(l.costo) }:{}) }));
@@ -14254,8 +14256,8 @@ async function cmExcel(){
 }
 async function cmPdf(){
   if(!(await asegurarPDF())){ toast("No se pudo cargar el generador de PDF.","danger"); return; }
-  const ver=cmPuedeVer(), ls=cmLineasPeriodo(cmDesde,cmHasta,cmInc,cmProy), R=cmResumen(ls), M=cmMatriz(R,cmDesde,cmHasta), { jsPDF }=window.jspdf, doc=new jsPDF({orientation:"landscape",unit:"mm",format:"a4"});
-  tpPdfLogo(doc,297,10,6); doc.setFontSize(15); doc.setFont(undefined,"bold"); doc.text("ALUTIPO — Horas y costos de personal",14,15); doc.setFontSize(10); doc.setFont(undefined,"normal");
+  const ver=cmVerCostos(), ls=cmLineasPeriodo(cmDesde,cmHasta,cmInc,cmProy), R=cmResumen(ls), M=cmMatriz(R,cmDesde,cmHasta), { jsPDF }=window.jspdf, doc=new jsPDF({orientation:"landscape",unit:"mm",format:"a4"});
+  tpPdfLogo(doc,297,10,6); doc.setFontSize(15); doc.setFont(undefined,"bold"); doc.text(cmEntrega==="def"?"ALUTIPO — Costos de personal (entrega definitiva)":"ALUTIPO — Horas hombre (entrega preliminar)",14,15); doc.setFontSize(10); doc.setFont(undefined,"normal");
   doc.text(`Período ${cmDesde} a ${cmHasta}${cmProy?" · "+cmProyTxt(cmProy):""} · Emitido ${hoyISO()} por ${DB.usuario||""}${cmInc?" · incluye semanas sin confirmar":""}`,14,21);
   doc.autoTable({ startY:25, head:[["Proyecto","Horas","Extra",...(ver?["Internos","Externos","Total"]:[])]], body:R.proys.map(p=>[cmProyTxt(p.pid)+(p.pid?" · "+proy(p.pid).nombre:""),tpHtxt(p.h),tpHtxt(p.hx),...(ver?[money(Math.round(p.int)),money(Math.round(p.ext)),money(Math.round(p.costo))]:[])]).concat(ver?[[{content:"TOTAL",styles:{fontStyle:"bold"}},tpHtxt(R.tot.h),tpHtxt(R.tot.hx),money(Math.round(R.tot.int)),money(Math.round(R.tot.ext)),{content:money(Math.round(R.tot.costo)),styles:{fontStyle:"bold"}}]]:[]), theme:"grid", styles:{fontSize:8.5,cellPadding:1.8}, headStyles:{fillColor:[193,113,46]}, margin:{left:10,right:10} });
   if(M.filas.length){ doc.addPage("a4","landscape"); tpPdfLogo(doc,297,10,6); doc.setFontSize(13); doc.setFont(undefined,"bold"); doc.text("Gantt por fechas — horas por persona y proyecto",14,14); doc.setFont(undefined,"normal");
@@ -14266,28 +14268,28 @@ async function cmPdf(){
 }
 /* ---------- Correo al PM ---------- */
 function cmHtmlCorreo(){
-  const ver=cmPuedeVer(), ls=cmLineasPeriodo(cmDesde,cmHasta,cmInc,cmProy), R=cmResumen(ls), M=cmMatriz(R,cmDesde,cmHasta), esc=escaparHtml;
+  const ver=cmVerCostos(), ls=cmLineasPeriodo(cmDesde,cmHasta,cmInc,cmProy), R=cmResumen(ls), M=cmMatriz(R,cmDesde,cmHasta), esc=escaparHtml;
   const th="border:1px solid #ddd;background:#f1ece6;padding:3px 6px;font-size:11px;text-align:left", td="border:1px solid #ddd;padding:3px 6px;font-size:12px";
   const pm=cmProy?(proy(cmProy)||{}).pm:"";
   const bloques=R.proys.map(p=>`<div style="margin:12px 0 2px;font-weight:bold;color:#a15a1d">${esc(cmProyTxt(p.pid))}${p.pid?' · '+esc(proy(p.pid).nombre):''}</div><table style="border-collapse:collapse;width:100%"><tr><th style="${th}">Persona</th><th style="${th}">Tipo</th><th style="${th};text-align:right">Horas</th><th style="${th};text-align:right">Extra</th>${ver?`<th style="${th};text-align:right">Costo</th>`:''}</tr>
     ${Object.values(p.pers).sort((a,b)=>cmNombre(a.pid).localeCompare(cmNombre(b.pid))).map(q=>`<tr><td style="${td}">${esc(cmNombre(q.pid))}</td><td style="${td}">${cmTarifa(q.pid).ext?'Externo':'Interno'}</td><td style="${td};text-align:right">${tpHtxt(q.h)}</td><td style="${td};text-align:right">${tpHtxt(q.hx)}</td>${ver?`<td style="${td};text-align:right">${money(Math.round(q.costo))}</td>`:''}</tr>`).join("")}
     <tr><td style="${td}" colspan="2"><b>Total proyecto</b></td><td style="${td};text-align:right"><b>${tpHtxt(p.h)}</b></td><td style="${td};text-align:right"><b>${tpHtxt(p.hx)}</b></td>${ver?`<td style="${td};text-align:right"><b>${money(Math.round(p.costo))}</b></td>`:''}</tr></table>`).join("");
-  return `<div style="font-family:Arial,Helvetica,sans-serif;color:#222;font-size:13px;max-width:980px"><div style="font-size:17px;font-weight:bold">Horas y costos de personal — ${esc(distDiaTxt(cmDesde))} al ${esc(distDiaTxt(cmHasta))}</div>
+  return `<div style="font-family:Arial,Helvetica,sans-serif;color:#222;font-size:13px;max-width:980px"><div style="font-size:17px;font-weight:bold">${cmEntrega==="def"?"Costos de personal (entrega definitiva)":"Horas hombre (entrega preliminar)"} — ${esc(distDiaTxt(cmDesde))} al ${esc(distDiaTxt(cmHasta))}</div>
     ${pm?`<div style="color:#555;margin:2px 0">Para: ${esc(pm)}</div>`:''}<div style="margin:6px 0">Horas totales: <b>${tpHtxt(R.tot.h+R.tot.hx)}</b> (extra ${tpHtxt(R.tot.hx)})${ver?` · Costo total: <b>${money(Math.round(R.tot.costo))}</b> (internos ${money(Math.round(R.tot.int))}, externos ${money(Math.round(R.tot.ext))})`:''}</div>
     ${bloques||'<div>Sin horas confirmadas en el período.</div>'}<div style="margin:14px 0 4px;font-weight:bold">Gantt por fechas</div>${cmHtmlGantt(M,ver).replace(/<div class="hint"[^>]*>/,'<div style="font-size:11px;color:#777">')}
-    <div style="margin-top:8px;font-size:11px;color:#777">Horas reales confirmadas por el equipo${cmInc?' (incluye semanas aún sin confirmar)':''}. Costos con tarifa vigente; internos con costo empresa, externos según contrato.</div></div>`;
+    <div style="margin-top:8px;font-size:11px;color:#777">Horas reales confirmadas por el equipo${cmInc?' (incluye semanas aún sin confirmar)':''}. ${cmEntrega==='def'?'Costos con tarifa vigente; internos con costo empresa, externos según contrato.':'Entrega preliminar de horas hombre: los costos se informan en la entrega definitiva.'}</div></div>`;
 }
 function cmModalCorreo(){
-  if(!cmPuedeVer()){ toast("Tu rol no puede enviar costos.","danger"); return; }
+  if(!cmPuedeRegistrar()){ toast("Tu rol no puede enviar informes.","danger"); return; } if(cmEntrega==="def"&&!cmPuedeVer()) cmEntrega="horas";
   const pmN=cmProy?(proy(cmProy)||{}).pm:"", para=pmN?(cmDB().cfg.correos[cmKeyPM(pmN)]||""):"";
-  openModal(`<div class="modal-head"><h3>Enviar costos de personal al PM</h3><button class="close-x" onclick="closeModal()">✕</button></div><div class="modal-body" style="display:grid;gap:10px">
+  openModal(`<div class="modal-head"><h3>Enviar al PM · ${cmEntrega==='def'?'entrega definitiva (con costos)':'1ª entrega: horas hombre'}</h3><button class="close-x" onclick="closeModal()">✕</button></div><div class="modal-body" style="display:grid;gap:10px">
     <label class="small muted">Para<input type="text" id="cmPara" value="${escaparHtml(para)}" placeholder="correo del PM"></label>
-    <label class="small muted">Asunto<input type="text" id="cmAsunto" value="${escaparHtml("Horas y costos de personal – "+(cmProy?cmProyTxt(cmProy)+" – ":"")+distDiaTxt(cmDesde)+" al "+distDiaTxt(cmHasta))}"></label>
+    <label class="small muted">Asunto<input type="text" id="cmAsunto" value="${escaparHtml((cmEntrega==="def"?"Costos de personal (definitivo) – ":"Horas hombre (preliminar) – ")+(cmProy?cmProyTxt(cmProy)+" – ":"")+distDiaTxt(cmDesde)+" al "+distDiaTxt(cmHasta))}"></label>
     <div class="hint">Pulsa <b>Copiar con formato</b>, abre el correo y pega con Ctrl+V (adjunta el Excel o el PDF si lo quieres con detalle).</div>
     <div id="cmPrev" style="border:1px solid var(--line);border-radius:8px;background:#fff;padding:12px;max-height:340px;overflow:auto">${cmHtmlCorreo()}</div></div>
     <div class="modal-foot" style="flex-wrap:wrap;gap:6px"><button class="btn" onclick="closeModal()">Cerrar</button><button class="btn" onclick="cmExcel()">📊 Excel</button><button class="btn" onclick="cmPdf()">📄 PDF</button><button class="btn" onclick="cmMarcarEnviado(); closeModal()">✔ Marcar como enviado</button><button class="btn" onclick="cmCorreoAbrir()">✉ Outlook web</button><button class="btn btn-primary" onclick="cmCorreoCopiar()">📋 Copiar con formato</button></div>`,900);
 }
-function cmCorreoConfirmar(){ const Q=cmCalidad(cmDesde,cmHasta).filter(x=>x.n==="crit"); return !Q.length||confirm("⛔ Antes de enviar:\n\n"+Q.map(x=>"• "+x.t).join("\n")+"\n\n¿Enviar de todas formas?"); }
+function cmCorreoConfirmar(){ const Q=cmCalidad(cmDesde,cmHasta).filter(x=>x.n==="crit"||(cmEntrega==="def"&&/Sin tarifa/.test(x.t))); return !Q.length||confirm("⛔ Antes de enviar:\n\n"+Q.map(x=>"• "+x.t).join("\n")+"\n\n¿Enviar de todas formas?"); }
 async function cmCorreoCopiar(sil){
   if(!sil&&!cmCorreoConfirmar()) return false; const html=cmHtmlCorreo(), div=document.createElement("div"); div.innerHTML=html; const txt=div.innerText;
   try{ await navigator.clipboard.write([new ClipboardItem({"text/html":new Blob([html],{type:"text/html"}),"text/plain":new Blob([txt],{type:"text/plain"})})]); if(!sil) toast("Copiado con formato. Pégalo en el correo con Ctrl+V.","ok"); return true; }

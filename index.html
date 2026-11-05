@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.27.3";
+const APP_VERSION = "3.28.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -817,6 +817,8 @@ function migrarProyecto(p) {
   if(!p.reaperturas) p.reaperturas = [];
   if(!p.punch) p.punch = [];
   if(!p.comprasDirectas) p.comprasDirectas = [];
+  if(!p.adicionales) p.adicionales = [];
+  p.adicionales.forEach(a => { if(!a.mat) a.mat = []; if(!a.hh) a.hh = []; });
   p.comprasDirectas.forEach(cd => {
     if (!cd.items && cd.descripcion) {
       cd.items = [{ id:1, codigo:"", descripcion:cd.descripcion, cantidad:1, unidad:"unidad", costoNeto:cd.montoEstimado||0, montoNeto:cd.montoEstimado||0 }];
@@ -13830,6 +13832,7 @@ function NAV_ACTUAL() {
     {id:"proyecto360", label:"Proyecto 360°", icon:iconLayers()},
     {id:"presupuesto", label:"Presupuesto", icon:iconCoin()},
     {id:"costosProyecto", label:"Costos del proyecto", icon:iconCoin(), roles: ROLES_COSTOS_PROY},
+    {id:"adicionales", label:"Adicionales", icon:iconClipboard(), roles: ROLES_COSTOS_PROY},
     {id:"punch", label:"Punch List", icon:iconCheck()},
     {id:"requerimientos", label:"Requerimientos", icon:iconChat()},
     {id:"galeria", label:"Galería", icon:iconGallery()},
@@ -13842,6 +13845,7 @@ function NAV_ACTUAL() {
     {id:"finSemana", label:"Metas fin de semana", icon:iconTarget()},
     {id:"presupuesto", label:"Presupuesto", icon:iconCoin()},
     {id:"costosProyecto", label:"Costos del proyecto", icon:iconCoin(), roles: ROLES_COSTOS_PROY},
+    {id:"adicionales", label:"Adicionales", icon:iconClipboard(), roles: ROLES_COSTOS_PROY},
     {id:"punch", label:"Punch List", icon:iconCheck()},
     {id:"requerimientos", label:"Requerimientos", icon:iconChat()},
     {id:"galeria", label:"Galería", icon:iconGallery()},
@@ -14076,7 +14080,7 @@ function renderAll() {
     dashboard: renderDashboard, miPanel: renderMiPanel, panelEquipo: renderPanelEquipo, bodegaGeneral: renderBodegaGeneral, personal: renderPersonal, proyecto360: renderProyecto360, planificacion: renderPlanificacion, compras: renderCompras,
     presupuesto: renderPresupuesto, bodega: renderBodega, reporteMateriales: renderReporteMateriales, comprasDirectas: renderComprasDirectas, punch: renderPunch, requerimientos: renderRequerimientos, galeria: renderGaleria, cuadroCarga: renderCuadroCarga,
     recepciones: renderRecepciones, resumenOC: renderResumenOC, panol: renderPanol, acuerdos: renderAcuerdos, informesAdmin: renderInformesAdmin, protocolos: renderProtocolos, finSemana: renderFinSemana, kickoff: renderKickoff, tallerPrograma: renderTallerPrograma,
-    fabricacion: renderFabricacion, terminados: renderTerminados, costosMO: renderCostosMO, costosProyecto: renderCostosProyecto,
+    fabricacion: renderFabricacion, terminados: renderTerminados, costosMO: renderCostosMO, costosProyecto: renderCostosProyecto, adicionales: renderAdicionales,
     reaperturas: renderReaperturas, copiloto: renderCopiloto, auditoria: renderAuditoria, actividad: renderActividad, respaldos: renderRespaldos,
   };
   const target = document.getElementById("page-"+currentPage);
@@ -14524,12 +14528,12 @@ function cpcPdfCabecera(doc,D){
   const W=210, M=14, p=D.p;
   doc.setFillColor(...CPC_CLARO); doc.rect(0,0,W,34,"F"); doc.setFillColor(...CPC_COBRE); doc.rect(0,34,W,1.2,"F");
   try{ const w=38; doc.addImage(LOGO_ALUTIPO_B64,"PNG",W-M-w,9,w,w*108/400); }catch(e){}
-  doc.setTextColor(...CPC_COBRE); doc.setFont(undefined,"bold"); doc.setFontSize(8.5); doc.text("COSTOS DEL PROYECTO",M,11);
+  doc.setTextColor(...CPC_COBRE); doc.setFont(undefined,"bold"); doc.setFontSize(8.5); doc.text(D.titulo||"COSTOS DEL PROYECTO",M,11);
   doc.setTextColor(...CPC_OSC); doc.setFontSize(19); doc.text(String(p.codigo||""),M,19.5);
   doc.setFont(undefined,"normal"); doc.setFontSize(9.5); doc.setTextColor(90,80,72);
   doc.text(doc.splitTextToSize(String(p.nombre||""),W-2*M-46).slice(0,2),M,25.5);
   // ficha
-  const campos=[["Cliente",p.cliente||"—"],["PM",p.pm||"—"],["Fecha del informe",fcF(D.fecha)],["Presupuesto (neto)",D.pres?money(Math.round(D.pres)):"—"]], cw=(W-2*M)/4;
+  const campos=[["Cliente",p.cliente||"—"],["PM",p.pm||"—"],["Fecha del informe",fcF(D.fecha)],D.campo4||["Presupuesto (neto)",D.pres?money(Math.round(D.pres)):"—"]], cw=(W-2*M)/4;
   campos.forEach((c,i)=>{ const x=M+i*cw; doc.setFontSize(7); doc.setTextColor(140,130,120); doc.text(c[0].toUpperCase(),x,43); doc.setFontSize(9.5); doc.setFont(undefined,"bold"); doc.setTextColor(...CPC_OSC); doc.text(doc.splitTextToSize(String(c[1]),cw-3)[0],x,48.5); doc.setFont(undefined,"normal"); });
   doc.setDrawColor(225,218,208); doc.line(M,53,W-M,53); doc.setTextColor(0,0,0);
   return 58;
@@ -14544,7 +14548,7 @@ function cpcPdfTitulo(doc,y,txt,sub){ doc.setFont(undefined,"bold"); doc.setFont
 function cpcPdfNota(doc,txt){ let y=doc.lastAutoTable.finalY+7; if(y>268){ doc.addPage(); y=20; } doc.setFont(undefined,"normal"); doc.setFontSize(7.5); doc.setTextColor(120,110,100); doc.text(doc.splitTextToSize(txt,182),14,y); doc.setTextColor(0,0,0); }
 function cpcPdfPie(doc,D){
   const n=doc.getNumberOfPages(); for(let i=1;i<=n;i++){ doc.setPage(i); doc.setDrawColor(225,218,208); doc.line(14,284,196,284); doc.setFontSize(7.5); doc.setTextColor(140,130,120);
-    doc.text(`Alutipo · Costos del proyecto ${D.p.codigo} · al ${fcF(D.fecha)}`,14,289); doc.text(`Página ${i} de ${n}`,196,289,{align:"right"}); }
+    doc.text(`Alutipo · ${D.pie||"Costos del proyecto "+D.p.codigo} · al ${fcF(D.fecha)}`,14,289); doc.text(`Página ${i} de ${n}`,196,289,{align:"right"}); }
 }
 async function cpcPdf(){
   if(!_cpc) return; if(!(await asegurarPDF())){ toast("No se pudo cargar el generador de PDF.","danger"); return; }
@@ -14580,6 +14584,176 @@ async function cpcPdf(){
   cpcPdfNota(doc,"Montos netos (sin IVA). Ejecutado = recibido o pagado; comprometido = orden emitida o compra autorizada sin recibir.");
   cpcPdfPie(doc,D); doc.save(cpcNombreArchivo("pdf"));
 }
+
+/* =====================================================================
+   V3.28.0 — ADICIONALES DEL PROYECTO
+   Trabajos adicionales con materiales y horas hombre. Cada línea está
+   "por valorizar" (estimada) o "ejecutada" (comprada / instalada / horas
+   trabajadas, con valores reales). El informe para Comercial entrega
+   totales parciales netos (sin IVA): estimado inicial, real ejecutado,
+   por valorizar y total a informar.
+   p.adicionales = [{id,nombre,motivo,fecha,estado,fechaEnvio,
+     mat:[{id,codigo,desc,unidad,cant,pu,real,rc,rp}], hh:[{...igual}]}]
+   ===================================================================== */
+const AD_ESTADOS = ["Por valorizar","Valorizado","Enviado a Comercial","Ejecutado"];
+let adSel = "todos";
+function adPuede(){ return cpcPuede(); }
+function adLista(p){ p=p||proy(); if(!p) return []; if(!p.adicionales) p.adicionales=[]; return p.adicionales; }
+function adLin(l){ const real=!!l.real, cant=real?(Number(l.rc)||0):(Number(l.cant)||0), pu=real?(Number(l.rp)||0):(Number(l.pu)||0); return { real, cant, pu, total:cant*pu, est:(Number(l.cant)||0)*(Number(l.pu)||0) }; }
+function adCalc(a){
+  const R={ mat:{est:0,real:0,pend:0,tot:0}, hh:{est:0,real:0,pend:0,tot:0} };
+  [["mat",a.mat],["hh",a.hh]].forEach(([k,L])=>(L||[]).forEach(l=>{ const x=adLin(l); R[k].est+=x.est; if(x.real) R[k].real+=x.total; else R[k].pend+=x.total; }));
+  ["mat","hh"].forEach(k=>R[k].tot=R[k].real+R[k].pend);
+  R.tot={ est:R.mat.est+R.hh.est, real:R.mat.real+R.hh.real, pend:R.mat.pend+R.hh.pend, tot:R.mat.tot+R.hh.tot }; R.dif=R.tot.tot-R.tot.est; return R;
+}
+function adSumar(cs){ const T={ est:0, real:0, pend:0, tot:0 }; cs.forEach(c=>{ T.est+=c.tot.est; T.real+=c.tot.real; T.pend+=c.tot.pend; T.tot+=c.tot.tot; }); T.dif=T.tot-T.est; return T; }
+function adSeleccion(p){ const L=adLista(p); if(adSel!=="todos"){ const a=L.find(x=>x.id===adSel); if(a) return [a]; adSel="todos"; } return L; }
+function adDatos(){ const p=proy(); if(!p) return null; const L=adSeleccion(p).map(a=>({ a, c:adCalc(a) })); return { p, fecha:hoyISO(), lista:L, T:adSumar(L.map(x=>x.c)), uno:adSel!=="todos" }; }
+function adFilas(a,k){ return (a[k]||[]).map(l=>{ const x=adLin(l); return { codigo:k==="mat"?(l.codigo||""):"", desc:l.desc||"", cant:x.cant, unidad:k==="hh"?"h":(l.unidad||""), pu:x.pu, total:x.total, real:x.real, est:x.est }; }); }
+function adNombreArchivo(D,ext){ const n=D.uno?"_"+String(D.lista[0].a.nombre||"").replace(/[^\w\-]+/g,"_").slice(0,30):""; return `Adicionales_${D.p.codigo}${n}_${D.fecha}.${ext}`; }
+function adR(n){ return money(Math.round(n)); }
+const AD_FALTA = "por valorizar";
+
+/* ---------- Página ---------- */
+function renderAdicionales(){
+  const p=proy(); if(!proyectosDelAreaTodos().length||!p) return `<div class="page-head"><div><h1>Adicionales</h1></div></div><div class="empty-state card">Aún no hay proyectos.</div>`;
+  const L=adLista(p), D=adDatos(), esc=escaparHtml;
+  const chips=`<button class="mp-chip ${adSel==='todos'?'on':''}" onclick="adSel='todos'; renderAll()">Todos (${L.length})</button>`+L.map(a=>`<button class="mp-chip ${adSel===a.id?'on':''}" onclick="adSel='${a.id}'; renderAll()">${esc(a.nombre||"Sin nombre")}</button>`).join("");
+  return `<div class="page-head"><div><h1>Adicionales</h1><div class="page-desc">Trabajos adicionales del proyecto con sus materiales y horas hombre. Marca cada línea como <b>por valorizar</b> (estimada) o <b>ejecutada</b> (comprada/instalada, con valores reales) y entrega a Comercial los totales netos.</div></div>
+    <div class="flex-gap">${selectorProyectos()}<button class="btn btn-primary" onclick="adModalAdicional()">+ Nuevo adicional</button></div></div>
+    <div class="card" style="margin-bottom:10px"><div class="mp-chips" style="margin-bottom:0">${chips}</div></div>
+    ${adSel!=="todos"&&D&&D.lista[0]?adEditor(D.lista[0].a):""}
+    ${L.length?`<div class="card" style="margin-bottom:10px"><div class="flex-gap" style="flex-wrap:wrap"><b style="margin-right:8px">Informe para Comercial${D.uno?"":" (todos los adicionales)"}</b>
+      <button class="btn" onclick="adExcel()">📊 Excel</button><button class="btn" onclick="adPdf()">📄 PDF</button><button class="btn btn-primary" onclick="adCopiar()">📋 Copiar con formato</button><button class="btn" onclick="adOutlook()">✉ Outlook web</button></div>
+      <div class="hint" style="margin-top:6px">Valores netos, sin IVA: Comercial se encarga del resto de la cotización formal al cliente.</div></div>
+      <div id="adCuerpo" class="card" style="background:#fff">${adHtml(D)}</div>`
+    :`<div class="empty-state card">Este proyecto aún no tiene adicionales. Crea uno con «+ Nuevo adicional».</div>`}`;
+}
+function adEditor(a){
+  const esc=escaparHtml, c=adCalc(a);
+  const tabla=(k,tit,vacio)=>{ const F=adFilas(a,k), L=a[k]||[];
+    return `<div style="display:flex;align-items:center;justify-content:space-between;margin:12px 0 4px"><b>${tit}</b><button class="btn" onclick="adModalLinea('${a.id}','${k}','')">+ Agregar ${k==="mat"?"material":"horas"}</button></div>
+    ${F.length?`<div class="table-scroll"><table class="tbl"><thead><tr>${k==="mat"?"<th>Código</th>":""}<th>${k==="mat"?"Descripción":"Persona / cargo"}</th><th style="text-align:right">${k==="mat"?"Cant.":"Horas"}</th><th style="text-align:right">${k==="mat"?"P. unit. neto":"Tarifa/h"}</th><th style="text-align:right">Total</th><th>Estado</th><th></th></tr></thead><tbody>
+    ${F.map((f,i)=>`<tr>${k==="mat"?`<td>${esc(f.codigo)}</td>`:""}<td>${esc(f.desc)}</td><td style="text-align:right">${f.cant} ${esc(f.unidad)}</td><td style="text-align:right">${f.pu>0?adR(f.pu):'<span style="color:#b3261e">sin valor</span>'}</td><td style="text-align:right">${adR(f.total)}</td>
+    <td>${f.real?'<span class="badge b-verde">Ejecutado</span>':'<span class="badge b-amarillo">Por valorizar</span>'}${f.real&&Math.round(f.est)!==Math.round(f.total)?`<div class="muted" style="font-size:11px">estimado ${adR(f.est)}</div>`:""}</td>
+    <td style="white-space:nowrap"><button class="btn btn-sm" onclick="adAlternarReal('${a.id}','${k}','${L[i].id}')">${f.real?"↩ Volver a estimado":"✔ Marcar ejecutado"}</button> <button class="btn btn-sm" onclick="adModalLinea('${a.id}','${k}','${L[i].id}')">✎</button> <button class="btn btn-sm" onclick="adBorrarLinea('${a.id}','${k}','${L[i].id}')">🗑</button></td></tr>`).join("")}
+    </tbody></table></div>`:`<div class="muted">${vacio}</div>`}`; };
+  return `<div class="card" style="margin-bottom:10px"><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between"><div><div style="font-size:16px;font-weight:bold">${esc(a.nombre||"")}</div><div class="muted">${esc(a.motivo||"")}</div><div class="muted" style="font-size:12px">Creado ${esc(fcF(a.fecha||hoyISO()))}${a.fechaEnvio?" · enviado a Comercial "+esc(fcF(a.fechaEnvio)):""}</div></div>
+    <div class="flex-gap"><select class="input" onchange="adEstado('${a.id}',this.value)">${AD_ESTADOS.map(e=>`<option ${a.estado===e?"selected":""}>${e}</option>`).join("")}</select><button class="btn" onclick="adModalAdicional('${a.id}')">✎ Editar</button><button class="btn" onclick="adBorrar('${a.id}')">🗑 Eliminar</button></div></div>
+    ${tabla("mat","Materiales","Sin materiales todavía.")}${tabla("hh","Horas hombre","Sin horas todavía.")}
+    <div class="hint" style="margin-top:8px">Total a informar ${adR(c.tot.tot)} · real ejecutado ${adR(c.tot.real)} · por valorizar ${adR(c.tot.pend)}. Si el material ya está consolidado en la bodega del proyecto, no lo repitas aquí para no duplicarlo en «Costos del proyecto».</div></div>`;
+}
+
+/* ---------- Informe (pantalla y correo) ---------- */
+function adHtml(D){
+  if(!D||!D.lista.length) return `<div class="muted">Sin adicionales.</div>`;
+  const esc=escaparHtml, th="border:1px solid #ddd;background:#f1ece6;padding:3px 6px;font-size:11px;text-align:left", td="border:1px solid #ddd;padding:3px 6px;font-size:12px", p=D.p;
+  const tab=(f,k)=>{ if(!f.length) return ""; return `<table style="border-collapse:collapse;width:100%;margin-bottom:6px"><tr>${(k==="mat"?["Código","Descripción","Cant.","P. unit. neto","Total neto","Estado","Estimado inicial"]:["Persona / cargo","Horas","Tarifa/h","Total neto","Estado","Estimado inicial"]).map((h,i)=>`<th style="${th}${(k==="mat"?i>=2&&i!==5:i>=1&&i!==4)?';text-align:right':''}">${h}</th>`).join("")}</tr>
+    ${f.map(x=>`<tr>${k==="mat"?`<td style="${td}">${esc(x.codigo)}</td>`:""}<td style="${td}">${esc(x.desc)}</td><td style="${td};text-align:right">${x.cant}${k==="mat"?" "+esc(x.unidad):" h"}</td><td style="${td};text-align:right">${x.pu>0?adR(x.pu):'<span style="color:#b3261e">sin valor</span>'}</td><td style="${td};text-align:right">${adR(x.total)}</td><td style="${td}">${x.real?"Ejecutado":"Por valorizar"}</td><td style="${td};text-align:right;color:#777">${x.real?adR(x.est):"—"}</td></tr>`).join("")}</table>`; };
+  const resFila=(t,c,b)=>`<tr><td style="${td};${b?'font-weight:bold;background:#faf3ea':''}">${t}</td>${[c.est,c.real,c.pend,c.tot].map(v=>`<td style="${td};text-align:right;${b?'font-weight:bold;background:#faf3ea':''}">${adR(v)}</td>`).join("")}</tr>`;
+  const resHead=`<tr>${["Concepto","Estimado inicial","Real ejecutado","Por valorizar","Total a informar"].map((h,i)=>`<th style="${th}${i?';text-align:right':''}">${h}</th>`).join("")}</tr>`;
+  return `<div style="font-family:Arial,Helvetica,sans-serif;color:#222;font-size:13px;max-width:980px"><div style="font-size:17px;font-weight:bold">Adicionales ${esc(p.codigo)} — ${esc(p.nombre)}</div>
+    <div style="color:#555;margin:2px 0 8px">${esc(p.cliente||"")} · PM ${esc(p.pm||"")} · al ${esc(fcF(D.fecha))} · valores netos (sin IVA)</div>
+    ${D.lista.map(({a,c})=>`<div style="font-weight:bold;font-size:14px;margin:12px 0 2px;color:#a15a1d">${esc(a.nombre||"")} <span style="font-weight:normal;color:#777;font-size:12px">· ${esc(a.estado||"")}</span></div>${a.motivo?`<div style="color:#555;margin-bottom:4px">${esc(a.motivo)}</div>`:""}
+      ${tab(adFilas(a,"mat"),"mat")}${tab(adFilas(a,"hh"),"hh")}
+      <table style="border-collapse:collapse;width:100%;max-width:720px;margin:4px 0">${resHead}${resFila("Materiales",c.mat)}${resFila("Horas hombre",c.hh)}${resFila("Total del adicional",c.tot,true)}</table>`).join("")}
+    ${D.lista.length>1?`<div style="font-weight:bold;margin:14px 0 2px">Resumen general de adicionales</div><table style="border-collapse:collapse;width:100%;max-width:720px">${resHead}${D.lista.map(({a,c})=>resFila(esc(a.nombre||""),c.tot)).join("")}${resFila("TOTAL ADICIONALES",D.T,true)}</table>`:""}
+    <div style="margin-top:8px;font-size:11px;color:#777">«Ejecutado» = material comprado e instalado u horas trabajadas, con valores reales. «Por valorizar» = estimación pendiente de ejecutar. Totales netos, sin IVA.</div></div>`;
+}
+async function adCopiar(){
+  const D=adDatos(); if(!D||!D.lista.length){ toast("No hay adicionales para copiar.","danger"); return; } const html=adHtml(D), div=document.createElement("div"); div.innerHTML=html;
+  try{ await navigator.clipboard.write([new ClipboardItem({"text/html":new Blob([html],{type:"text/html"}),"text/plain":new Blob([div.innerText],{type:"text/plain"})})]); toast("Copiado con formato. Pégalo en el correo con Ctrl+V.","ok"); return true; }
+  catch(e){ try{ const el=document.getElementById("adCuerpo"), r=document.createRange(); r.selectNodeContents(el); const s=window.getSelection(); s.removeAllRanges(); s.addRange(r); const ok=document.execCommand("copy"); s.removeAllRanges(); toast(ok?"Copiado.":"No se pudo copiar.",ok?"ok":"danger"); return ok; }catch(e2){ return false; } }
+}
+async function adOutlook(){ const D=adDatos(); if(!D) return; await adCopiar(); window.open(`https://outlook.office.com/mail/deeplink/compose?subject=${encodeURIComponent("Adicionales "+D.p.codigo+" — "+D.p.nombre)}&body=${encodeURIComponent("Pega aquí el informe con Ctrl+V (ya quedó copiado).")}`,"_blank"); }
+
+/* ---------- Excel ---------- */
+async function adExcel(){
+  const D=adDatos(); if(!D||!D.lista.length) return; if(!(await asegurarXLSX())){ toast("No se pudo cargar el generador de Excel.","danger"); return; }
+  const wb=XLSX.utils.book_new(), hoja=(n,d)=>XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(d.length?d:[{"(sin datos)":""}]),n), R=n=>Math.round(n);
+  const res=D.lista.map(({a,c})=>({ "Adicional":a.nombre,"Estado":a.estado,"Materiales (neto)":R(c.mat.tot),"Horas hombre (neto)":R(c.hh.tot),"Estimado inicial":R(c.tot.est),"Real ejecutado":R(c.tot.real),"Por valorizar":R(c.tot.pend),"Total a informar":R(c.tot.tot) }));
+  if(D.lista.length>1) res.push({ "Adicional":"TOTAL","Estado":"","Materiales (neto)":R(D.lista.reduce((s,x)=>s+x.c.mat.tot,0)),"Horas hombre (neto)":R(D.lista.reduce((s,x)=>s+x.c.hh.tot,0)),"Estimado inicial":R(D.T.est),"Real ejecutado":R(D.T.real),"Por valorizar":R(D.T.pend),"Total a informar":R(D.T.tot) });
+  hoja("Resumen",res);
+  const det=[]; D.lista.forEach(({a})=>["mat","hh"].forEach(k=>adFilas(a,k).forEach(f=>det.push({ "Adicional":a.nombre,"Tipo":k==="mat"?"Material":"Horas hombre","Código":f.codigo,"Descripción":f.desc,"Cantidad":f.cant,"Unidad":f.unidad,"Valor unit. neto":R(f.pu),"Total neto":R(f.total),"Estado":f.real?"Ejecutado":"Por valorizar","Estimado inicial":R(f.est) }))));
+  hoja("Detalle",det); XLSX.writeFile(wb,adNombreArchivo(D,"xlsx"));
+}
+
+/* ---------- PDF ---------- */
+async function adPdf(){
+  const D=adDatos(); if(!D||!D.lista.length) return; if(!(await asegurarPDF())){ toast("No se pudo cargar el generador de PDF.","danger"); return; }
+  const { jsPDF }=window.jspdf, doc=new jsPDF({orientation:"portrait",unit:"mm",format:"a4"}), r=adR;
+  const DD={ p:D.p, fecha:D.fecha, titulo:"ADICIONALES DEL PROYECTO", pie:"Adicionales "+D.p.codigo, campo4:["Valores","Netos (sin IVA)"] };
+  let y=cpcPdfCabecera(doc,DD);
+  y=cpcPdfTarjetas(doc,y,[{t:"Real ejecutado",v:r(D.T.real)},{t:"Por valorizar",v:r(D.T.pend)},{t:"Total a informar (neto)",v:r(D.T.tot),dest:true},{t:"Vs. estimado inicial",v:(D.T.dif>=0?"+":"−")+r(Math.abs(D.T.dif)),rojo:D.T.dif>0}]);
+  const base=(extra)=>Object.assign({ theme:"striped", styles:{fontSize:8,cellPadding:1.8,overflow:"linebreak",textColor:[50,46,42],lineColor:[232,226,218]}, headStyles:{fillColor:CPC_COBRE,textColor:255,fontStyle:"bold",fontSize:7.5}, alternateRowStyles:{fillColor:[252,250,247]}, margin:{left:14,right:14,bottom:18} },extra);
+  const dr=function(ini){ return function(h){ if(h.section==="head"&&h.column.index>=ini) h.cell.styles.halign="right"; }; };
+  const est=(f)=>f.real?{content:"Ejecutado",styles:{textColor:[34,120,70],fontStyle:"bold"}}:{content:"Por valorizar",styles:{textColor:[161,90,29]}};
+  D.lista.forEach(({a,c},idx)=>{
+    if(y>232){ doc.addPage(); y=20; }
+    doc.setFont(undefined,"bold"); doc.setFontSize(11); doc.setTextColor(...CPC_COBRE); doc.text(String(a.nombre||""),14,y); doc.setFont(undefined,"normal"); doc.setFontSize(8); doc.setTextColor(140,130,120); doc.text(String(a.estado||""),196,y,{align:"right"}); y+=4.5;
+    if(a.motivo){ doc.setFontSize(8.5); doc.setTextColor(90,80,72); const t=doc.splitTextToSize(String(a.motivo),182); doc.text(t,14,y); y+=t.length*4+1; } doc.setTextColor(0,0,0);
+    const fm=adFilas(a,"mat"), fh=adFilas(a,"hh");
+    if(fm.length){ doc.autoTable(base({ startY:y, head:[["Código","Material","Cant.","P. unit.","Total","Estado","Est. inicial"]], body:fm.map(f=>[f.codigo,f.desc,f.cant+" "+f.unidad,f.pu>0?r(f.pu):"s/valor",r(f.total),est(f),f.real?r(f.est):"—"]), columnStyles:{0:{cellWidth:24,font:"courier",fontSize:7},2:{halign:"right",cellWidth:20},3:{halign:"right",cellWidth:22},4:{halign:"right",cellWidth:24},5:{cellWidth:24},6:{halign:"right",cellWidth:24}}, didParseCell:function(h){ if(h.section==="head"&&[2,3,4,6].includes(h.column.index)) h.cell.styles.halign="right"; } })); y=doc.lastAutoTable.finalY+3; }
+    if(fh.length){ if(y>250){ doc.addPage(); y=20; } doc.autoTable(base({ startY:y, head:[["Persona / cargo","Horas","Tarifa/h","Total","Estado","Est. inicial"]], body:fh.map(f=>[f.desc,f.cant+" h",f.pu>0?r(f.pu):"s/valor",r(f.total),est(f),f.real?r(f.est):"—"]), columnStyles:{1:{halign:"right",cellWidth:20},2:{halign:"right",cellWidth:24},3:{halign:"right",cellWidth:26},4:{cellWidth:26},5:{halign:"right",cellWidth:26}}, didParseCell:function(h){ if(h.section==="head"&&[1,2,3,5].includes(h.column.index)) h.cell.styles.halign="right"; } })); y=doc.lastAutoTable.finalY+3; }
+    if(y>255){ doc.addPage(); y=20; }
+    doc.autoTable(base({ startY:y, head:[["Concepto","Estimado inicial","Real ejecutado","Por valorizar","Total a informar"]], body:[["Materiales",r(c.mat.est),r(c.mat.real),r(c.mat.pend),r(c.mat.tot)],["Horas hombre",r(c.hh.est),r(c.hh.real),r(c.hh.pend),r(c.hh.tot)],[{content:"Total del adicional",styles:{fontStyle:"bold",fillColor:CPC_CLARO}},...[c.tot.est,c.tot.real,c.tot.pend,c.tot.tot].map(v=>({content:r(v),styles:{fontStyle:"bold",fillColor:CPC_CLARO,halign:"right"}}))]], columnStyles:{1:{halign:"right"},2:{halign:"right"},3:{halign:"right"},4:{halign:"right"}}, didParseCell:function(h){ if(h.section==="head"&&h.column.index>=1) h.cell.styles.halign="right"; if(h.section==="body"&&h.column.index>=1) h.cell.styles.halign="right"; } })); y=doc.lastAutoTable.finalY+9;
+  });
+  if(D.lista.length>1){ if(y>225){ doc.addPage(); y=20; } y=cpcPdfTitulo(doc,y,"Resumen general de adicionales");
+    doc.autoTable(base({ startY:y, head:[["Adicional","Estimado inicial","Real ejecutado","Por valorizar","Total a informar"]], body:D.lista.map(({a,c})=>[a.nombre||"",r(c.tot.est),r(c.tot.real),r(c.tot.pend),r(c.tot.tot)]).concat([[{content:"TOTAL ADICIONALES",styles:{fontStyle:"bold",fillColor:CPC_CLARO}},...[D.T.est,D.T.real,D.T.pend,D.T.tot].map(v=>({content:r(v),styles:{fontStyle:"bold",fillColor:CPC_CLARO,halign:"right"}}))]]), columnStyles:{1:{halign:"right"},2:{halign:"right"},3:{halign:"right"},4:{halign:"right"}}, didParseCell:function(h){ if(h.section==="head"&&h.column.index>=1) h.cell.styles.halign="right"; } })); }
+  cpcPdfNota(doc,"Valores netos (sin IVA). «Ejecutado» = material comprado e instalado u horas trabajadas, con valores reales; «Por valorizar» = estimación pendiente de ejecutar. Comercial completa la cotización formal al cliente.");
+  cpcPdfPie(doc,DD); doc.save(adNombreArchivo(D,"pdf"));
+}
+
+/* ---------- Altas, ediciones y estado ---------- */
+function adGuardar(det){ const p=proy(); if(p) registrarHistorial({proyecto:p.codigo, accion:"Editar", detalle:"Adicionales: "+det, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"}); guardarEstado(); renderAll(); }
+function adModalAdicional(id){
+  const a=id?adLista().find(x=>x.id===id):null, esc=escaparHtml;
+  openModal(`<h2>${a?"Editar adicional":"Nuevo adicional"}</h2>
+    <label class="field-label">Nombre</label><input class="input" id="adNom" value="${esc(a?a.nombre||"":"")}" placeholder="Ej: Cambio de variador por falla de origen">
+    <label class="field-label">Motivo / alcance</label><textarea class="input" id="adMot" rows="3" placeholder="Qué se pidió o por qué surge">${esc(a?a.motivo||"":"")}</textarea>
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="adGuardarAdicional('${id||""}')">Guardar</button></div>`,520);
+}
+function adGuardarAdicional(id){
+  const nom=(document.getElementById("adNom").value||"").trim(), mot=(document.getElementById("adMot").value||"").trim(); if(!nom){ toast("Escribe un nombre para el adicional.","danger"); return; }
+  const L=adLista(); let a=id?L.find(x=>x.id===id):null;
+  if(a){ a.nombre=nom; a.motivo=mot; } else { a={ id:"AD"+Math.random().toString(36).slice(2,8), nombre:nom, motivo:mot, fecha:hoyISO(), estado:"Por valorizar", mat:[], hh:[] }; L.push(a); adSel=a.id; }
+  closeModal(); adGuardar((id?"editado ":"creado ")+nom);
+}
+function adEstado(id,e){ const a=adLista().find(x=>x.id===id); if(!a) return; a.estado=e; if(e==="Enviado a Comercial") a.fechaEnvio=hoyISO(); adGuardar(a.nombre+" → "+e); }
+function adBorrar(id){ const a=adLista().find(x=>x.id===id); if(!a||!confirm(`¿Eliminar el adicional «${a.nombre}» con todas sus líneas?`)) return; const p=proy(); p.adicionales=p.adicionales.filter(x=>x.id!==id); adSel="todos"; adGuardar("eliminado "+a.nombre); }
+function adCatalogo(){ const p=proy(), m=new Map(); (DB.bodegaGeneral||[]).concat(p?p.bodega||[]:[]).forEach(b=>{ if(b&&b.material&&!m.has(String(b.material).toLowerCase())) m.set(String(b.material).toLowerCase(),b); }); return [...m.values()]; }
+function adModalLinea(aid,k,lid){
+  const a=adLista().find(x=>x.id===aid); if(!a) return; const l=lid?(a[k]||[]).find(x=>x.id===lid):null, esc=escaparHtml, mat=k==="mat";
+  const dl=mat?adCatalogo().map(b=>`<option value="${esc(b.material)}">`).join(""):(DB.personal||[]).map(q=>`<option value="${esc(q.nombre)}">`).join("");
+  openModal(`<h2>${l?"Editar":"Agregar"} ${mat?"material":"horas hombre"}</h2><div style="font-size:12px;color:#777;margin-bottom:6px">${esc(a.nombre||"")}</div>
+    <datalist id="adDL">${dl}</datalist>
+    <label class="field-label">${mat?"Descripción":"Persona o cargo"}</label><input class="input" id="adLd" list="adDL" value="${esc(l?l.desc||"":"")}" onchange="adAutoDesc('${k}')">
+    ${mat?`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div><label class="field-label">Código</label><input class="input" id="adLc" value="${esc(l?l.codigo||"":"")}"></div><div><label class="field-label">Unidad</label><input class="input" id="adLu" value="${esc(l?l.unidad||"":"unidad")}"></div></div>`:""}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div><label class="field-label">${mat?"Cantidad estimada":"Horas estimadas"}</label><input class="input" id="adLq" value="${l?l.cant:""}"></div><div><label class="field-label">${mat?"Valor unitario neto ($)":"Tarifa por hora ($)"}</label><input class="input" id="adLp" value="${l?l.pu:""}"></div></div>
+    <label style="display:flex;gap:6px;align-items:center;margin:10px 0 4px"><input type="checkbox" id="adLr" ${l&&l.real?"checked":""} onchange="document.getElementById('adLreal').style.display=this.checked?'grid':'none'"> <b>Ya ejecutado</b> <span class="muted">(${mat?"comprado e instalado":"horas ya trabajadas"}: usar valores reales)</span></label>
+    <div id="adLreal" style="display:${l&&l.real?"grid":"none"};grid-template-columns:1fr 1fr;gap:8px"><div><label class="field-label">${mat?"Cantidad real":"Horas reales"}</label><input class="input" id="adLrq" value="${l&&l.real?l.rc:""}"></div><div><label class="field-label">${mat?"Valor unitario real ($)":"Tarifa real por hora ($)"}</label><input class="input" id="adLrp" value="${l&&l.real?l.rp:""}"></div></div>
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="adGuardarLinea('${aid}','${k}','${lid||""}')">Guardar</button></div>`,560);
+}
+function adAutoDesc(k){
+  const v=(document.getElementById("adLd").value||"").trim().toLowerCase(), set=(id,x)=>{ const e=document.getElementById(id); if(e&&!String(e.value).trim()) e.value=x; };
+  if(k==="mat"){ const b=adCatalogo().find(x=>String(x.material).toLowerCase()===v); if(b){ set("adLc",b.codigo||""); const u=document.getElementById("adLu"); if(u&&(!u.value.trim()||u.value==="unidad")) u.value=b.unidad||"unidad"; if(Number(b.precioUnitario)>0) set("adLp",b.precioUnitario); } }
+  else if(cmPuedeVer()){ const q=(DB.personal||[]).find(x=>String(x.nombre).toLowerCase()===v); if(q){ const t=cmTarifa(q.id); if(t.ok) set("adLp",Math.round(t.hora)); } }
+}
+function adGuardarLinea(aid,k,lid){
+  const a=adLista().find(x=>x.id===aid); if(!a) return; const g=id=>{ const e=document.getElementById(id); return e?e.value:""; };
+  const desc=g("adLd").trim(), cant=cdNum(g("adLq")), pu=cdNum(g("adLp")), real=document.getElementById("adLr").checked, rc=real?cdNum(g("adLrq")||g("adLq")):0, rp=real?cdNum(g("adLrp")||g("adLp")):0;
+  if(!desc){ toast("Indica la descripción.","danger"); return; } if(!(cant>0)){ toast("La cantidad debe ser mayor que 0.","danger"); return; } if(real&&!(rc>0)){ toast("Indica la cantidad real.","danger"); return; }
+  a[k]=a[k]||[]; let l=lid?a[k].find(x=>x.id===lid):null; if(!l){ l={ id:"L"+Math.random().toString(36).slice(2,8) }; a[k].push(l); }
+  Object.assign(l,{ desc, cant, pu, real, rc, rp }); if(k==="mat") Object.assign(l,{ codigo:g("adLc").trim(), unidad:g("adLu").trim()||"unidad" });
+  closeModal(); adGuardar(`${k==="mat"?"material":"horas"} ${desc} en ${a.nombre}`);
+}
+function adAlternarReal(aid,k,lid){
+  const a=adLista().find(x=>x.id===aid), l=a&&(a[k]||[]).find(x=>x.id===lid); if(!l) return;
+  if(l.real){ l.real=false; adGuardar("línea vuelve a estimado en "+a.nombre); return; }
+  if(!(Number(l.pu)>0)){ adModalLinea(aid,k,lid); toast("Primero indica el valor y marca «Ya ejecutado» con los valores reales.","danger"); return; }
+  l.real=true; l.rc=Number(l.rc)>0?l.rc:l.cant; l.rp=Number(l.rp)>0?l.rp:l.pu; adGuardar("línea ejecutada en "+a.nombre);
+}
+function adBorrarLinea(aid,k,lid){ const a=adLista().find(x=>x.id===aid); if(!a||!confirm("¿Eliminar esta línea?")) return; a[k]=(a[k]||[]).filter(x=>x.id!==lid); adGuardar("línea eliminada en "+a.nombre); }
 
 /* =====================================================================
    WMS — UBICACIONES Y TRAZABILIDAD DE MATERIALES (panel flotante)

@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.28.0";
+const APP_VERSION = "3.29.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -1198,6 +1198,7 @@ const DB = {
   planSemanal: {},
   jornadaCfg: null,
   costosMO: null,
+  procCompras: null,
   acuerdos: [],
   usuariosAutorizados: {},
   personal: [],
@@ -1240,6 +1241,7 @@ function aplicarEstadoRemoto(data) {
   DB.planSemanal = data.planSemanal || {};
   DB.jornadaCfg = data.jornadaCfg || null;
   DB.costosMO = data.costosMO || null;
+  DB.procCompras = data.procCompras || null;
   DB.solicitudesPanol = data.solicitudesPanol || [];
   // Firebase no guarda arrays vacíos: se normalizan al cargar.
   DB.acuerdos = (data.acuerdos || []).map(ac => {
@@ -1273,6 +1275,7 @@ function construirPayloadEstado() {
     planSemanal: DB.planSemanal || {},
     jornadaCfg: DB.jornadaCfg || null,
     costosMO: DB.costosMO || null,
+    procCompras: DB.procCompras || null,
     solicitudesPanol: DB.solicitudesPanol,
     acuerdos: DB.acuerdos || [],
     versionApp: APP_VERSION,
@@ -1992,6 +1995,7 @@ function cambiarEstadoCotizacion(pid, cotId, nuevoEstado) {
     return;
   }
   const anterior = c.estado;
+  if (nuevoEstado === "OC Solicitada" && anterior === "Cotizando" && !pcGuardia(p, totalNetoCotizacion(c), "OC "+(c.numeroCotizacion||c.id)+" "+c.proveedor)) return false;
   c.estado = nuevoEstado;
   if(nuevoEstado==="Recibido") c.alerta = "";
   registrarHistorial({proyecto:p.codigo, accion:"Modificar", detalle:`Cotización ${cotId} (${c.referencia||c.proveedor}): ${anterior} → ${nuevoEstado}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"});
@@ -4078,6 +4082,7 @@ function solicitarCompraDirecta(pid, datos) {
     return { id:i+1, codigo:(it.codigo||"").trim(), descripcion: it.descripcion.trim(), cantidad, unidad: it.unidad||"unidad", costoNeto, montoNeto: Math.round(cantidad*costoNeto) };
   });
   const monto = items.reduce((s,it)=>s+it.montoNeto, 0);
+  if (!pcGuardia(p, monto, "Compra directa: "+resumenItemsCompraDirecta(items,60))) return false;
   const id = "CD-"+Math.random().toString(36).slice(2,7).toUpperCase();
   p.comprasDirectas.push({
     id, items, motivo: (datos.motivo||"").trim(), montoEstimado: monto,
@@ -10772,6 +10777,7 @@ function enviarSolicitudOC(pid, cotId, modo) {
   const p = proy(pid);
   const c = p && p.cotizaciones.find(x => x.id === cotId);
   if (!c) return;
+  if (c.estado === "Cotizando") { const ev = pcEvaluar(p, totalNetoCotizacion(c)); if (!ev.ok) { toast(ev.motivo, "danger"); return; } }
   const asunto = `Solicitud OC — Cotización ${c.numeroCotizacion||c.id} — ${c.proveedor}`;
   abrirEnOutlook("adminchile@alutipo.com", asunto, document.getElementById('ocCorreo').value, modo);
   cambiarEstadoCotizacion(pid, cotId, 'OC Solicitada');
@@ -13831,6 +13837,7 @@ function NAV_ACTUAL() {
     {id:"dashboard", label:"Dashboard", icon:iconGrid()},
     {id:"proyecto360", label:"Proyecto 360°", icon:iconLayers()},
     {id:"presupuesto", label:"Presupuesto", icon:iconCoin()},
+    {id:"comprasFlujo", label:"Compras por proyecto", icon:iconCart(), roles: ROLES_PROC},
     {id:"costosProyecto", label:"Costos del proyecto", icon:iconCoin(), roles: ROLES_COSTOS_PROY},
     {id:"adicionales", label:"Adicionales", icon:iconClipboard(), roles: ROLES_COSTOS_PROY},
     {id:"punch", label:"Punch List", icon:iconCheck()},
@@ -13844,6 +13851,7 @@ function NAV_ACTUAL() {
     {id:"kickoff", label:"Kick-off y CPM", icon:iconClipboard()},
     {id:"finSemana", label:"Metas fin de semana", icon:iconTarget()},
     {id:"presupuesto", label:"Presupuesto", icon:iconCoin()},
+    {id:"comprasFlujo", label:"Compras por proyecto", icon:iconCart(), roles: ROLES_PROC},
     {id:"costosProyecto", label:"Costos del proyecto", icon:iconCoin(), roles: ROLES_COSTOS_PROY},
     {id:"adicionales", label:"Adicionales", icon:iconClipboard(), roles: ROLES_COSTOS_PROY},
     {id:"punch", label:"Punch List", icon:iconCheck()},
@@ -13866,6 +13874,7 @@ function NAV_ACTUAL() {
     {id:"bodega", label:"Bodega del proyecto", icon:iconBoxes()},
     {id:"panol", label:"Pañol", icon:iconPanol()},
     {id:"reporteMateriales", label:"Reporte de Materiales", icon:iconClipboard()},
+    {id:"stockProc", label:"Stock: compras y traspaso", icon:iconBoxes(), roles: ROLES_PROC},
   ]};
   const taller = {group:"🛠 Taller, calidad y equipo", items:[
     {id:"tallerPrograma", label:"Programa de taller", icon:iconWrench()},
@@ -14080,7 +14089,7 @@ function renderAll() {
     dashboard: renderDashboard, miPanel: renderMiPanel, panelEquipo: renderPanelEquipo, bodegaGeneral: renderBodegaGeneral, personal: renderPersonal, proyecto360: renderProyecto360, planificacion: renderPlanificacion, compras: renderCompras,
     presupuesto: renderPresupuesto, bodega: renderBodega, reporteMateriales: renderReporteMateriales, comprasDirectas: renderComprasDirectas, punch: renderPunch, requerimientos: renderRequerimientos, galeria: renderGaleria, cuadroCarga: renderCuadroCarga,
     recepciones: renderRecepciones, resumenOC: renderResumenOC, panol: renderPanol, acuerdos: renderAcuerdos, informesAdmin: renderInformesAdmin, protocolos: renderProtocolos, finSemana: renderFinSemana, kickoff: renderKickoff, tallerPrograma: renderTallerPrograma,
-    fabricacion: renderFabricacion, terminados: renderTerminados, costosMO: renderCostosMO, costosProyecto: renderCostosProyecto, adicionales: renderAdicionales,
+    fabricacion: renderFabricacion, terminados: renderTerminados, costosMO: renderCostosMO, costosProyecto: renderCostosProyecto, adicionales: renderAdicionales, comprasFlujo: renderComprasFlujo, stockProc: renderStockProc,
     reaperturas: renderReaperturas, copiloto: renderCopiloto, auditoria: renderAuditoria, actividad: renderActividad, respaldos: renderRespaldos,
   };
   const target = document.getElementById("page-"+currentPage);
@@ -14754,6 +14763,267 @@ function adAlternarReal(aid,k,lid){
   l.real=true; l.rc=Number(l.rc)>0?l.rc:l.cant; l.rp=Number(l.rp)>0?l.rp:l.pu; adGuardar("línea ejecutada en "+a.nombre);
 }
 function adBorrarLinea(aid,k,lid){ const a=adLista().find(x=>x.id===aid); if(!a||!confirm("¿Eliminar esta línea?")) return; a[k]=(a[k]||[]).filter(x=>x.id!==lid); adGuardar("línea eliminada en "+a.nombre); }
+
+/* =====================================================================
+   V3.29.0 — PROCEDIMIENTO DE COMPRAS (instrucción de Gerencia, 06-11-2026)
+   Proyecto: Ingeniería → Cubicación (BOM) → Aprobación Gerencia → Compras.
+   Lo aprobado queda como presupuesto único: compras fuera de él requieren
+   autorización registrada de Gerencia de Automatización. Aplica desde el
+   proyecto Baika (CL511): cada proyecto se activa manualmente.
+   Stock: compras de stock con aprobación + traspaso a Bodega Central.
+   p.flujoCompras = {activo, docs:{k:{ok,fecha,ref}}, stockOk:{ok,fecha},
+     cub:{intl,nac,stock,nota}, solic:{fecha,ref}, aprob:{estado,fecha,ref,monto,motivo},
+     compras:{fecha,ref}, autoriza:[{id,fecha,desc,monto,quien,ref,usada,usadaEn}], excepcion:{fecha,quien,ref,desc}}
+   DB.procCompras = {stock:[{id,fecha,motivo,items,estado,...}], traspaso:{plazo,receptor,items:[...]}}
+   ===================================================================== */
+const ROLES_PROC = ROLES_COSTOS_PROY.concat(["Jefe de Taller"]);
+const PC_GER = "Víctor Sepúlveda", PC_COMPRAS = "Shayra Perez", PC_BODEGA = "Alejandro Delgado", PC_PLAZO = "2026-11-27";
+const PC_DOCS = [
+  { k:"bom", t:"BOM — cubicación completa", a:"Eléctrica" },
+  { k:"proyElec", t:"Proyecto eléctrico", a:"Eléctrica" },
+  { k:"listaCargas", t:"Listado de cargas", a:"Eléctrica" },
+  { k:"respIngElec", t:"Respaldo de aprobación de ingeniería del proyecto eléctrico", a:"Eléctrica", resp:true },
+  { k:"filosofia", t:"Filosofía de control", a:"Control" },
+  { k:"planosPerif", t:"Planos de periféricos de control", a:"Control" },
+  { k:"respIngControl", t:"Respaldo de aprobación de ingeniería de la filosofía de control", a:"Control", resp:true },
+];
+let _pcCorreo = null, pcTab = "stock";
+function pcPuede(){ return esAdministrador() || ROLES_PROC.includes(DB.role); }
+function pcDB(){ let c=DB.procCompras; if(!c||typeof c!=="object") c=DB.procCompras={}; if(!Array.isArray(c.stock)) c.stock=[]; c.traspaso=c.traspaso||{}; const t=c.traspaso; if(!t.plazo) t.plazo=PC_PLAZO; if(!t.receptor) t.receptor=PC_BODEGA; if(!Array.isArray(t.items)) t.items=[]; return c; }
+function pcId(x){ return (x||"X")+Math.random().toString(36).slice(2,7); }
+function pcF(p){ const f=p&&p.flujoCompras; if(!f||typeof f!=="object") return null; f.docs=f.docs||{}; f.cub=f.cub||{}; f.aprob=f.aprob||{}; f.solic=f.solic||{}; f.compras=f.compras||{}; f.stockOk=f.stockOk||{}; if(!Array.isArray(f.autoriza)) f.autoriza=[]; return f; }
+function pcGuardar(det,p){ registrarHistorial({proyecto:p?p.codigo:"General", accion:"Modificar", detalle:"Procedimiento de compras: "+det, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"}); guardarEstado(); renderAll(); }
+function pcFalta(f){ return PC_DOCS.filter(d=>!(f.docs[d.k]&&f.docs[d.k].ok)); }
+function pcRechazo(f){
+  const out=[], fl=pcFalta(f); if(fl.length) out.push("Documentación incompleta: falta "+fl.map(d=>d.t.replace(/^Respaldo de aprobación de ingeniería /,"respaldo de ingeniería ")).join("; "));
+  if(fl.some(d=>d.resp)) out.push("Sin aprobación de ingeniería ("+fl.filter(d=>d.resp).map(d=>d.a).join(" y ")+")");
+  if(!(f.stockOk&&f.stockOk.ok)) out.push("Stock de bodega no confirmado como actualizado");
+  return out;
+}
+function pcCubTotal(f){ const c=f.cub||{}; return { intl:Number(c.intl)||0, nac:Number(c.nac)||0, stock:Number(c.stock)||0, comprar:(Number(c.intl)||0)+(Number(c.nac)||0) }; }
+function pcEtapa(f){
+  if(pcFalta(f).length) return 1;
+  const c=pcCubTotal(f); if(!(c.comprar>0)||!(f.stockOk&&f.stockOk.ok)) return 2;
+  if(f.aprob.estado!=="aprobada") return 3;
+  return 4;
+}
+/* ¿Puede el proyecto pasar una compra? (OC de cotización o compra directa) */
+function pcEvaluar(p,monto){
+  const f=pcF(p); if(!f||!f.activo) return { ok:true, via:"" };
+  const aut=f.autoriza.find(a=>!a.usada&&(!(Number(a.monto)>0)||monto<=Number(a.monto)));
+  if(!(f.compras.fecha)){
+    if(f.excepcion&&f.excepcion.fecha) return { ok:true, via:"excepcion" };
+    return aut?{ ok:true, via:"autoriza", aut}:{ ok:false, motivo:"Este proyecto sigue el procedimiento de compras y aún no tiene la solicitud enviada a Compras con aprobación de Gerencia (etapa "+pcEtapa(f)+" de 4). Completa «Compras por proyecto» o registra una autorización de Gerencia de Automatización." };
+  }
+  const tope=Number(f.aprob.monto)||0; if(tope>0){ const usado=Math.max(0,presupuesto(p).realUsado-(Number(f.compras.base)||0)); if(usado+monto<=tope) return { ok:true, via:"" };
+    return aut?{ ok:true, via:"autoriza", aut}:{ ok:false, motivo:`Esta compra (${money(Math.round(monto))}) supera el presupuesto único aprobado (${money(tope)}; ya usado ${money(Math.round(usado))}). Solo se puede con autorización de Gerencia de Automatización: regístrala en «Compras por proyecto».` }; }
+  return { ok:true, via:"" };
+}
+function pcGuardia(p,monto,desc){
+  const r=pcEvaluar(p,monto); if(!r.ok){ toast(r.motivo,"danger"); return false; }
+  if(r.via==="autoriza"){ r.aut.usada=true; r.aut.usadaEn=desc||""; r.aut.fechaUso=hoyISO(); toast("Compra amparada por autorización de Gerencia: "+(r.aut.desc||""),"ok"); }
+  else if(r.via==="excepcion") toast("Compra amparada por la excepción de compras internacionales (Gerente general).","ok");
+  return true;
+}
+
+/* ---------- Correos ---------- */
+function pcCorreoHtml(titulo,cuerpoHtml){ return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#222;max-width:820px">${cuerpoHtml}<p style="margin-top:14px">Saludos,<br>${escaparHtml(DB.usuario||"Jair Morales")}<br>Jefatura Servicios Eléctricos — Alutipo</p></div>`; }
+function pcLista(arr){ return `<ul style="margin:4px 0 8px 18px;padding:0">${arr.map(x=>`<li>${x}</li>`).join("")}</ul>`; }
+function pcAbrirCorreo(asunto,html,accion){
+  _pcCorreo={ asunto, html }; const esc=escaparHtml;
+  openModal(`<h2>${esc(asunto)}</h2><div class="hint" style="margin-bottom:8px">Copia con formato, abre Outlook y pega con Ctrl+V. Recuerda adjuntar los documentos indicados: el procedimiento exige enviar la solicitud solo por correo.</div>
+    <div id="pcCorreoCuerpo" style="border:1px solid var(--line);border-radius:8px;padding:10px;background:#fff;max-height:52vh;overflow:auto">${html}</div>
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cerrar</button><button class="btn" onclick="pcCorreoOutlook()">✉ Outlook web</button><button class="btn btn-primary" onclick="pcCorreoCopiar()">📋 Copiar con formato</button>${accion?`<button class="btn" onclick="${accion.fn}">${accion.txt}</button>`:""}</div>`,760);
+}
+async function pcCorreoCopiar(){
+  if(!_pcCorreo) return; const html=_pcCorreo.html, div=document.createElement("div"); div.innerHTML=html;
+  try{ await navigator.clipboard.write([new ClipboardItem({"text/html":new Blob([html],{type:"text/html"}),"text/plain":new Blob([div.innerText],{type:"text/plain"})})]); toast("Copiado con formato. Pégalo en el correo con Ctrl+V.","ok"); return true; }
+  catch(e){ try{ const el=document.getElementById("pcCorreoCuerpo"), r=document.createRange(); r.selectNodeContents(el); const s=window.getSelection(); s.removeAllRanges(); s.addRange(r); const ok=document.execCommand("copy"); s.removeAllRanges(); toast(ok?"Copiado.":"No se pudo copiar.",ok?"ok":"danger"); return ok; }catch(e2){ return false; } }
+}
+async function pcCorreoOutlook(){ if(!_pcCorreo) return; await pcCorreoCopiar(); window.open(`https://outlook.office.com/mail/deeplink/compose?subject=${encodeURIComponent(_pcCorreo.asunto)}&body=${encodeURIComponent("Pega aquí el correo con Ctrl+V (ya quedó copiado) y adjunta los documentos.")}`,"_blank"); }
+
+/* ---------- Página: compras por proyecto ---------- */
+function renderComprasFlujo(){
+  const p=proy(); if(!proyectosDelAreaTodos().length||!p) return `<div class="page-head"><div><h1>Compras por proyecto</h1></div></div><div class="empty-state card">Aún no hay proyectos.</div>`;
+  const f=pcF(p), esc=escaparHtml;
+  const head=`<div class="page-head"><div><h1>Compras por proyecto</h1><div class="page-desc">Procedimiento de Gerencia: Ingeniería → Cubicación (BOM) → Aprobación de Gerencia → Compras. Lo aprobado es el presupuesto único del proyecto; fuera de él solo con autorización de Gerencia de Automatización.</div></div><div class="flex-gap">${selectorProyectos()}</div></div>`;
+  if(!f||!f.activo) return head+`<div class="card"><b>El procedimiento no está activado en ${esc(p.codigo)}.</b><p class="muted" style="margin:6px 0 10px">Rige desde el proyecto Baika (CL511) y para todo proyecto nuevo. Al activarlo, las compras (OC y compras directas) quedan sujetas a la aprobación de Gerencia y al presupuesto único.</p><button class="btn btn-primary" onclick="pcActivar('${p.id}')">Activar procedimiento en este proyecto</button></div>`;
+  const et=pcEtapa(f), nombres=["Ingeniería","Cubicación (BOM)","Aprobación Gerencia","Compras"];
+  const stepper=`<div class="card" style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap">${nombres.map((n,i)=>{ const k=i+1, hecho=k<et||(k===4&&f.compras.fecha), act=k===et&&!hecho; return `<div style="flex:1;min-width:140px;padding:8px 10px;border-radius:8px;border:1px solid ${hecho?'#9bd1ad':act?'#c1712e':'var(--line)'};background:${hecho?'#eaf7ee':act?'#fff4e6':'var(--card)'}"><div style="font-size:11px;color:#777">Etapa ${k}</div><div style="font-weight:bold">${hecho?"✔ ":""}${n}</div></div>`; }).join("")}</div>`;
+  // Etapa 1
+  const e1=`<div class="card" style="margin-bottom:10px"><b>1 · Desarrollo de ingeniería</b><div class="muted" style="font-size:12px;margin-bottom:6px">Cada área consigue la aprobación escrita de ingeniería.</div><div class="table-scroll"><table class="tbl"><thead><tr><th>Documento</th><th>Área</th><th>Estado</th><th>Referencia</th><th></th></tr></thead><tbody>${PC_DOCS.map(d=>{ const x=f.docs[d.k]||{}; return `<tr><td>${esc(d.t)}</td><td>${d.a}</td><td>${x.ok?`<span class="badge b-verde">Listo ${esc(fcF(x.fecha||""))}</span>`:'<span class="badge b-amarillo">Pendiente</span>'}</td><td class="muted">${esc(x.ref||"")}</td><td><button class="btn btn-sm" onclick="pcModalDoc('${p.id}','${d.k}')">${x.ok?"✎":"Registrar"}</button></td></tr>`; }).join("")}</tbody></table></div></div>`;
+  // Etapa 2
+  const c=f.cub, ct=pcCubTotal(f), so=f.stockOk;
+  const e2=`<div class="card" style="margin-bottom:10px"><b>2 · Cubicación</b><div class="muted" style="font-size:12px;margin-bottom:6px">Valores netos del BOM consolidado.</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px"><div><label class="field-label">Compras internacionales</label><input class="input" id="pcCi" value="${c.intl||""}"></div><div><label class="field-label">Compras nacionales</label><input class="input" id="pcCn" value="${c.nac||""}"></div><div><label class="field-label">Stock de bodega a descontar</label><input class="input" id="pcCs" value="${c.stock||""}"></div></div>
+    <label class="field-label">Nota (opcional)</label><input class="input" id="pcCnota" value="${esc(c.nota||"")}">
+    <div class="flex-gap" style="margin-top:8px;flex-wrap:wrap"><button class="btn btn-primary" onclick="pcGuardarCub('${p.id}')">Guardar cubicación</button><button class="btn" onclick="pcStockOk('${p.id}')">${so.ok?"✔ Stock de bodega actualizado al "+esc(fcF(so.fecha||""))+" (quitar)":"Confirmar que el stock de bodega está actualizado"}</button><span class="muted">Total a comprar: <b>${money(ct.comprar)}</b></span></div></div>`;
+  // Etapa 3
+  const rech=pcRechazo(f), ap=f.aprob;
+  const apEst=ap.estado==="aprobada"?`<span class="badge b-verde">Aprobada ${esc(fcF(ap.fecha||""))}</span>`:ap.estado==="rechazada"?`<span class="badge b-rojo">Rechazada ${esc(fcF(ap.fecha||""))}</span>`:f.solic.fecha?`<span class="badge b-amarillo">Solicitud enviada ${esc(fcF(f.solic.fecha))}</span>`:`<span class="badge b-gris">Sin enviar</span>`;
+  const e3=`<div class="card" style="margin-bottom:10px"><b>3 · Aprobación de Gerencia de Automatización</b> ${apEst}
+    <div style="margin:6px 0;padding:8px 10px;border-radius:8px;background:${rech.length?'#fdecea':'#eaf7ee'}">${rech.length?`<b>Gerencia rechazaría hoy por:</b>${pcLista(rech.map(esc))}`:"✔ Cumple los requisitos: documentación completa, con respaldos de ingeniería y stock actualizado."}</div>
+    ${ap.estado==="rechazada"&&ap.motivo?`<div class="muted" style="margin-bottom:6px">Motivo del rechazo: ${esc(ap.motivo)}</div>`:""}${ap.estado==="aprobada"?`<div class="muted" style="margin-bottom:6px">Presupuesto único aprobado: <b>${money(Number(ap.monto)||0)}</b> · ref. ${esc(ap.ref||"—")}</div>`:""}
+    <div class="flex-gap" style="flex-wrap:wrap"><button class="btn btn-primary" onclick="pcCorreoGerencia('${p.id}')">✉ Correo a Gerencia</button><button class="btn" onclick="pcModalRespuesta('${p.id}')">Registrar respuesta de Gerencia</button></div></div>`;
+  // Etapa 4
+  const us=Math.max(0,presupuesto(p).realUsado-(Number(f.compras.base)||0)), tope=Number(ap.monto)||0, bloq=!!f.compras.fecha;
+  const e4=`<div class="card" style="margin-bottom:10px"><b>4 · Compras</b> ${bloq?`<span class="badge b-verde">Enviado a Compras ${esc(fcF(f.compras.fecha))}</span>`:""}
+    ${bloq?`<div style="margin:6px 0;padding:8px 10px;border-radius:8px;background:#eef3fb">🔒 <b>Presupuesto único bloqueado:</b> aprobado ${money(tope)} · usado desde el envío ${money(Math.round(us))} · disponible ${money(Math.round(Math.max(0,tope-us)))}. Toda compra fuera de esto requiere autorización de Gerencia de Automatización.</div>`:`<div class="muted" style="margin:4px 0 6px">Se habilita cuando Gerencia aprueba. Mientras no se envíe la solicitud a Compras, no se pueden emitir OC ni compras directas en este proyecto.</div>`}
+    <div class="flex-gap" style="flex-wrap:wrap"><button class="btn btn-primary" ${ap.estado==="aprobada"?"":"disabled title='Primero necesitas la aprobación de Gerencia'"} onclick="pcCorreoCompras('${p.id}')">✉ Correo a Compras (${esc(PC_COMPRAS)})</button></div></div>`;
+  // Autorizaciones y excepción
+  const au=`<div class="card" style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;align-items:center"><b>Autorizaciones de compras adicionales</b><button class="btn btn-sm" onclick="pcModalAutoriza('${p.id}')">+ Registrar autorización</button></div>
+    ${f.autoriza.length?`<div class="table-scroll"><table class="tbl" style="margin-top:6px"><thead><tr><th>Fecha</th><th>Descripción</th><th style="text-align:right">Monto máx.</th><th>Autorizó</th><th>Ref.</th><th>Uso</th></tr></thead><tbody>${f.autoriza.map(a=>`<tr><td>${esc(fcF(a.fecha||""))}</td><td>${esc(a.desc||"")}</td><td style="text-align:right">${Number(a.monto)>0?money(Number(a.monto)):"sin tope"}</td><td>${esc(a.quien||"")}</td><td class="muted">${esc(a.ref||"")}</td><td>${a.usada?`<span class="badge b-gris">Usada: ${esc(a.usadaEn||"")}</span>`:'<span class="badge b-verde">Disponible</span> <button class="btn btn-sm" onclick="pcBorrarAutoriza(\''+p.id+'\',\''+a.id+'\')">🗑</button>'}</td></tr>`).join("")}</tbody></table></div>`:`<div class="muted" style="margin-top:4px">Sin autorizaciones. Cada autorización habilita una compra (OC o compra directa) fuera del presupuesto único.</div>`}
+    <div style="margin-top:10px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><div><b>Excepción: compra internacional adelantada</b><div class="muted" style="font-size:12px">Solo con aprobación única del Gerente general.</div></div>${f.excepcion&&f.excepcion.fecha?`<div><span class="badge b-verde">Aprobada ${esc(fcF(f.excepcion.fecha))} · ${esc(f.excepcion.quien||"")}</span> <button class="btn btn-sm" onclick="pcQuitarExcepcion('${p.id}')">Quitar</button></div>`:`<button class="btn btn-sm" onclick="pcModalExcepcion('${p.id}')">Registrar excepción</button>`}</div></div>`;
+  return head+stepper+e1+e2+e3+e4+au+`<div style="text-align:right"><button class="btn btn-sm" onclick="pcDesactivar('${p.id}')">Desactivar procedimiento en este proyecto</button></div>`;
+}
+function pcActivar(pid){ const p=proy(pid); if(!p) return; p.flujoCompras=p.flujoCompras||{}; Object.assign(p.flujoCompras,{ activo:true, docs:p.flujoCompras.docs||{}, cub:p.flujoCompras.cub||{}, aprob:p.flujoCompras.aprob||{}, solic:p.flujoCompras.solic||{}, compras:p.flujoCompras.compras||{}, stockOk:p.flujoCompras.stockOk||{}, autoriza:p.flujoCompras.autoriza||[] }); pcGuardar("activado en "+p.codigo,p); }
+function pcDesactivar(pid){ const p=proy(pid); if(!p||!confirm("¿Desactivar el procedimiento en este proyecto? Se levantan los bloqueos de compra (los datos se conservan).")) return; pcF(p).activo=false; pcGuardar("desactivado en "+p.codigo,p); }
+function pcModalDoc(pid,k){
+  const p=proy(pid), f=pcF(p), d=PC_DOCS.find(x=>x.k===k), x=f.docs[k]||{}, esc=escaparHtml;
+  openModal(`<h2>${esc(d.t)}</h2><label style="display:flex;gap:6px;align-items:center;margin:6px 0"><input type="checkbox" id="pcDok" ${x.ok?"checked":""}> <b>Listo / aprobado</b></label>
+    <label class="field-label">Fecha</label><input class="input" type="date" id="pcDf" value="${esc(x.fecha||hoyISO())}">
+    <label class="field-label">Referencia (archivo, enlace o correo de respaldo)</label><input class="input" id="pcDr" value="${esc(x.ref||"")}">
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="pcGuardarDoc('${pid}','${k}')">Guardar</button></div>`,520);
+}
+function pcGuardarDoc(pid,k){ const p=proy(pid), f=pcF(p); f.docs[k]={ ok:document.getElementById("pcDok").checked, fecha:document.getElementById("pcDf").value||hoyISO(), ref:(document.getElementById("pcDr").value||"").trim() }; closeModal(); pcGuardar("documento «"+PC_DOCS.find(x=>x.k===k).t+"» en "+p.codigo,p); }
+function pcGuardarCub(pid){ const p=proy(pid), f=pcF(p), g=id=>document.getElementById(id).value; f.cub={ intl:cdNum(g("pcCi")), nac:cdNum(g("pcCn")), stock:cdNum(g("pcCs")), nota:(g("pcCnota")||"").trim() }; pcGuardar("cubicación de "+p.codigo,p); }
+function pcStockOk(pid){ const p=proy(pid), f=pcF(p); f.stockOk=f.stockOk.ok?{}:{ ok:true, fecha:hoyISO() }; pcGuardar("stock de bodega confirmado en "+p.codigo,p); }
+function pcCorreoGerencia(pid){
+  const p=proy(pid), f=pcF(p), esc=escaparHtml, c=pcCubTotal(f), fl=pcFalta(f);
+  const asunto=`Solicitud de aprobación de compras — ${p.codigo} ${p.nombre}`;
+  const html=pcCorreoHtml(asunto,`<p>Estimado ${esc(PC_GER)}:</p><p>Solicito la aprobación de compras del proyecto <b>${esc(p.codigo)} — ${esc(p.nombre)}</b>${p.cliente?` (${esc(p.cliente)})`:""}, según el procedimiento de compras por proyecto.</p>
+    <p><b>Cubicación (valores netos)</b></p>${pcLista([`Compras internacionales: <b>${money(c.intl)}</b>`,`Compras nacionales: <b>${money(c.nac)}</b>`,`Total a comprar: <b>${money(c.comprar)}</b>`,`Stock de bodega a descontar: <b>${money(c.stock)}</b>${f.stockOk.ok?` (stock actualizado al ${esc(fcF(f.stockOk.fecha||""))})`:""}`])}${f.cub.nota?`<p>${esc(f.cub.nota)}</p>`:""}
+    <p><b>Documentos adjuntos</b></p>${pcLista(PC_DOCS.map(d=>esc(d.t)+(f.docs[d.k]&&f.docs[d.k].ok?"":' <span style="color:#b3261e">(PENDIENTE — completar antes de enviar)</span>')))}
+    ${fl.length?`<p style="color:#b3261e"><b>Atención:</b> aún faltan ${fl.length} documento(s); Gerencia rechaza solicitudes con documentación incompleta o sin aprobación de ingeniería.</p>`:""}<p>Quedo atento a su aprobación para enviar la solicitud al Área de Compras.</p>`);
+  pcAbrirCorreo(asunto,html,{ txt:"Registrar como enviado", fn:`pcRegSolic('${pid}')` });
+}
+function pcRegSolic(pid){ const p=proy(pid), f=pcF(p); f.solic={ fecha:hoyISO(), ref:"" }; if(f.aprob.estado==="rechazada") f.aprob={}; closeModal(); pcGuardar("solicitud de aprobación enviada a Gerencia ("+p.codigo+")",p); }
+function pcModalRespuesta(pid){
+  const p=proy(pid), f=pcF(p), a=f.aprob, esc=escaparHtml, ct=pcCubTotal(f);
+  openModal(`<h2>Respuesta de Gerencia — ${esc(p.codigo)}</h2><label class="field-label">Resultado</label><select class="input" id="pcAe"><option value="aprobada" ${a.estado!=="rechazada"?"selected":""}>Aprobada</option><option value="rechazada" ${a.estado==="rechazada"?"selected":""}>Rechazada</option></select>
+    <label class="field-label">Fecha</label><input class="input" type="date" id="pcAf" value="${esc(a.fecha||hoyISO())}">
+    <label class="field-label">Monto aprobado — presupuesto único (neto)</label><input class="input" id="pcAm" value="${a.monto||ct.comprar||""}">
+    <label class="field-label">Referencia (correo de aprobación)</label><input class="input" id="pcAr" value="${esc(a.ref||"")}">
+    <label class="field-label">Motivo (si se rechaza)</label><input class="input" id="pcAx" value="${esc(a.motivo||"")}">
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="pcGuardarRespuesta('${pid}')">Guardar</button></div>`,540);
+}
+function pcGuardarRespuesta(pid){ const p=proy(pid), f=pcF(p), g=id=>document.getElementById(id).value, est=g("pcAe"); f.aprob={ estado:est, fecha:g("pcAf")||hoyISO(), monto:est==="aprobada"?cdNum(g("pcAm")):0, ref:(g("pcAr")||"").trim(), motivo:(g("pcAx")||"").trim() }; closeModal(); pcGuardar("respuesta de Gerencia: "+est+" ("+p.codigo+")",p); }
+function pcCorreoCompras(pid){
+  const p=proy(pid), f=pcF(p), esc=escaparHtml, c=pcCubTotal(f), a=f.aprob;
+  const asunto=`Solicitud de compra — ${p.codigo} ${p.nombre} (aprobada por Gerencia)`;
+  const html=pcCorreoHtml(asunto,`<p>Estimada ${esc(PC_COMPRAS)}:</p><p>Adjunto la aprobación de Gerencia de Automatización${a.fecha?` del ${esc(fcF(a.fecha))}`:""}${a.ref?` (${esc(a.ref)})`:""} para las compras del proyecto <b>${esc(p.codigo)} — ${esc(p.nombre)}</b>. Solicito gestionar las compras según el BOM adjunto:</p>
+    ${pcLista([`Compras internacionales: <b>${money(c.intl)}</b>`,`Compras nacionales: <b>${money(c.nac)}</b>`,`Presupuesto único aprobado: <b>${money(Number(a.monto)||c.comprar)}</b> (neto)`])}<p>Según el procedimiento, lo aprobado es el presupuesto único del proyecto: no se pueden realizar compras adicionales ni fuera de esta solicitud sin autorización de Gerencia de Automatización.</p>`);
+  pcAbrirCorreo(asunto,html,{ txt:"Registrar como enviado", fn:`pcRegCompras('${pid}')` });
+}
+function pcRegCompras(pid){ const p=proy(pid), f=pcF(p); f.compras={ fecha:hoyISO(), ref:"", base:Math.round(presupuesto(p).realUsado) }; closeModal(); pcGuardar("solicitud enviada a Compras; presupuesto único bloqueado ("+p.codigo+")",p); }
+function pcModalAutoriza(pid){
+  openModal(`<h2>Autorización de Gerencia de Automatización</h2><div class="hint">Registra el respaldo (correo) que habilita una compra fuera del presupuesto único.</div>
+    <label class="field-label">Qué se autoriza</label><input class="input" id="pcUd" placeholder="Ej: Contactores adicionales por cambio de alcance">
+    <label class="field-label">Monto máximo neto (vacío = sin tope)</label><input class="input" id="pcUm">
+    <label class="field-label">Quién autoriza</label><input class="input" id="pcUq" value="${escaparHtml(PC_GER)}">
+    <label class="field-label">Referencia (correo)</label><input class="input" id="pcUr">
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="pcGuardarAutoriza('${pid}')">Guardar</button></div>`,520);
+}
+function pcGuardarAutoriza(pid){ const p=proy(pid), f=pcF(p), g=id=>document.getElementById(id).value, d=(g("pcUd")||"").trim(); if(!d){ toast("Indica qué se autoriza.","danger"); return; } f.autoriza.push({ id:pcId("A"), fecha:hoyISO(), desc:d, monto:cdNum(g("pcUm")), quien:(g("pcUq")||"").trim(), ref:(g("pcUr")||"").trim(), usada:false }); closeModal(); pcGuardar("autorización adicional: "+d+" ("+p.codigo+")",p); }
+function pcBorrarAutoriza(pid,id){ const p=proy(pid), f=pcF(p); if(!confirm("¿Eliminar esta autorización?")) return; f.autoriza=f.autoriza.filter(a=>a.id!==id); pcGuardar("autorización eliminada ("+p.codigo+")",p); }
+function pcModalExcepcion(pid){
+  openModal(`<h2>Excepción de compra internacional</h2><div class="hint">Aprobación única del Gerente general para adelantar compras internacionales.</div>
+    <label class="field-label">Qué se adelanta</label><input class="input" id="pcXd"><label class="field-label">Quién aprobó</label><input class="input" id="pcXq" value="Martín Iribarne"><label class="field-label">Referencia (correo)</label><input class="input" id="pcXr">
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="pcGuardarExcepcion('${pid}')">Guardar</button></div>`,520);
+}
+function pcGuardarExcepcion(pid){ const p=proy(pid), f=pcF(p), g=id=>document.getElementById(id).value; f.excepcion={ fecha:hoyISO(), desc:(g("pcXd")||"").trim(), quien:(g("pcXq")||"").trim(), ref:(g("pcXr")||"").trim() }; closeModal(); pcGuardar("excepción internacional registrada ("+p.codigo+")",p); }
+function pcQuitarExcepcion(pid){ const p=proy(pid), f=pcF(p); f.excepcion=null; pcGuardar("excepción internacional quitada ("+p.codigo+")",p); }
+
+/* ---------- Página: stock (compras de stock + traspaso a Bodega Central) ---------- */
+function renderStockProc(){
+  const tabs=`<div class="mp-chips"><button class="mp-chip ${pcTab==='stock'?'on':''}" onclick="pcTab='stock'; renderAll()">Compras de stock</button><button class="mp-chip ${pcTab==='traspaso'?'on':''}" onclick="pcTab='traspaso'; renderAll()">Traspaso a Bodega Central</button></div>`;
+  return `<div class="page-head"><div><h1>Stock: compras y traspaso</h1><div class="page-desc">Compras de stock de insumos de alto flujo con aprobación de Gerencia de Automatización, y entrega del stock del taller a Bodega Central (${escaparHtml(PC_BODEGA)}).</div></div></div>${tabs}${pcTab==="traspaso"?pcHtmlTraspaso():pcHtmlStock()}`;
+}
+const PC_ESTADOS_STOCK = ["Borrador","Solicitada a Gerencia","Aprobada","Rechazada","Enviada a Compras"];
+function pcTotalStock(s){ return (s.items||[]).reduce((a,i)=>a+(Number(i.cant)||0)*(Number(i.pu)||0),0); }
+function pcHtmlStock(){
+  const L=pcDB().stock.slice().reverse(), esc=escaparHtml, col={ "Borrador":"gris","Solicitada a Gerencia":"amarillo","Aprobada":"verde","Rechazada":"rojo","Enviada a Compras":"verde" };
+  return `<div class="card" style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><div class="muted">Flujo: Borrador → Solicitada a Gerencia → Aprobada → Enviada a Compras (Compras exige el respaldo de aprobación).</div><button class="btn btn-primary" onclick="pcModalStock('')">+ Nueva compra de stock</button></div></div>
+  ${L.length?L.map(s=>`<div class="card" style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><div><b>${esc(s.titulo||"Compra de stock")}</b> <span class="badge b-${col[s.estado]||"gris"}">${esc(s.estado)}</span><div class="muted" style="font-size:12px">${esc(fcF(s.fecha||""))} · ${esc(s.motivo||"")}</div></div><div style="text-align:right"><div style="font-size:16px;font-weight:bold">${money(Math.round(pcTotalStock(s)))}</div><div class="muted" style="font-size:12px">neto estimado</div></div></div>
+    <div class="table-scroll"><table class="tbl" style="margin-top:6px"><thead><tr><th>Descripción</th><th style="text-align:right">Cant.</th><th style="text-align:right">Valor unit.</th><th style="text-align:right">Total</th></tr></thead><tbody>${s.items.map(i=>`<tr><td>${esc(i.desc)}</td><td style="text-align:right">${i.cant} ${esc(i.unidad||"")}</td><td style="text-align:right">${Number(i.pu)>0?money(Math.round(i.pu)):"—"}</td><td style="text-align:right">${money(Math.round((Number(i.cant)||0)*(Number(i.pu)||0)))}</td></tr>`).join("")}</tbody></table></div>
+    ${s.aprob&&s.aprob.fecha?`<div class="muted" style="margin-top:4px;font-size:12px">Aprobación ${esc(fcF(s.aprob.fecha))}${s.aprob.ref?" · "+esc(s.aprob.ref):""}</div>`:""}
+    <div class="flex-gap" style="margin-top:8px;flex-wrap:wrap">${s.estado==="Borrador"||s.estado==="Rechazada"?`<button class="btn btn-primary" onclick="pcCorreoStockGer('${s.id}')">✉ Solicitar aprobación a Gerencia</button>`:""}${s.estado==="Solicitada a Gerencia"?`<button class="btn" onclick="pcModalStockResp('${s.id}')">Registrar respuesta de Gerencia</button>`:""}${s.estado==="Aprobada"?`<button class="btn btn-primary" onclick="pcCorreoStockCompras('${s.id}')">✉ Enviar a Compras (${esc(PC_COMPRAS)})</button>`:""}${s.estado==="Borrador"||s.estado==="Rechazada"?`<button class="btn" onclick="pcModalStock('${s.id}')">✎ Editar</button>`:""}<button class="btn btn-sm" onclick="pcBorrarStock('${s.id}')">🗑</button></div></div>`).join(""):`<div class="empty-state card">Aún no hay compras de stock.</div>`}`;
+}
+function pcModalStock(id){
+  const s=id?pcDB().stock.find(x=>x.id===id):null, esc=escaparHtml, it=(s&&s.items)||[], filas=Math.max(8,it.length);
+  openModal(`<h2>${s?"Editar":"Nueva"} compra de stock</h2><label class="field-label">Título</label><input class="input" id="pcSt" value="${esc(s?s.titulo||"":"")}" placeholder="Ej: Reposición de contactores y térmicos">
+    <label class="field-label">Justificación (alto flujo de uso)</label><textarea class="input" id="pcSm" rows="2">${esc(s?s.motivo||"":"")}</textarea>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px"><b>Ítems</b><button class="btn btn-sm" onclick="pcSugerirStock()">Sugerir desde bodega bajo mínimo</button></div>
+    <div id="pcSItems" style="max-height:34vh;overflow:auto">${Array.from({length:filas},(_,i)=>pcFilaStock(it[i])).join("")}</div>
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="pcGuardarStock('${id||""}')">Guardar</button></div>`,720);
+}
+function pcFilaStock(i){ const esc=escaparHtml; i=i||{}; return `<div class="pcSF" style="display:grid;grid-template-columns:3fr 70px 80px 100px;gap:6px;margin-top:4px"><input class="input" placeholder="Descripción" value="${esc(i.desc||"")}"><input class="input" placeholder="Cant." value="${i.cant||""}"><input class="input" placeholder="Unidad" value="${esc(i.unidad||"")}"><input class="input" placeholder="Valor unit." value="${i.pu||""}"></div>`; }
+function pcSugerirStock(){
+  const sug=(DB.bodegaGeneral||[]).filter(b=>Number(b.minimo)>0&&(Number(b.stock)||0)<Number(b.minimo)).map(b=>({ desc:b.material, cant:Math.max(1,Math.ceil(Number(b.minimo)-(Number(b.stock)||0))), unidad:b.unidad||"unidad", pu:b.precioUnitario||"" }));
+  if(!sug.length){ toast("No hay productos bajo el mínimo en la bodega general.","ok"); return; }
+  document.getElementById("pcSItems").innerHTML=sug.concat(Array(Math.max(0,8-sug.length)).fill(null)).map(pcFilaStock).join(""); toast(`${sug.length} producto(s) bajo el mínimo cargados: ajusta las cantidades.`,"ok");
+}
+function pcGuardarStock(id){
+  const items=[...document.querySelectorAll("#pcSItems .pcSF")].map(r=>{ const v=[...r.querySelectorAll("input")].map(x=>x.value.trim()); return { desc:v[0], cant:cdNum(v[1]), unidad:v[2]||"unidad", pu:cdNum(v[3]) }; }).filter(i=>i.desc&&i.cant>0);
+  if(!items.length){ toast("Agrega al menos un ítem con cantidad.","danger"); return; } const titulo=(document.getElementById("pcSt").value||"").trim()||"Compra de stock", motivo=(document.getElementById("pcSm").value||"").trim();
+  const L=pcDB().stock; let s=id?L.find(x=>x.id===id):null; if(s){ Object.assign(s,{ titulo, motivo, items }); } else { s={ id:pcId("S"), fecha:hoyISO(), titulo, motivo, items, estado:"Borrador" }; L.push(s); }
+  closeModal(); pcGuardar("compra de stock «"+titulo+"»");
+}
+function pcBorrarStock(id){ const c=pcDB(); const s=c.stock.find(x=>x.id===id); if(!s||!confirm("¿Eliminar esta compra de stock?")) return; c.stock=c.stock.filter(x=>x.id!==id); pcGuardar("compra de stock eliminada"); }
+function pcStockTabla(s){ const esc=escaparHtml; return pcLista(s.items.map(i=>`${esc(i.desc)} — ${i.cant} ${esc(i.unidad||"")}${Number(i.pu)>0?` × ${money(Math.round(i.pu))} = ${money(Math.round(i.cant*i.pu))}`:""}`)); }
+function pcCorreoStockGer(id){
+  const s=pcDB().stock.find(x=>x.id===id); if(!s) return; const esc=escaparHtml, asunto=`Solicitud de aprobación de compra de stock — ${s.titulo}`;
+  pcAbrirCorreo(asunto,pcCorreoHtml(asunto,`<p>Estimado ${esc(PC_GER)}:</p><p>Solicito aprobación para una compra estratégica de stock de insumos y materiales de alto flujo.</p>${s.motivo?`<p><b>Justificación:</b> ${esc(s.motivo)}</p>`:""}<p><b>Detalle (valores netos)</b></p>${pcStockTabla(s)}<p>Total estimado: <b>${money(Math.round(pcTotalStock(s)))}</b></p><p>Con su respaldo de aprobación enviaré la solicitud al Área de Compras.</p>`),{ txt:"Registrar como enviado", fn:`pcStockEstado('${id}','Solicitada a Gerencia')` });
+}
+function pcStockEstado(id,e){ const s=pcDB().stock.find(x=>x.id===id); if(!s) return; s.estado=e; closeModal(); pcGuardar("compra de stock «"+s.titulo+"» → "+e); }
+function pcModalStockResp(id){
+  openModal(`<h2>Respuesta de Gerencia — compra de stock</h2><label class="field-label">Resultado</label><select class="input" id="pcRe"><option value="Aprobada">Aprobada</option><option value="Rechazada">Rechazada</option></select><label class="field-label">Fecha</label><input class="input" type="date" id="pcRf" value="${hoyISO()}"><label class="field-label">Referencia (correo de aprobación)</label><input class="input" id="pcRr">
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="pcGuardarStockResp('${id}')">Guardar</button></div>`,500);
+}
+function pcGuardarStockResp(id){ const s=pcDB().stock.find(x=>x.id===id); if(!s) return; const g=i=>document.getElementById(i).value; s.estado=g("pcRe"); s.aprob={ fecha:g("pcRf")||hoyISO(), ref:(g("pcRr")||"").trim() }; closeModal(); pcGuardar("respuesta de Gerencia a compra de stock «"+s.titulo+"»: "+s.estado); }
+function pcCorreoStockCompras(id){
+  const s=pcDB().stock.find(x=>x.id===id); if(!s) return; const esc=escaparHtml, asunto=`Solicitud de compra de stock (aprobada por Gerencia) — ${s.titulo}`;
+  pcAbrirCorreo(asunto,pcCorreoHtml(asunto,`<p>Estimada ${esc(PC_COMPRAS)}:</p><p>Adjunto la aprobación de Gerencia de Automatización${s.aprob&&s.aprob.fecha?` del ${esc(fcF(s.aprob.fecha))}`:""}${s.aprob&&s.aprob.ref?` (${esc(s.aprob.ref)})`:""} para la compra de stock. Solicito gestionarla:</p>${pcStockTabla(s)}<p>Total estimado: <b>${money(Math.round(pcTotalStock(s)))}</b> (neto). La recepción y custodia quedan a cargo de ${esc(PC_BODEGA)}, encargado de bodega.</p>`),{ txt:"Registrar como enviado", fn:`pcStockEstado('${id}','Enviada a Compras')` });
+}
+
+/* ----- Traspaso de stock a Bodega Central ----- */
+function pcDiasPlazo(){ const t=pcDB().traspaso, a=new Date(hoyISO()+"T12:00:00Z"), b=new Date(t.plazo+"T12:00:00Z"); return Math.round((b-a)/86400000); }
+function pcHtmlTraspaso(){
+  const t=pcDB().traspaso, esc=escaparHtml, N=t.items.length, n=k=>t.items.filter(i=>i[k]).length, d=pcDiasPlazo(), val=t.items.reduce((a,i)=>a+(Number(i.cant)||0)*(Number(i.pu)||0),0);
+  const pct=N?Math.round(n("bsale")/N*100):0, venc=d<0, col=venc?"#b3261e":d<=7?"#c1712e":"#2f7d5c";
+  return `<div class="card" style="margin-bottom:10px"><div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between"><div><b>Entrega de todo el stock disponible a ${esc(t.receptor)}</b><div class="muted" style="font-size:12px">Inventariado y cargado en Bsale. Plazo: ${esc(fcF(t.plazo))}</div></div>
+    <div style="text-align:right"><div style="font-size:20px;font-weight:bold;color:${col}">${venc?"Vencido hace "+(-d)+" d":d===0?"Vence hoy":d+" días"}</div><div class="muted" style="font-size:12px">para el plazo</div></div></div>
+    <div style="margin:10px 0 4px;height:10px;background:#eee;border-radius:6px;overflow:hidden"><div style="width:${pct}%;height:100%;background:#2f7d5c"></div></div>
+    <div class="muted" style="font-size:12px">${N} líneas · inventariadas ${n("inv")} · entregadas ${n("ent")} · cargadas en Bsale ${n("bsale")} (${pct}%) · valor ${money(Math.round(val))}</div>
+    <div class="flex-gap" style="margin-top:8px;flex-wrap:wrap"><button class="btn btn-primary" onclick="pcGenerarTraspaso()">Cargar stock desde Bodega Central</button><button class="btn" onclick="pcModalLineaTras()">+ Línea manual</button><button class="btn" onclick="pcExcelTras()">📊 Excel (Bsale)</button><button class="btn" onclick="pcPdfTras()">📄 Acta de entrega (PDF)</button></div>
+    <div class="hint" style="margin-top:6px">«Cargar stock» toma los productos con existencia de la Bodega Central y no duplica lo ya listado. El material guardado en bodegas de proyecto o en el taller, agrégalo como línea manual.</div></div>
+    ${N?`<div class="card"><div class="table-scroll"><table class="tbl"><thead><tr><th>Código</th><th>Material</th><th style="text-align:right">Cant.</th><th style="text-align:right">Valor unit.</th><th style="text-align:center">Inventariado</th><th style="text-align:center">Entregado</th><th style="text-align:center">En Bsale</th><th></th></tr></thead><tbody>${t.items.map(i=>`<tr><td>${esc(i.codigo||"")}</td><td>${esc(i.material)}</td><td style="text-align:right">${i.cant} ${esc(i.unidad||"")}</td><td style="text-align:right">${Number(i.pu)>0?money(Math.round(i.pu)):'<span style="color:#b3261e">sin valor</span>'}</td>${["inv","ent","bsale"].map(k=>`<td style="text-align:center"><input type="checkbox" ${i[k]?"checked":""} onchange="pcTrasCheck('${i.id}','${k}',this.checked)"></td>`).join("")}<td><button class="btn btn-sm" onclick="pcBorrarLineaTras('${i.id}')">🗑</button></td></tr>`).join("")}</tbody></table></div></div>`:`<div class="empty-state card">Aún no hay líneas. Usa «Cargar stock desde Bodega Central».</div>`}`;
+}
+function pcGenerarTraspaso(){
+  const t=pcDB().traspaso; let nuevos=0, act=0;
+  (DB.bodegaGeneral||[]).forEach(b=>{ const st=Number(b.stock)||0; if(st<=0) return; const ex=t.items.find(i=>i.codigo&&i.codigo===b.codigo&&i.origen==="central");
+    if(ex){ if(!ex.ent&&ex.cant!==st){ ex.cant=st; act++; } return; } t.items.push({ id:pcId("T"), codigo:b.codigo||"", material:b.material, unidad:b.unidad||"unidad", cant:st, pu:Number(b.precioUnitario)||0, origen:"central", inv:false, ent:false, bsale:false }); nuevos++; });
+  pcGuardar(`traspaso de stock: ${nuevos} líneas nuevas, ${act} actualizadas`); }
+function pcTrasCheck(id,k,v){ const i=pcDB().traspaso.items.find(x=>x.id===id); if(!i) return; i[k]=v; if(k==="bsale"&&v){ i.ent=true; i.inv=true; } if(k==="ent"&&v) i.inv=true; if(!v&&k==="inv"){ i.ent=false; i.bsale=false; } if(!v&&k==="ent") i.bsale=false; pcGuardar("traspaso: "+i.material+" → "+k+(v?" ✔":" ✘")); }
+function pcBorrarLineaTras(id){ const t=pcDB().traspaso; if(!confirm("¿Quitar esta línea del traspaso?")) return; t.items=t.items.filter(i=>i.id!==id); pcGuardar("línea de traspaso quitada"); }
+function pcModalLineaTras(){
+  openModal(`<h2>Línea manual de traspaso</h2><label class="field-label">Material</label><input class="input" id="pcTm"><div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px"><div><label class="field-label">Código</label><input class="input" id="pcTc"></div><div><label class="field-label">Cantidad</label><input class="input" id="pcTq"></div><div><label class="field-label">Unidad</label><input class="input" id="pcTu" value="unidad"></div><div><label class="field-label">Valor unit. neto</label><input class="input" id="pcTp"></div></div>
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="pcGuardarLineaTras()">Agregar</button></div>`,560);
+}
+function pcGuardarLineaTras(){ const g=i=>document.getElementById(i).value.trim(), m=g("pcTm"), q=cdNum(g("pcTq")); if(!m||!(q>0)){ toast("Indica material y cantidad.","danger"); return; } pcDB().traspaso.items.push({ id:pcId("T"), codigo:g("pcTc"), material:m, unidad:g("pcTu")||"unidad", cant:q, pu:cdNum(g("pcTp")), origen:"manual", inv:false, ent:false, bsale:false }); closeModal(); pcGuardar("línea manual de traspaso: "+m); }
+async function pcExcelTras(){
+  const t=pcDB().traspaso; if(!t.items.length){ toast("No hay líneas.","danger"); return; } if(!(await asegurarXLSX())){ toast("No se pudo cargar el generador de Excel.","danger"); return; }
+  const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(t.items.map(i=>({ "Código":i.codigo,"Descripción":i.material,"Cantidad":i.cant,"Unidad":i.unidad,"Costo unitario neto":Math.round(Number(i.pu)||0),"Valor total":Math.round((Number(i.cant)||0)*(Number(i.pu)||0)),"Inventariado":i.inv?"Sí":"No","Entregado":i.ent?"Sí":"No","Cargado en Bsale":i.bsale?"Sí":"No" }))),"Traspaso"); XLSX.writeFile(wb,`Traspaso_stock_Bodega_Central_${hoyISO()}.xlsx`);
+}
+async function pcPdfTras(){
+  const t=pcDB().traspaso; if(!t.items.length){ toast("No hay líneas.","danger"); return; } if(!(await asegurarPDF())){ toast("No se pudo cargar el generador de PDF.","danger"); return; }
+  const { jsPDF }=window.jspdf, doc=new jsPDF({orientation:"portrait",unit:"mm",format:"a4"}), r=n=>money(Math.round(n)), val=t.items.reduce((a,i)=>a+(Number(i.cant)||0)*(Number(i.pu)||0),0);
+  const DD={ p:{ codigo:"Traspaso de stock", nombre:"Entrega de stock del taller eléctrico a Bodega Central", cliente:"Alutipo", pm:DB.usuario||"Jair Morales" }, fecha:hoyISO(), titulo:"ACTA DE TRASPASO", pie:"Acta de traspaso de stock", campo4:["Plazo",fcF(t.plazo)] };
+  let y=cpcPdfCabecera(doc,DD); y=cpcPdfTarjetas(doc,y,[{t:"Líneas",v:String(t.items.length)},{t:"Valor neto total",v:r(val),dest:true},{t:"Recibe",v:t.receptor}]); y=cpcPdfTitulo(doc,y+1,"Material entregado");
+  doc.autoTable({ startY:y, head:[["Código","Material","Cant.","Valor unit.","Valor total","Inv.","Ent.","Bsale"]], body:t.items.map(i=>[i.codigo||"",i.material,i.cant+" "+(i.unidad||""),Number(i.pu)>0?r(i.pu):"s/valor",r((Number(i.cant)||0)*(Number(i.pu)||0)),i.inv?"✓":"",i.ent?"✓":"",i.bsale?"✓":""]), theme:"striped", styles:{fontSize:8,cellPadding:1.8,textColor:[50,46,42],lineColor:[232,226,218]}, headStyles:{fillColor:CPC_COBRE,textColor:255,fontSize:7.5}, alternateRowStyles:{fillColor:[252,250,247]}, margin:{left:14,right:14,bottom:18}, columnStyles:{0:{cellWidth:24,font:"courier",fontSize:7},2:{halign:"right",cellWidth:20},3:{halign:"right",cellWidth:22},4:{halign:"right",cellWidth:24},5:{halign:"center",cellWidth:9},6:{halign:"center",cellWidth:9},7:{halign:"center",cellWidth:11}}, didParseCell:function(h){ if(h.section==="head"&&[2,3,4].includes(h.column.index)) h.cell.styles.halign="right"; if(h.section==="head"&&h.column.index>=5) h.cell.styles.halign="center"; } });
+  let yf=doc.lastAutoTable.finalY+26; if(yf>262){ doc.addPage(); yf=40; } doc.setDrawColor(120,110,100); doc.line(24,yf,84,yf); doc.line(126,yf,186,yf); doc.setFontSize(8.5); doc.setTextColor(90,80,72); doc.text("Entrega: "+(DB.usuario||"Jair Morales"),54,yf+5,{align:"center"}); doc.text("Jefatura Servicios Eléctricos",54,yf+9.5,{align:"center"}); doc.text("Recibe: "+t.receptor,156,yf+5,{align:"center"}); doc.text("Encargado de bodega",156,yf+9.5,{align:"center"});
+  cpcPdfPie(doc,DD); doc.save(`Acta_traspaso_stock_${hoyISO()}.pdf`);
+}
 
 /* =====================================================================
    WMS — UBICACIONES Y TRAZABILIDAD DE MATERIALES (panel flotante)

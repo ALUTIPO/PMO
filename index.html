@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.33.0";
+const APP_VERSION = "3.34.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -13480,7 +13480,7 @@ const TP_MAX_EXTRA_DIA = 2;     // Código del Trabajo, art. 31: máximo 2 horas
 const TP_MAX_SEMANA = 42;       // jornada ordinaria semanal máxima vigente desde abril de 2026
 const TP_DIAS_C = ["Lunes","Martes","Miércoles","Jueves","Viernes"];
 function tpHtxt(h){ return String(Math.round(h*10)/10).replace(".",","); }
-function tpFechaCorta(d){ const dt=new Date(d+"T12:00:00Z"); return TP_DIAS_C[dt.getUTCDay()-1].slice(0,3)+" "+dt.getUTCDate()+" "+DIST_MESES[dt.getUTCMonth()]; }
+function tpFechaCorta(d){ const dt=new Date(d+"T12:00:00Z"); return (["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"][dt.getUTCDay()])+" "+dt.getUTCDate()+" "+DIST_MESES[dt.getUTCMonth()]; }
 function tpGerSemanas(plan){
   const its=plan.items.filter(i=>i.ini&&i.fin); if(!its.length) return [plan.lunes];
   const ini=its.reduce((m,i)=>i.ini<m?i.ini:m,its[0].ini), fin=its.reduce((m,i)=>i.fin>m?i.fin:m,its[0].fin), out=[];
@@ -14173,8 +14173,8 @@ function cmR(x){ return Math.round(x*10)/10; }
 function cmPropuesta(lunes){
   const M=psModelo(lunes), D=psDatos(lunes), w=psLeer(lunes), out=[];
   M.dias.forEach(d=>{
-    const fecha=d.fecha, cap=psCapDia(M.cfg,fecha), norm=psSalidaNormal(M.cfg,fecha);
-    d.gente.forEach(pid=>{
+    const fecha=d.fecha;
+    d.gente.forEach(pid=>{ const cap=cmCap(pid,fecha), norm=hxSalidaRef(pid,fecha);
       const es=D.ent[fecha].filter(e=>e.pid===pid), tal=es.filter(e=>e.origen==="taller"), ter=es.filter(e=>e.origen!=="taller");
       const gen=w.generales.filter(g=>g.fecha===fecha&&g.pid===pid), pesos=[];
       const Wt=tal.reduce((a,e)=>a+e.h,0); let resto=Math.max(0,cap-Wt);
@@ -14186,8 +14186,20 @@ function cmPropuesta(lunes){
       pesos.forEach(p=>{ const f=p.w/W; out.push({ id:cmId(), pid, fecha, proyectoId:p.proyectoId, lugar:p.lugar, h:cmR(cap*f), hx:cmR(extra*f), nota:p.nota, origen:"auto" }); });
     });
   });
+  cmMezclarHX(lunes,out);
   return out.filter(l=>l.h>0||l.hx>0);
 }
+/* Las horas extra registradas (y confirmadas con el reloj) mandan sobre la estimación del programa */
+function cmMezclarHX(lunes,ls){
+  const fin=sumarDias(lunes,6), R=hxLista().filter(r=>r.pid&&r.fecha>=lunes&&r.fecha<=fin&&!hxCalc(r).sinFin&&hxCalc(r).h>0);
+  const vistos=new Set(); R.forEach(r=>{ const k=r.pid+"|"+r.fecha; if(vistos.has(k)) return; vistos.add(k); ls.forEach(l=>{ if(l.pid===r.pid&&l.fecha===r.fecha&&l.origen!=="manual") l.hx=0; }); });
+  let n=0; R.forEach(r=>{ const c=hxCalc(r), pr=r.proyectoId||""; let l=ls.find(x=>x.pid===r.pid&&x.fecha===r.fecha&&(x.proyectoId||"")===pr&&x.origen!=="manual");
+    if(!l) l=ls.find(x=>x.pid===r.pid&&x.fecha===r.fecha&&x.origen!=="manual"&&!pr);
+    if(!l){ l={ id:cmId(), pid:r.pid, fecha:r.fecha, proyectoId:pr, lugar:c.ter?"terreno":"taller", h:0, hx:0, nota:"", origen:"auto" }; ls.push(l); }
+    l.hx=cmR((Number(l.hx)||0)+c.h); l.nota=((l.nota?l.nota+" · ":"")+"Horas extra"+(r.motivo?": "+r.motivo:"")+(r.real?" (hasta "+r.real+")":"")).slice(0,160); n++; });
+  return n;
+}
+function cmTraerHX(){ if(!cmPuedeRegistrar()) return; const s=cmSemana(cmLunes,true); if(s.estado==="confirmada") return; const n=cmMezclarHX(cmLunes,s.lineas); registrarHistorial({proyecto:"Costos", accion:"Modificar", detalle:`Horas extra registradas traídas a la semana ${cmLunes} (${n})`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"}); guardarEstado(); renderAll(); toast(n?`${n} registro(s) de horas extra aplicados a la semana.`:"No hay horas extra registradas esta semana.", n?"ok":"danger"); }
 function cmSemana(lunes,crear){
   const c=cmDB(); let s=c.semanas[lunes];
   if(!s){ if(!crear) return { estado:"propuesta", lineas:cmPropuesta(lunes), virtual:true }; s=c.semanas[lunes]={ estado:"borrador", lineas:cmPropuesta(lunes) }; }
@@ -14197,10 +14209,10 @@ function cmSemana(lunes,crear){
 function cmValidar(lunes){
   const s=cmSemana(lunes), cfg=psCfg(), out=[], dias=[0,1,2,3,4].map(k=>sumarDias(lunes,k)), pd={}, ps={};
   s.lineas.forEach(l=>{ const k=l.pid+"|"+l.fecha; pd[k]=pd[k]||{pid:l.pid,fecha:l.fecha,h:0,hx:0}; pd[k].h+=Number(l.h)||0; pd[k].hx+=Number(l.hx)||0; ps[l.pid]=(ps[l.pid]||0)+(Number(l.h)||0); });
-  Object.values(pd).forEach(x=>{ const cap=psCapDia(cfg,x.fecha), dn=TP_DIAS_C[(new Date(x.fecha+"T12:00:00Z").getUTCDay()+6)%7]||x.fecha;
+  Object.values(pd).forEach(x=>{ const cap=hxEsHabil(x.fecha)?cmCap(x.pid,x.fecha):0, dn=TP_DIAS_C[(new Date(x.fecha+"T12:00:00Z").getUTCDay()+6)%7]||x.fecha;
     if(x.hx>TP_MAX_EXTRA_DIA+0.05) out.push({ n:"crit", t:`${cmNombre(x.pid)} · ${dn}: ${tpHtxt(x.hx)} h extra (máximo legal ${TP_MAX_EXTRA_DIA} h por día).` });
-    if(x.h>cap+0.05) out.push({ n:"crit", t:`${cmNombre(x.pid)} · ${dn}: ${tpHtxt(x.h)} h ordinarias, la jornada es de ${tpHtxt(cap)} h. Lo que sobra va como hora extra.` });
-    if(x.h+x.hx<cap-0.05 && x.h>0) out.push({ n:"aviso", t:`${cmNombre(x.pid)} · ${dn}: solo ${tpHtxt(x.h+x.hx)} h registradas de ${tpHtxt(cap)} h de jornada.` }); });
+    if(x.h>cap+0.05&&hxEsHabil(x.fecha)) out.push({ n:"crit", t:`${cmNombre(x.pid)} · ${dn}: ${tpHtxt(x.h)} h ordinarias, la jornada es de ${tpHtxt(cap)} h. Lo que sobra va como hora extra.` });
+    if(x.h+x.hx<cap-0.05 && x.h>0 && hxEsHabil(x.fecha)) out.push({ n:"aviso", t:`${cmNombre(x.pid)} · ${dn}: solo ${tpHtxt(x.h+x.hx)} h registradas de ${tpHtxt(cap)} h de jornada.` }); });
   Object.keys(ps).forEach(pid=>{ if(ps[pid]>TP_MAX_SEMANA+0.05) out.push({ n:"crit", t:`${cmNombre(pid)}: ${tpHtxt(ps[pid])} h ordinarias en la semana (máximo ${TP_MAX_SEMANA} h).` }); });
   if(cmPuedeVer()){ const sin=[...new Set(s.lineas.map(l=>l.pid))].filter(pid=>!cmTarifa(pid).ok); if(sin.length) out.push({ n:"aviso", t:`Sin tarifa: ${sin.map(cmNombre).join(", ")}. Sus horas no tienen costo hasta que la cargues en «Tarifas».` }); }
   const prog=psModelo(lunes), faltan=[]; prog.dias.forEach(d=>d.gente.forEach(pid=>{ if(!s.lineas.some(l=>l.pid===pid&&l.fecha===d.fecha)&&!faltan.includes(pid)) faltan.push(pid); }));
@@ -14229,7 +14241,8 @@ function cmResumen(ls){
 }
 /* Matriz para el Gantt: filas proyecto → persona, columnas días (o semanas si el período es largo) */
 function cmMatriz(res,desde,hasta){
-  const dias=[]; for(let d=desde,n=0;d<=hasta&&n<400;d=sumarDias(d,1),n++){ const w=new Date(d+"T12:00:00Z").getUTCDay(); if(w>=1&&w<=5) dias.push(d); }
+  const fds=new Set(); res.proys.forEach(p=>Object.values(p.pers).forEach(q=>Object.keys(q.dias).forEach(d=>fds.add(d))));
+  const dias=[]; for(let d=desde,n=0;d<=hasta&&n<400;d=sumarDias(d,1),n++){ const w=new Date(d+"T12:00:00Z").getUTCDay(); if(w>=1&&w<=5||fds.has(d)) dias.push(d); }
   const semanal=dias.length>31, cols=semanal?[...new Set(dias.map(tpLunesDe))]:dias, kcol=d=>semanal?tpLunesDe(d):d;
   const head=cols.map(c=>semanal?"Sem "+tpFechaCorta(c).split(" ").slice(1).join(" "):tpFechaCorta(c).replace(/^\S+ /,"")+"\n"+tpFechaCorta(c).slice(0,2));
   const filas=[];
@@ -14315,7 +14328,7 @@ function renderCostosMO(){
   return cab+({registro:cmHtmlRegistro,informe:cmHtmlInforme,tarifas:cmHtmlTarifas,envio:cmHtmlEnvio}[cmTab])();
 }
 function cmHtmlRegistro(){
-  const s=cmSemana(cmLunes), conf=s.estado==="confirmada", reg=cmPuedeRegistrar()&&!conf, ver=cmPuedeVer(), dias=[0,1,2,3,4].map(k=>sumarDias(cmLunes,k)), V=cmValidar(cmLunes);
+  const s=cmSemana(cmLunes), conf=s.estado==="confirmada", reg=cmPuedeRegistrar()&&!conf, ver=cmPuedeVer(), dias=[0,1,2,3,4,5,6].map(k=>sumarDias(cmLunes,k)), V=cmValidar(cmLunes);
   const ls=s.lineas.slice().sort((a,b)=>cmNombre(a.pid).localeCompare(cmNombre(b.pid))||a.fecha.localeCompare(b.fecha));
   const dis=reg?"":"disabled", opP=DB.proyectos.filter(p=>!p.terminado);
   const estado=conf?`<span class="badge b-verde"><span class="dot"></span>Confirmada · ${escaparHtml(s.confirmo||"")} ${s.fechaConf||""}</span>`:(s.virtual?`<span class="badge b-amarillo"><span class="dot"></span>Propuesta del programa (sin guardar)</span>`:`<span class="badge b-amarillo"><span class="dot"></span>Borrador</span>`);
@@ -14331,7 +14344,7 @@ function cmHtmlRegistro(){
     <td><input type="text" ${dis} value="${escaparHtml(l.nota||"")}" style="width:150px" onchange="cmEdit('${l.id}','nota',this.value)"></td>
     ${ver?`<td style="text-align:right">${t.ok?money(Math.round(c)):'<span class="muted small">sin tarifa</span>'}</td>`:''}${reg?`<td><button class="btn btn-sm" onclick="cmQuitar('${l.id}')">🗑</button></td>`:''}</tr>`; };
   return `<div class="card" style="margin-top:10px"><div class="flex-between" style="flex-wrap:wrap;gap:8px"><div class="flex-gap"><button class="btn btn-sm" onclick="cmSemanaMover(-1)">◀</button><b>Semana del ${distDiaTxt(cmLunes)} al ${distDiaTxt(sumarDias(cmLunes,4))}</b><button class="btn btn-sm" onclick="cmSemanaMover(1)">▶</button> ${estado}</div>
-    <div class="flex-gap">${reg?`<button class="btn btn-sm" onclick="cmModalLinea()">+ Agregar horas</button><button class="btn btn-sm" onclick="cmRecargar()">↻ Recargar propuesta</button><button class="btn btn-sm btn-primary" onclick="cmConfirmar()">✔ Confirmar semana</button>`:''}${conf&&ver?`<button class="btn btn-sm" onclick="cmReabrir()">Reabrir</button>`:''}</div></div>
+    <div class="flex-gap">${reg?`<button class="btn btn-sm" onclick="cmModalLinea()">+ Agregar horas</button><button class="btn btn-sm" onclick="cmTraerHX()" title="Aplica las horas extra del registro (con la salida real del reloj)">⏱ Traer horas extra</button><button class="btn btn-sm" onclick="cmRecargar()">↻ Recargar propuesta</button><button class="btn btn-sm btn-primary" onclick="cmConfirmar()">✔ Confirmar semana</button>`:''}${conf&&ver?`<button class="btn btn-sm" onclick="cmReabrir()">Reabrir</button>`:''}</div></div>
     ${aud}
     <div class="hint" style="margin-bottom:6px">Corrige lo que no fue como se programó: a qué proyecto fue cada hora, horas extra reales, externos. Las filas amarillas son cambios tuyos.</div>
     <div style="overflow:auto"><table class="tbl"><thead><tr><th>Persona</th><th>Día</th><th>Proyecto</th><th>Lugar</th><th>Horas</th><th>Extra</th><th>Nota</th>${ver?'<th style="text-align:right">Costo</th>':''}${reg?'<th></th>':''}</tr></thead><tbody>${ls.map(fila).join("")||'<tr><td colspan="9" class="muted">Sin horas.</td></tr>'}</tbody>
@@ -15170,12 +15183,19 @@ function hxLista(){ if(!Array.isArray(DB.horasExtra)) DB.horasExtra=[]; return D
 function hxPersona(r){ const q=r.pid?(DB.personal||[]).find(x=>x.id===r.pid):null; return q?q.nombre:(r.nombre||"—"); }
 function hxEsHabil(f){ const d=new Date(f+"T12:00:00Z").getUTCDay(); return d>=1&&d<=5; }
 function hxCalc(r){
-  const cfg=psCfg(), sal=psSalidaNormal(cfg,r.fecha), hab=hxEsHabil(r.fecha), fin=r.real||r.hasta;
-  if(!fin) return { h:0, ini:0, fin:0, hab, real:!!r.real, sinFin:true };
+  const cfg=psCfg(), ter=hxTerreno(r.pid,r.fecha,r), sal=hxSalidaRef(r.pid,r.fecha,r), hab=hxEsHabil(r.fecha), fin=r.real||r.hasta;
+  if(!fin) return { h:0, ini:0, fin:0, hab, ter, real:!!r.real, sinFin:true };
   const ini=hab?Math.max(psHM(r.desde||sal),psHM(sal)):psHM(r.desde||cfg.inicio); let h=Math.max(0,(psHM(fin)-ini)/60);
-  if(!hab&&h>=6) h=Math.max(0,h-(Number(cfg.colacion)||0)/60);
-  return { h:Math.round(h*100)/100, ini, fin:psHM(fin), hab, real:!!r.real, sinFin:false, excede:hab&&h>TP_MAX_EXTRA_DIA+0.001 };
+  if(!hab&&h>=6) h=Math.max(0,h-(ter?Number(cfg.colacionTerreno):Number(cfg.colacion)||0)/60);
+  return { h:Math.round(h*100)/100, ini, fin:psHM(fin), hab, ter, real:!!r.real, sinFin:false, excede:hab&&h>TP_MAX_EXTRA_DIA+0.001 };
 }
+/* Trabajo en terreno: la jornada termina a las 18:30 y la colación es de 1 h (también viernes) */
+function hxTerreno(pid,fecha,r){
+  if(r&&r.lugar==="terreno") return true; if(r&&r.lugar==="taller") return false; if(!pid) return false;
+  return (DB.asignaciones||[]).some(a=>a.personaId===pid&&a.enTerreno!==false&&a.fechaInicio&&a.fechaFin&&a.fechaInicio<=fecha&&fecha<=a.fechaFin);
+}
+function hxSalidaRef(pid,fecha,r){ const cfg=psCfg(); return hxTerreno(pid,fecha,r)?cfg.salidaTerreno:psSalidaNormal(cfg,fecha); }
+function cmCap(pid,fecha){ return hxEsHabil(fecha)?psCapDia(psCfg(),fecha):0; } /* ordinarias: tope legal de la semana; la salida de terreno (18:30) solo mueve dónde empiezan las extra */
 function hxProyTxt(r){ const p=r.proyectoId?proy(r.proyectoId):null; return p?p.codigo+" · "+(p.cliente||p.nombre):(r.proyTxt||"—"); }
 function hxHtxt(h){ return (Math.round(h*100)/100).toString().replace(".",","); }
 function hxGuardar(det){ registrarHistorial({proyecto:"General", accion:"Modificar", detalle:"Horas extra: "+det, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"}); guardarEstado(); renderAll(); }
@@ -15193,14 +15213,14 @@ function renderHorasExtra(){
   const chip=(k,t)=>`<button class="mp-chip ${hxFiltro===k?'on':''}" onclick="hxFiltro='${k}'; renderAll()">${t}</button>`;
   const kpi=(t,v,w)=>`<div class="card" style="padding:8px 12px;min-width:120px${w?';border-color:#e0a39e;background:#fdecea':''}"><div class="muted" style="font-size:11px">${t}</div><div style="font-size:18px;font-weight:bold">${v}</div></div>`;
   const fila=r=>{ const c=hxCalc(r), conf=r.estado==="Confirmada";
-    return `<tr><td style="white-space:nowrap">${esc(distDiaTxt(r.fecha))}</td><td>${esc(hxProyTxt(r))}</td><td><b>${esc(hxPersona(r))}</b></td><td class="small">${esc(r.motivo||"")}${r.nota?`<div class="muted">${esc(r.nota)}</div>`:""}</td>
-    <td style="white-space:nowrap">${esc(r.desde||psSalidaNormal(psCfg(),r.fecha))} → ${r.hasta?esc(r.hasta):'<span class="muted">sin hora</span>'}</td>
+    return `<tr><td style="white-space:nowrap">${esc(distDiaTxt(r.fecha))}</td><td>${esc(hxProyTxt(r))}</td><td><b>${esc(hxPersona(r))}</b>${c.ter?' <span class="badge b-verde" title="Trabajo en terreno: salida normal 18:30 y colación de 1 h">terreno</span>':""}</td><td class="small">${esc(r.motivo||"")}${r.nota?`<div class="muted">${esc(r.nota)}</div>`:""}</td>
+    <td style="white-space:nowrap">${esc(r.desde||hxSalidaRef(r.pid,r.fecha,r))} → ${r.hasta?esc(r.hasta):'<span class="muted">sin hora</span>'}</td>
     <td>${puede?`<input type="time" value="${esc(r.real||"")}" onchange="hxReal('${r.id}',this.value)" style="width:96px">`:esc(r.real||"—")}</td>
     <td class="small" style="white-space:nowrap">${(()=>{ const a=r.pid?asisDe(r.pid,r.fecha):null; if(!a) return '<span class="muted">—</span>'; if(!a.s) return '<span style="color:#b3261e">sin salida marcada</span>'; const ref=r.real||r.hasta, d=ref?psHM(a.s)-psHM(ref):0; return esc(a.s)+(ref&&Math.abs(d)>=10?` <span style="color:${d>0?'#b3261e':'#777'}">(${d>0?'+':'−'}${Math.floor(Math.abs(d)/60)}:${String(Math.abs(d)%60).padStart(2,'0')} vs ${r.real?'real':'aut.'})</span>`:' <span style="color:#2f7d5c">✓</span>'); })()}</td>
     <td style="text-align:right;white-space:nowrap"><b>${c.sinFin?"—":hxHtxt(c.h)+" h"}</b>${c.excede?' <span title="Supera el máximo legal de 2 h extra por día" style="color:#b3261e">⚠</span>':""}</td>
     <td>${conf?'<span class="badge b-verde">Confirmada</span>':'<span class="badge b-amarillo">Por confirmar</span>'}</td>
     <td style="white-space:nowrap">${puede?`${!conf&&r.hasta?`<button class="btn btn-sm" title="Salió a la hora autorizada" onclick="hxReal('${r.id}','${r.hasta}')">✔ Igual</button> `:""}${r.pid&&asisDe(r.pid,r.fecha)&&asisDe(r.pid,r.fecha).s&&r.real!==asisDe(r.pid,r.fecha).s?`<button class="btn btn-sm" title="Usar la salida marcada en el reloj de RRHH" onclick="asisUsarReloj('${r.id}')">⏱ Reloj</button> `:""}<button class="btn btn-sm" onclick="hxModal('${r.id}')">✎</button> <button class="btn btn-sm" onclick="hxBorrar('${r.id}')">🗑</button>`:""}</td></tr>`; };
-  return `<div class="page-head"><div><h1>Horas extra</h1><div class="page-desc">Registro de horas extra por persona y día: hora autorizada al avisar y hora real de salida al confirmar (incluye el regreso a Santiago). Horario normal ${esc(psCfg().salida)} (viernes ${esc(psCfg().salidaViernes)}); máximo legal ${TP_MAX_EXTRA_DIA} h extra por día.</div></div>
+  return `<div class="page-head"><div><h1>Horas extra</h1><div class="page-desc">Registro de horas extra por persona y día: hora autorizada al avisar y hora real de salida al confirmar (incluye el regreso a Santiago). Horario normal ${esc(psCfg().salida)} (viernes ${esc(psCfg().salidaViernes)}); en terreno la salida normal es ${esc(psCfg().salidaTerreno)} y la colación 1 h; máximo legal ${TP_MAX_EXTRA_DIA} h extra por día.</div></div>
     ${puede?`<div class="flex-gap"><button class="btn btn-primary" onclick="hxModal('')">+ Registrar horas extra</button><button class="btn" onclick="hxModalWsp()">📲 Pegar mensajes de WhatsApp</button><button class="btn" onclick="asisAbrirArchivo()">📥 Importar asistencia (RRHH)</button><button class="btn" onclick="hxExcel()">📊 Excel</button></div>`:""}</div>
     <div class="card" style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">${chip("semana","Semana")}${chip("pend","Por confirmar ("+pend+")")}${chip("todo","Todo")}
       ${hxFiltro==="semana"?`<button class="btn btn-sm" onclick="hxLunes=sumarDias('${lun}',-7); renderAll()">◀</button><b>${esc(distDiaTxt(lun))} – ${esc(distDiaTxt(sumarDias(lun,4)))}</b><button class="btn btn-sm" onclick="hxLunes=sumarDias('${lun}',7); renderAll()">▶</button>`:""}</div>
@@ -15227,12 +15247,13 @@ function hxModal(id){
       <label class="field-label">Otra persona (nombre libre, opcional)</label><input class="input" id="hxLibre" placeholder="Ej: Arturo (externo)">`}
     <label class="field-label">Motivo</label><input class="input" id="hxM" value="${esc(r?r.motivo||"":"")}" placeholder="Ej: puesta en marcha">
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px"><div><label class="field-label">Desde (vacío = salida normal)</label><input class="input" type="time" id="hxD" value="${esc(r?r.desde||"":"")}"></div><div><label class="field-label">Autorizada hasta</label><input class="input" type="time" id="hxH" value="${esc(r?r.hasta||"":"")}"></div><div><label class="field-label">Salida real (al confirmar)</label><input class="input" type="time" id="hxR" value="${esc(r?r.real||"":"")}"></div></div>
+    <label class="field-label">Lugar de trabajo</label><select class="input" id="hxL"><option value="">Automático (según asignaciones: terreno si estaba asignado en terreno)</option><option value="terreno" ${r&&r.lugar==="terreno"?"selected":""}>Terreno (salida normal 18:30, colación 1 h)</option><option value="taller" ${r&&r.lugar==="taller"?"selected":""}>Taller / oficina</option></select>
     <label class="field-label">Nota (ej: hora de llegada a Santiago)</label><input class="input" id="hxN" value="${esc(r?r.nota||"":"")}">
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="hxGuardarModal('${id||""}')">Guardar</button></div>`,640);
 }
 function hxGuardarModal(id){
   const g=i=>{ const e=document.getElementById(i); return e?(e.value||"").trim():""; }, fecha=g("hxF"); if(!fecha){ toast("Indica la fecha.","danger"); return; }
-  const base={ fecha, proyectoId:g("hxP"), motivo:g("hxM"), desde:g("hxD"), hasta:g("hxH"), real:g("hxR"), nota:g("hxN") }; if(!base.hasta&&!base.real){ toast("Indica hasta qué hora (autorizada o real).","danger"); return; }
+  const base={ fecha, proyectoId:g("hxP"), motivo:g("hxM"), desde:g("hxD"), hasta:g("hxH"), real:g("hxR"), nota:g("hxN"), lugar:g("hxL") }; if(!base.lugar) base.lugar=null; if(!base.hasta&&!base.real){ toast("Indica hasta qué hora (autorizada o real).","danger"); return; }
   base.estado=base.real?"Confirmada":"Autorizada"; const L=hxLista();
   if(id){ const r=L.find(x=>x.id===id); const pe=g("hxPe"); Object.assign(r,base); if(pe) { r.pid=pe; delete r.nombre; } hxGuardarFin(`editado ${hxPersona(r)} ${fecha}`); return; }
   const pids=[...document.querySelectorAll(".hxPc:checked")].map(x=>x.value), libre=g("hxLibre"); if(!pids.length&&!libre){ toast("Elige al menos una persona.","danger"); return; }
@@ -15359,10 +15380,10 @@ function asisParsear(wb){
 }
 function asisClave(f){ return (f.pid||("r:"+navNorm(f.nom||"").replace(/[^a-z0-9]+/g,"-")))+"|"+f.fecha; }
 function asisDe(pid,fecha){ return asisDB().reg[pid+"|"+fecha]||null; }
-function asisExtraH(fecha,e,s){
-  if(!s) return null; const cfg=psCfg();
-  if(hxEsHabil(fecha)) return Math.max(0,(psHM(s)-psHM(psSalidaNormal(cfg,fecha)))/60);
-  if(!e) return null; let h=(psHM(s)-psHM(e))/60; if(h>=6) h-=(Number(cfg.colacion)||0)/60; return Math.max(0,h);
+function asisExtraH(fecha,e,s,pid){
+  if(!s) return null; const cfg=psCfg(), ter=hxTerreno(pid&&!String(pid).startsWith("r:")?pid:"",fecha);
+  if(hxEsHabil(fecha)) return Math.max(0,(psHM(s)-psHM(ter?cfg.salidaTerreno:psSalidaNormal(cfg,fecha)))/60);
+  if(!e) return null; let h=(psHM(s)-psHM(e))/60; if(h>=6) h-=(ter?Number(cfg.colacionTerreno):Number(cfg.colacion)||0)/60; return Math.max(0,h);
 }
 function asisFiltroFechas(){ if(hxFiltro==="semana"){ const lun=hxLunes||tpLunesDe(hoyISO()); return [lun,sumarDias(lun,6)]; } return ["0000-00-00","9999-99-99"]; }
 
@@ -15376,7 +15397,7 @@ async function asisLeerArchivo(file){
 function asisVistaPrevia(R,nombre){
   _asisPrev=R; const esc=escaparHtml;
   if(!R.filas.length){ toast("No encontré filas de asistencia en el archivo.","danger"); return; }
-  const porP={}; R.filas.forEach(f=>{ const k=f.pid||("?"+f.nom); porP[k]=porP[k]||{ nom:f.pid?((DB.personal||[]).find(p=>p.id===f.pid)||{}).nombre:f.nom, ok:!!f.pid, d:0, ex:0, sinS:0 }; porP[k].d++; const h=asisExtraH(f.fecha,f.e,f.s); if(h===null&&f.e) porP[k].sinS++; else porP[k].ex+=h||0; });
+  const porP={}; R.filas.forEach(f=>{ const k=f.pid||("?"+f.nom); porP[k]=porP[k]||{ nom:f.pid?((DB.personal||[]).find(p=>p.id===f.pid)||{}).nombre:f.nom, ok:!!f.pid, d:0, ex:0, sinS:0 }; porP[k].d++; const h=asisExtraH(f.fecha,f.e,f.s,f.pid); if(h===null&&f.e) porP[k].sinS++; else porP[k].ex+=h||0; });
   openModal(`<h2>Reporte de asistencia (RRHH)</h2><div class="hint" style="margin-bottom:6px">${esc(nombre||"")} · período ${esc(fcF(R.per.desde))} al ${esc(fcF(R.per.hasta))}${R.per.emision?" · emitido "+esc(R.per.emision):""} · ${R.filas.length} días-persona</div>
     <div class="table-scroll"><table class="tbl"><thead><tr><th>Persona (reporte)</th><th>En el PMO</th><th style="text-align:right">Días</th><th style="text-align:right">Horas extra en reloj</th><th style="text-align:right">Sin marcar salida</th></tr></thead><tbody>${Object.values(porP).map(x=>`<tr><td>${esc(x.nom)}</td><td>${x.ok?'<span class="badge b-verde">Reconocido</span>':'<span class="badge b-rojo">No está en Personal</span>'}</td><td style="text-align:right">${x.d}</td><td style="text-align:right">${hxHtxt(x.ex)} h</td><td style="text-align:right">${x.sinS||"—"}</td></tr>`).join("")}</tbody></table></div>
     ${R.sin.length?`<div class="mp-alerta" style="margin-top:6px;font-size:12px">No reconocí: ${esc(R.sin.join(", "))}. Se importan igual, pero no se cruzan con los avisos hasta que estén en «Personal».</div>`:""}
@@ -15396,7 +15417,7 @@ function asisConfirmarTodos(){
 }
 function asisSinAviso(){
   const A=asisDB(), [d0,d1]=asisFiltroFechas(), L=hxLista(), out=[];
-  Object.keys(A.reg).forEach(k=>{ const [id,fecha]=k.split("|"); if(!/^\d{4}-/.test(fecha)||fecha<d0||fecha>d1) return; const a=A.reg[k], h=asisExtraH(fecha,a.e,a.s); if(h===null||h<HX_UMBRAL) return;
+  Object.keys(A.reg).forEach(k=>{ const [id,fecha]=k.split("|"); if(!/^\d{4}-/.test(fecha)||fecha<d0||fecha>d1) return; const a=A.reg[k], h=asisExtraH(fecha,a.e,a.s,id); if(h===null||h<HX_UMBRAL) return;
     if(id.startsWith("r:")) return; if(L.some(r=>r.pid===id&&r.fecha===fecha)) return; out.push({ pid:id, fecha, e:a.e, s:a.s, h, hab:hxEsHabil(fecha) }); });
   return out.sort((x,y)=>y.fecha.localeCompare(x.fecha)||hxPersona(x).localeCompare(hxPersona(y)));
 }
@@ -15407,7 +15428,7 @@ function asisRegistrarSinAviso(pid,fecha){
 function asisRegistrarTodos(){ const L=asisSinAviso(); if(!L.length) return; if(!confirm(`¿Registrar ${L.length} día(s) con horas extra según el reloj? Quedan como «Sin aviso previo» y puedes completar el proyecto y el motivo después.`)) return;
   L.forEach(x=>hxLista().push({ id:"HX"+Math.random().toString(36).slice(2,8), fecha:x.fecha, pid:x.pid, proyectoId:"", motivo:"Sin aviso previo (según reloj RRHH)", desde:x.hab?"":x.e, hasta:x.s, real:x.s, estado:"Confirmada", nota:"según reloj RRHH", origen:"reloj", creado:hoyISO() })); hxGuardar(`${L.length} día(s) extra según reloj registrados`); }
 function asisResumenPersonas(){
-  const A=asisDB(), [d0,d1]=asisFiltroFechas(), res={}; Object.keys(A.reg).forEach(k=>{ const [id,fecha]=k.split("|"); if(fecha<d0||fecha>d1) return; const a=A.reg[k], h=asisExtraH(fecha,a.e,a.s); const nom=id.startsWith("r:")?(a.nom||id):hxPersona({pid:id}); res[id]=res[id]||{ nom, reloj:0, reg:0, sinS:0 }; if(h===null){ if(a.e) res[id].sinS++; } else res[id].reloj+=h; });
+  const A=asisDB(), [d0,d1]=asisFiltroFechas(), res={}; Object.keys(A.reg).forEach(k=>{ const [id,fecha]=k.split("|"); if(fecha<d0||fecha>d1) return; const a=A.reg[k], h=asisExtraH(fecha,a.e,a.s,id); const nom=id.startsWith("r:")?(a.nom||id):hxPersona({pid:id}); res[id]=res[id]||{ nom, reloj:0, reg:0, sinS:0 }; if(h===null){ if(a.e) res[id].sinS++; } else res[id].reloj+=h; });
   hxLista().forEach(r=>{ if(!r.pid||r.fecha<d0||r.fecha>d1) return; if(res[r.pid]) res[r.pid].reg+=hxCalc(r).h; }); return Object.values(res).filter(x=>x.reloj>0||x.reg>0||x.sinS).sort((a,b)=>a.nom.localeCompare(b.nom));
 }
 function asisPanel(){
@@ -15888,7 +15909,8 @@ function psPuede(){ return puedeGestionarTaller() || puedeGestionarAsignaciones(
 function psCfg(){
   let c=DB.jornadaCfg; if(!c || !c.salida) c=DB.jornadaCfg={ inicio:"08:30", salida:"18:00", salidaViernes:"15:00", colacion:30 };
   if(!c.salidaViernes){ c.salidaViernes="15:00"; if(c.inicio==="08:00") c.inicio="08:30"; }
-  if(c.colacion===undefined || c.colacion===null) c.colacion=30; return c;
+  if(c.colacion===undefined || c.colacion===null) c.colacion=30;
+  if(!c.salidaTerreno) c.salidaTerreno="18:30"; if(c.colacionTerreno===undefined || c.colacionTerreno===null) c.colacionTerreno=60; return c;
 }
 function psSalidaNormal(cfg,fecha){ return new Date(fecha+"T12:00:00Z").getUTCDay()===5 ? cfg.salidaViernes : cfg.salida; }
 function psCapDia(cfg,fecha){ return Math.max(0,(psHM(psSalidaNormal(cfg,fecha))-psHM(cfg.inicio)-(Number(cfg.colacion)||0))/60); }
@@ -16060,6 +16082,8 @@ function psRender(){
       <label class="small muted" style="display:flex;flex-direction:column;gap:3px">salida<input type="time" value="${cfg.salida}" ${puede?"":"disabled"} onchange="psSetCfg('salida',this.value)" style="width:100px"></label>
       <label class="small muted" style="display:flex;flex-direction:column;gap:3px">salida viernes<input type="time" value="${cfg.salidaViernes}" ${puede?"":"disabled"} onchange="psSetCfg('salidaViernes',this.value)" style="width:100px"></label>
       <label class="small muted" style="display:flex;flex-direction:column;gap:3px">colación (min)<input type="number" min="0" step="5" value="${cfg.colacion}" ${puede?"":"disabled"} onchange="psSetColacion(this.value)" style="width:80px"></label>
+      <label class="small muted" style="display:flex;flex-direction:column;gap:3px">salida en terreno<input type="time" value="${cfg.salidaTerreno}" ${puede?"":"disabled"} onchange="if(!psPuede())return;psCfg().salidaTerreno=this.value||'18:30';psGuardar()" style="width:100px"></label>
+      <label class="small muted" style="display:flex;flex-direction:column;gap:3px">colación terreno (min)<input type="number" min="0" step="5" value="${cfg.colacionTerreno}" ${puede?"":"disabled"} onchange="if(!psPuede())return;psCfg().colacionTerreno=Math.max(0,Math.min(180,Number(this.value)||0));psGuardar()" style="width:80px"></label>
       <div class="small muted" style="align-self:center">Jornada: <b>${Math.round(psHorasSemana(cfg,M.lunes)*10)/10} h/sem</b></div>
       <label class="small muted" style="display:flex;flex-direction:column;gap:3px">Actividad de días libres<input type="text" value="${escaparHtml(_ps.texto)}" oninput="_ps.texto=this.value" style="width:190px"></label>
       ${puede?`<button class="btn btn-sm btn-primary" onclick="psCompletarLibres()" ${nLibres?"":"disabled"}>🧹 Completar ${nLibres||""} día(s) libre(s)</button>`:""}

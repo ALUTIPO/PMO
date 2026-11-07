@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.32.0";
+const APP_VERSION = "3.33.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -1200,6 +1200,7 @@ const DB = {
   costosMO: null,
   procCompras: null,
   horasExtra: [],
+  asistencia: null,
   acuerdos: [],
   usuariosAutorizados: {},
   personal: [],
@@ -1243,6 +1244,7 @@ function aplicarEstadoRemoto(data) {
   DB.jornadaCfg = data.jornadaCfg || null;
   DB.costosMO = data.costosMO || null;
   DB.procCompras = data.procCompras || null;
+  DB.asistencia = data.asistencia || null;
   DB.horasExtra = Array.isArray(data.horasExtra) ? data.horasExtra : (data.horasExtra ? Object.values(data.horasExtra) : []);
   DB.solicitudesPanol = data.solicitudesPanol || [];
   // Firebase no guarda arrays vacíos: se normalizan al cargar.
@@ -1279,6 +1281,7 @@ function construirPayloadEstado() {
     costosMO: DB.costosMO || null,
     procCompras: DB.procCompras || null,
     horasExtra: DB.horasExtra || [],
+    asistencia: DB.asistencia || null,
     solicitudesPanol: DB.solicitudesPanol,
     acuerdos: DB.acuerdos || [],
     versionApp: APP_VERSION,
@@ -15193,18 +15196,20 @@ function renderHorasExtra(){
     return `<tr><td style="white-space:nowrap">${esc(distDiaTxt(r.fecha))}</td><td>${esc(hxProyTxt(r))}</td><td><b>${esc(hxPersona(r))}</b></td><td class="small">${esc(r.motivo||"")}${r.nota?`<div class="muted">${esc(r.nota)}</div>`:""}</td>
     <td style="white-space:nowrap">${esc(r.desde||psSalidaNormal(psCfg(),r.fecha))} → ${r.hasta?esc(r.hasta):'<span class="muted">sin hora</span>'}</td>
     <td>${puede?`<input type="time" value="${esc(r.real||"")}" onchange="hxReal('${r.id}',this.value)" style="width:96px">`:esc(r.real||"—")}</td>
+    <td class="small" style="white-space:nowrap">${(()=>{ const a=r.pid?asisDe(r.pid,r.fecha):null; if(!a) return '<span class="muted">—</span>'; if(!a.s) return '<span style="color:#b3261e">sin salida marcada</span>'; const ref=r.real||r.hasta, d=ref?psHM(a.s)-psHM(ref):0; return esc(a.s)+(ref&&Math.abs(d)>=10?` <span style="color:${d>0?'#b3261e':'#777'}">(${d>0?'+':'−'}${Math.floor(Math.abs(d)/60)}:${String(Math.abs(d)%60).padStart(2,'0')} vs ${r.real?'real':'aut.'})</span>`:' <span style="color:#2f7d5c">✓</span>'); })()}</td>
     <td style="text-align:right;white-space:nowrap"><b>${c.sinFin?"—":hxHtxt(c.h)+" h"}</b>${c.excede?' <span title="Supera el máximo legal de 2 h extra por día" style="color:#b3261e">⚠</span>':""}</td>
     <td>${conf?'<span class="badge b-verde">Confirmada</span>':'<span class="badge b-amarillo">Por confirmar</span>'}</td>
-    <td style="white-space:nowrap">${puede?`${!conf&&r.hasta?`<button class="btn btn-sm" title="Salió a la hora autorizada" onclick="hxReal('${r.id}','${r.hasta}')">✔ Igual</button> `:""}<button class="btn btn-sm" onclick="hxModal('${r.id}')">✎</button> <button class="btn btn-sm" onclick="hxBorrar('${r.id}')">🗑</button>`:""}</td></tr>`; };
+    <td style="white-space:nowrap">${puede?`${!conf&&r.hasta?`<button class="btn btn-sm" title="Salió a la hora autorizada" onclick="hxReal('${r.id}','${r.hasta}')">✔ Igual</button> `:""}${r.pid&&asisDe(r.pid,r.fecha)&&asisDe(r.pid,r.fecha).s&&r.real!==asisDe(r.pid,r.fecha).s?`<button class="btn btn-sm" title="Usar la salida marcada en el reloj de RRHH" onclick="asisUsarReloj('${r.id}')">⏱ Reloj</button> `:""}<button class="btn btn-sm" onclick="hxModal('${r.id}')">✎</button> <button class="btn btn-sm" onclick="hxBorrar('${r.id}')">🗑</button>`:""}</td></tr>`; };
   return `<div class="page-head"><div><h1>Horas extra</h1><div class="page-desc">Registro de horas extra por persona y día: hora autorizada al avisar y hora real de salida al confirmar (incluye el regreso a Santiago). Horario normal ${esc(psCfg().salida)} (viernes ${esc(psCfg().salidaViernes)}); máximo legal ${TP_MAX_EXTRA_DIA} h extra por día.</div></div>
-    ${puede?`<div class="flex-gap"><button class="btn btn-primary" onclick="hxModal('')">+ Registrar horas extra</button><button class="btn" onclick="hxModalWsp()">📲 Pegar mensajes de WhatsApp</button><button class="btn" onclick="hxExcel()">📊 Excel</button></div>`:""}</div>
+    ${puede?`<div class="flex-gap"><button class="btn btn-primary" onclick="hxModal('')">+ Registrar horas extra</button><button class="btn" onclick="hxModalWsp()">📲 Pegar mensajes de WhatsApp</button><button class="btn" onclick="asisAbrirArchivo()">📥 Importar asistencia (RRHH)</button><button class="btn" onclick="hxExcel()">📊 Excel</button></div>`:""}</div>
     <div class="card" style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">${chip("semana","Semana")}${chip("pend","Por confirmar ("+pend+")")}${chip("todo","Todo")}
       ${hxFiltro==="semana"?`<button class="btn btn-sm" onclick="hxLunes=sumarDias('${lun}',-7); renderAll()">◀</button><b>${esc(distDiaTxt(lun))} – ${esc(distDiaTxt(sumarDias(lun,4)))}</b><button class="btn btn-sm" onclick="hxLunes=sumarDias('${lun}',7); renderAll()">▶</button>`:""}</div>
     <div class="flex-gap" style="flex-wrap:wrap;margin-bottom:10px">${kpi("Horas extra",hxHtxt(tot)+" h")}${kpi("Registros",F.length)}${kpi("Por confirmar",pend,pend>0&&hxFiltro!=="semana"?false:false)}${kpi("Sobre el máximo legal",exc,exc>0)}</div>
-    ${F.length?`<div class="card" style="margin-bottom:10px"><div class="table-scroll"><table class="tbl"><thead><tr><th>Fecha</th><th>Proyecto</th><th>Persona</th><th>Motivo</th><th>Autorizada</th><th>Hora real de salida</th><th style="text-align:right">Horas extra</th><th>Estado</th><th></th></tr></thead><tbody>${F.map(fila).join("")}</tbody></table></div>
+    ${F.some(r=>r.estado!=="Confirmada"&&r.pid&&asisDe(r.pid,r.fecha)&&asisDe(r.pid,r.fecha).s)&&puede?`<div class="card" style="margin-bottom:10px;background:#eef3fb"><b>⏱ El reloj de RRHH tiene la salida real de ${F.filter(r=>r.estado!=="Confirmada"&&r.pid&&asisDe(r.pid,r.fecha)&&asisDe(r.pid,r.fecha).s).length} registro(s) por confirmar.</b> <button class="btn btn-sm btn-primary" onclick="asisConfirmarTodos()">Confirmar todos con el reloj</button></div>`:""}
+    ${F.length?`<div class="card" style="margin-bottom:10px"><div class="table-scroll"><table class="tbl"><thead><tr><th>Fecha</th><th>Proyecto</th><th>Persona</th><th>Motivo</th><th>Autorizada</th><th>Hora real de salida</th><th>Reloj RRHH</th><th style="text-align:right">Horas extra</th><th>Estado</th><th></th></tr></thead><tbody>${F.map(fila).join("")}</tbody></table></div>
       <div class="hint" style="margin-top:6px">Las horas se cuentan desde la salida normal hasta la hora real (o la autorizada si aún no se confirma). Sábados y domingos se cuenta todo el tramo, descontando colación si pasa de 6 h.</div></div>
       <div class="card"><b>Total por persona</b><div class="table-scroll"><table class="tbl" style="margin-top:4px"><thead><tr><th>Persona</th><th style="text-align:right">Días</th><th style="text-align:right">Horas extra</th></tr></thead><tbody>${Object.keys(porP).sort().map(k=>`<tr><td>${esc(k)}</td><td style="text-align:right">${porP[k].n}</td><td style="text-align:right">${hxHtxt(porP[k].h)} h</td></tr>`).join("")}</tbody></table></div></div>`
-    :`<div class="empty-state card">Sin registros en este filtro. Usa «Registrar horas extra» o pega los mensajes del grupo de WhatsApp.</div>`}`;
+    :`<div class="empty-state card">Sin registros en este filtro. Usa «Registrar horas extra» o pega los mensajes del grupo de WhatsApp.</div>`}${asisPanel()}`;
 }
 function hxReal(id,v){ const r=hxLista().find(x=>x.id===id); if(!r) return; r.real=v||""; r.estado=v?"Confirmada":"Autorizada"; hxGuardar(`${hxPersona(r)} ${r.fecha}: salida real ${v||"(quitada)"}`); }
 function hxBorrar(id){ const r=hxLista().find(x=>x.id===id); if(!r||!confirm(`¿Eliminar el registro de ${hxPersona(r)} del ${fcF(r.fecha)}?`)) return; DB.horasExtra=hxLista().filter(x=>x.id!==id); hxGuardar("registro eliminado"); }
@@ -15320,6 +15325,97 @@ function hxGuardarVista(){
 async function hxExcel(){
   const F=hxFiltrar(); if(!F.length){ toast("No hay registros para exportar.","danger"); return; } if(!(await asegurarXLSX())){ toast("No se pudo cargar el generador de Excel.","danger"); return; }
   const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(F.slice().reverse().map(r=>{ const c=hxCalc(r); return { "Fecha":r.fecha,"Persona":hxPersona(r),"Proyecto":hxProyTxt(r),"Motivo":r.motivo||"","Desde":r.desde||psSalidaNormal(psCfg(),r.fecha),"Autorizada hasta":r.hasta||"","Salida real":r.real||"","Horas extra":c.h,"Estado":r.estado,"Nota":r.nota||"" }; })),"Horas extra"); XLSX.writeFile(wb,`Horas_extra_${hoyISO()}.xlsx`);
+}
+
+/* =====================================================================
+   V3.33.0 — ASISTENCIA (reloj de RRHH) × HORAS EXTRA
+   Se importa el «Reporte de asistencia» (.xls/.xlsx, una hoja por persona).
+   Sirve para confirmar la hora real de salida de las horas extra avisadas y
+   para ver los días con horas extra en el reloj que no tienen aviso.
+   DB.asistencia = { reg:{ "pid|fecha": {e,s,t,nom?} }, per:[{desde,hasta,emision,n}] }
+   ===================================================================== */
+const HX_UMBRAL = 0.5;   // horas de salida tardía a partir de las cuales se sugiere registrar el aviso
+function asisDB(){ let a=DB.asistencia; if(!a||typeof a!=="object") a=DB.asistencia={}; if(!a.reg||typeof a.reg!=="object") a.reg={}; if(!Array.isArray(a.per)) a.per=[]; return a; }
+function asisFecha(txt,y0,m0){ const m=String(txt).match(/(\d{1,2})\/(\d{1,2})$/); if(!m) return ""; let y=Number(y0); if(Number(m[2])<Number(m0)) y++; return y+"-"+String(m[2]).padStart(2,"0")+"-"+String(m[1]).padStart(2,"0"); }
+function asisPersonaPorNombre(nom){
+  const t=navNorm(nom).split(/[^a-z]+/).filter(Boolean); if(!t.length) return null;
+  const cand=(DB.personal||[]).map(p=>({ p, n:navNorm(p.nombre).split(/[^a-z]+/).filter(Boolean) })).filter(x=>x.n.length&&x.n.every(w=>t.some(y=>y===w||(w.length>=3&&y.startsWith(w)))));
+  cand.sort((a,b)=>b.n.length-a.n.length); return cand.length?cand[0].p:null;
+}
+/* wb: libro de SheetJS ya leído. Devuelve {per, filas:[{pid,nom,rut,fecha,e,s,t}], sinPersona:[nombres]} */
+function asisParsear(wb){
+  const filas=[], sin=new Set(); let per={ desde:"", hasta:"", emision:"" };
+  wb.SheetNames.forEach(sn=>{
+    const a=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,raw:false,defval:""}); let nom="", rut="", desde="", hasta="";
+    const sig=(r,i)=>{ for(let k=i+1;k<r.length;k++) if(String(r[k]).trim()) return String(r[k]).trim(); return ""; };
+    a.slice(0,8).forEach(r=>r.forEach((c,i)=>{ const v=String(c).trim(); if(v==="Nombre:") nom=sig(r,i); else if(v==="RUT:"&&!rut) rut=sig(r,i); else if(/^Periodo desde/i.test(v)) desde=sig(r,i); else if(v==="hasta"&&!hasta) hasta=sig(r,i); else if(/^Fecha emisi/i.test(v)) per.emision=sig(r,i); }));
+    const dm=s=>{ const m=String(s).match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/); return m?m[3]+"-"+m[2].padStart(2,"0")+"-"+m[1].padStart(2,"0"):""; };
+    const d0=dm(desde), h0=dm(hasta); if(d0&&(!per.desde||d0<per.desde)) per.desde=d0; if(h0&&h0>per.hasta) per.hasta=h0; if(!d0) return;
+    const p=asisPersonaPorNombre(nom||sn.replace(/^[\d.\-kK]+\s*-\s*/,"")); if(!p) sin.add(nom||sn);
+    a.forEach(r=>{ if(!/^(lun|mar|mi[eé]|jue|vie|s[aá]b|dom)\s+\d{1,2}\/\d{1,2}$/i.test(String(r[0]).trim())) return; const fecha=asisFecha(r[0],d0.slice(0,4),d0.slice(5,7)); if(!fecha) return;
+      const hm=v=>/^\d{1,2}:\d{2}/.test(String(v))?String(v).slice(0,5).padStart(5,"0"):""; filas.push({ pid:p?p.id:"", nom:nom||sn, rut, fecha, e:hm(r[3]), s:hm(r[6]), t:String(r[20]||"").trim(), hor:hm(r[2]) }); });
+  });
+  return { per, filas, sin:[...sin] };
+}
+function asisClave(f){ return (f.pid||("r:"+navNorm(f.nom||"").replace(/[^a-z0-9]+/g,"-")))+"|"+f.fecha; }
+function asisDe(pid,fecha){ return asisDB().reg[pid+"|"+fecha]||null; }
+function asisExtraH(fecha,e,s){
+  if(!s) return null; const cfg=psCfg();
+  if(hxEsHabil(fecha)) return Math.max(0,(psHM(s)-psHM(psSalidaNormal(cfg,fecha)))/60);
+  if(!e) return null; let h=(psHM(s)-psHM(e))/60; if(h>=6) h-=(Number(cfg.colacion)||0)/60; return Math.max(0,h);
+}
+function asisFiltroFechas(){ if(hxFiltro==="semana"){ const lun=hxLunes||tpLunesDe(hoyISO()); return [lun,sumarDias(lun,6)]; } return ["0000-00-00","9999-99-99"]; }
+
+/* ---------- Importar ---------- */
+let _asisPrev=null;
+function asisAbrirArchivo(){ const i=document.createElement("input"); i.type="file"; i.accept=".xls,.xlsx"; i.onchange=()=>{ if(i.files[0]) asisLeerArchivo(i.files[0]); }; i.click(); }
+async function asisLeerArchivo(file){
+  if(!(await asegurarXLSX())){ toast("No se pudo cargar el lector de Excel. Revisa tu conexión.","danger"); return; }
+  try{ const wb=XLSX.read(await file.arrayBuffer(),{type:"array"}); asisVistaPrevia(asisParsear(wb),file.name); }catch(e){ toast("No pude leer el archivo: "+(e&&e.message||e),"danger"); }
+}
+function asisVistaPrevia(R,nombre){
+  _asisPrev=R; const esc=escaparHtml;
+  if(!R.filas.length){ toast("No encontré filas de asistencia en el archivo.","danger"); return; }
+  const porP={}; R.filas.forEach(f=>{ const k=f.pid||("?"+f.nom); porP[k]=porP[k]||{ nom:f.pid?((DB.personal||[]).find(p=>p.id===f.pid)||{}).nombre:f.nom, ok:!!f.pid, d:0, ex:0, sinS:0 }; porP[k].d++; const h=asisExtraH(f.fecha,f.e,f.s); if(h===null&&f.e) porP[k].sinS++; else porP[k].ex+=h||0; });
+  openModal(`<h2>Reporte de asistencia (RRHH)</h2><div class="hint" style="margin-bottom:6px">${esc(nombre||"")} · período ${esc(fcF(R.per.desde))} al ${esc(fcF(R.per.hasta))}${R.per.emision?" · emitido "+esc(R.per.emision):""} · ${R.filas.length} días-persona</div>
+    <div class="table-scroll"><table class="tbl"><thead><tr><th>Persona (reporte)</th><th>En el PMO</th><th style="text-align:right">Días</th><th style="text-align:right">Horas extra en reloj</th><th style="text-align:right">Sin marcar salida</th></tr></thead><tbody>${Object.values(porP).map(x=>`<tr><td>${esc(x.nom)}</td><td>${x.ok?'<span class="badge b-verde">Reconocido</span>':'<span class="badge b-rojo">No está en Personal</span>'}</td><td style="text-align:right">${x.d}</td><td style="text-align:right">${hxHtxt(x.ex)} h</td><td style="text-align:right">${x.sinS||"—"}</td></tr>`).join("")}</tbody></table></div>
+    ${R.sin.length?`<div class="mp-alerta" style="margin-top:6px;font-size:12px">No reconocí: ${esc(R.sin.join(", "))}. Se importan igual, pero no se cruzan con los avisos hasta que estén en «Personal».</div>`:""}
+    <div class="hint" style="margin-top:6px">Si ya habías importado días de este período, se reemplazan por los del archivo nuevo.</div>
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="asisImportar()">Importar asistencia</button></div>`,820);
+}
+function asisImportar(){
+  const R=_asisPrev; if(!R) return; const A=asisDB(); R.filas.forEach(f=>{ const o={ e:f.e, s:f.s, t:f.t }; if(!f.pid) o.nom=f.nom; A.reg[asisClave(f)]=o; });
+  A.per.push({ desde:R.per.desde, hasta:R.per.hasta, emision:R.per.emision||"", n:R.filas.length, en:hoyISO() }); if(A.per.length>20) A.per=A.per.slice(-20);
+  closeModal(); _asisPrev=null; hxGuardar(`asistencia RRHH importada (${R.filas.length} días-persona, ${R.per.desde} a ${R.per.hasta})`); toast(`Asistencia importada: ${R.filas.length} días.`,"ok");
+}
+/* ---------- Cruce con los avisos ---------- */
+function asisUsarReloj(id){ const r=hxLista().find(x=>x.id===id); if(!r||!r.pid) return; const a=asisDe(r.pid,r.fecha); if(!a||!a.s){ toast("El reloj no tiene salida para ese día.","danger"); return; } r.real=a.s; r.estado="Confirmada"; r.nota=((r.nota||"").replace(/\s*· ?según reloj RRHH/,"")+" · según reloj RRHH").replace(/^ · /,""); hxGuardar(`${hxPersona(r)} ${r.fecha}: salida real ${a.s} (reloj)`); }
+function asisConfirmarTodos(){
+  let n=0; hxFiltrar().forEach(r=>{ if(r.estado==="Confirmada"||!r.pid) return; const a=asisDe(r.pid,r.fecha); if(a&&a.s){ r.real=a.s; r.estado="Confirmada"; r.nota=((r.nota||"")+" · según reloj RRHH").replace(/^ · /,""); n++; } });
+  if(!n){ toast("No hay registros por confirmar con salida en el reloj.","danger"); return; } hxGuardar(`${n} registro(s) confirmados con el reloj`); toast(`${n} registro(s) confirmados con la hora del reloj.`,"ok");
+}
+function asisSinAviso(){
+  const A=asisDB(), [d0,d1]=asisFiltroFechas(), L=hxLista(), out=[];
+  Object.keys(A.reg).forEach(k=>{ const [id,fecha]=k.split("|"); if(!/^\d{4}-/.test(fecha)||fecha<d0||fecha>d1) return; const a=A.reg[k], h=asisExtraH(fecha,a.e,a.s); if(h===null||h<HX_UMBRAL) return;
+    if(id.startsWith("r:")) return; if(L.some(r=>r.pid===id&&r.fecha===fecha)) return; out.push({ pid:id, fecha, e:a.e, s:a.s, h, hab:hxEsHabil(fecha) }); });
+  return out.sort((x,y)=>y.fecha.localeCompare(x.fecha)||hxPersona(x).localeCompare(hxPersona(y)));
+}
+function asisRegistrarSinAviso(pid,fecha){
+  const a=asisDe(pid,fecha); if(!a||!a.s) return; hxLista().push({ id:"HX"+Math.random().toString(36).slice(2,8), fecha, pid, proyectoId:"", motivo:"Sin aviso previo (según reloj RRHH)", desde:hxEsHabil(fecha)?"":a.e, hasta:a.s, real:a.s, estado:"Confirmada", nota:"según reloj RRHH", origen:"reloj", creado:hoyISO() });
+  hxGuardar(`${hxPersona({pid})} ${fecha}: extra según reloj registrada sin aviso`);
+}
+function asisRegistrarTodos(){ const L=asisSinAviso(); if(!L.length) return; if(!confirm(`¿Registrar ${L.length} día(s) con horas extra según el reloj? Quedan como «Sin aviso previo» y puedes completar el proyecto y el motivo después.`)) return;
+  L.forEach(x=>hxLista().push({ id:"HX"+Math.random().toString(36).slice(2,8), fecha:x.fecha, pid:x.pid, proyectoId:"", motivo:"Sin aviso previo (según reloj RRHH)", desde:x.hab?"":x.e, hasta:x.s, real:x.s, estado:"Confirmada", nota:"según reloj RRHH", origen:"reloj", creado:hoyISO() })); hxGuardar(`${L.length} día(s) extra según reloj registrados`); }
+function asisResumenPersonas(){
+  const A=asisDB(), [d0,d1]=asisFiltroFechas(), res={}; Object.keys(A.reg).forEach(k=>{ const [id,fecha]=k.split("|"); if(fecha<d0||fecha>d1) return; const a=A.reg[k], h=asisExtraH(fecha,a.e,a.s); const nom=id.startsWith("r:")?(a.nom||id):hxPersona({pid:id}); res[id]=res[id]||{ nom, reloj:0, reg:0, sinS:0 }; if(h===null){ if(a.e) res[id].sinS++; } else res[id].reloj+=h; });
+  hxLista().forEach(r=>{ if(!r.pid||r.fecha<d0||r.fecha>d1) return; if(res[r.pid]) res[r.pid].reg+=hxCalc(r).h; }); return Object.values(res).filter(x=>x.reloj>0||x.reg>0||x.sinS).sort((a,b)=>a.nom.localeCompare(b.nom));
+}
+function asisPanel(){
+  const A=asisDB(); if(!Object.keys(A.reg).length) return ""; const esc=escaparHtml, sin=asisSinAviso(), rs=asisResumenPersonas(), puede=hxPuede();
+  return `<div class="card" style="margin-top:10px"><b>Cruce con el reloj de RRHH</b> <span class="muted" style="font-size:12px">· último período importado ${esc(fcF(A.per.length?A.per[A.per.length-1].desde:""))} al ${esc(fcF(A.per.length?A.per[A.per.length-1].hasta:""))}</span>
+    ${rs.length?`<div class="table-scroll"><table class="tbl" style="margin-top:6px"><thead><tr><th>Persona</th><th style="text-align:right">Horas extra según reloj</th><th style="text-align:right">Horas extra registradas</th><th style="text-align:right">Diferencia</th><th>Observación</th></tr></thead><tbody>${rs.map(x=>{ const d=x.reloj-x.reg; return `<tr><td>${esc(x.nom)}</td><td style="text-align:right">${hxHtxt(x.reloj)} h</td><td style="text-align:right">${hxHtxt(x.reg)} h</td><td style="text-align:right;${d>0.5?'color:#b3261e;font-weight:bold':''}">${d>0?"+":""}${hxHtxt(d)} h</td><td class="small">${d>0.5?"horas en reloj sin aviso registrado":"coincide con lo avisado"}${x.sinS?` · ${x.sinS} día(s) sin marcar salida`:""}</td></tr>`; }).join("")}</tbody></table></div>`:`<div class="muted" style="margin-top:4px">Sin datos de reloj en este filtro.</div>`}
+    ${sin.length?`<div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px"><b>Horas extra en el reloj sin aviso (${sin.length})</b>${puede?`<button class="btn btn-sm" onclick="asisRegistrarTodos()">Registrar todos</button>`:""}</div><div class="table-scroll"><table class="tbl"><thead><tr><th>Fecha</th><th>Persona</th><th>Entrada</th><th>Salida real</th><th style="text-align:right">Horas extra</th><th></th></tr></thead><tbody>${sin.map(x=>`<tr><td>${esc(distDiaTxt(x.fecha))}</td><td>${esc(hxPersona(x))}</td><td>${esc(x.e||"—")}</td><td>${esc(x.s)}</td><td style="text-align:right">${hxHtxt(x.h)} h${x.hab&&x.h>TP_MAX_EXTRA_DIA?' <span style="color:#b3261e" title="Supera 2 h extra por día">⚠</span>':""}</td><td>${puede?`<button class="btn btn-sm" onclick="asisRegistrarSinAviso('${x.pid}','${x.fecha}')">Registrar</button>`:""}</td></tr>`).join("")}</tbody></table></div>`:""}
+    <div class="hint" style="margin-top:6px">Horas extra del reloj: días hábiles desde la salida normal hasta la salida marcada; sábado y domingo, todo el tramo menos colación. Se sugieren los días con ${HX_UMBRAL*60} min o más.</div></div>`;
 }
 
 /* =====================================================================

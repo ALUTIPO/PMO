@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.31.0";
+const APP_VERSION = "3.32.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -1199,6 +1199,7 @@ const DB = {
   jornadaCfg: null,
   costosMO: null,
   procCompras: null,
+  horasExtra: [],
   acuerdos: [],
   usuariosAutorizados: {},
   personal: [],
@@ -1242,6 +1243,7 @@ function aplicarEstadoRemoto(data) {
   DB.jornadaCfg = data.jornadaCfg || null;
   DB.costosMO = data.costosMO || null;
   DB.procCompras = data.procCompras || null;
+  DB.horasExtra = Array.isArray(data.horasExtra) ? data.horasExtra : (data.horasExtra ? Object.values(data.horasExtra) : []);
   DB.solicitudesPanol = data.solicitudesPanol || [];
   // Firebase no guarda arrays vacíos: se normalizan al cargar.
   DB.acuerdos = (data.acuerdos || []).map(ac => {
@@ -1276,6 +1278,7 @@ function construirPayloadEstado() {
     jornadaCfg: DB.jornadaCfg || null,
     costosMO: DB.costosMO || null,
     procCompras: DB.procCompras || null,
+    horasExtra: DB.horasExtra || [],
     solicitudesPanol: DB.solicitudesPanol,
     acuerdos: DB.acuerdos || [],
     versionApp: APP_VERSION,
@@ -13900,6 +13903,7 @@ function NAV_ACTUAL() {
     {id:"protocolos", label:"Protocolos FAT / SAT", icon:iconCheck()},
     {id:"personal", label:"Personal", icon:iconUsers()},
     {id:"costosMO", label:"Horas y costos de personal", icon:iconCoin(), roles: ROLES_COSTOS_MO},
+    {id:"horasExtra", label:"Horas extra", icon:iconClock(), roles: ROLES_COSTOS_MO},
   ]};
   const inteligencia = {group:"🧠 Inteligencia y control", items:[
     {id:"copiloto", label:"Alupin IA", icon:iconSpark()},
@@ -14108,7 +14112,7 @@ function renderAll() {
     dashboard: renderDashboard, miPanel: renderMiPanel, panelEquipo: renderPanelEquipo, bodegaGeneral: renderBodegaGeneral, personal: renderPersonal, proyecto360: renderProyecto360, planificacion: renderPlanificacion, compras: renderCompras,
     presupuesto: renderPresupuesto, bodega: renderBodega, reporteMateriales: renderReporteMateriales, comprasDirectas: renderComprasDirectas, punch: renderPunch, requerimientos: renderRequerimientos, galeria: renderGaleria, cuadroCarga: renderCuadroCarga,
     recepciones: renderRecepciones, resumenOC: renderResumenOC, panol: renderPanol, acuerdos: renderAcuerdos, informesAdmin: renderInformesAdmin, protocolos: renderProtocolos, finSemana: renderFinSemana, kickoff: renderKickoff, tallerPrograma: renderTallerPrograma,
-    fabricacion: renderFabricacion, terminados: renderTerminados, costosMO: renderCostosMO, costosProyecto: renderCostosProyecto, adicionales: renderAdicionales, comprasFlujo: renderComprasFlujo, stockProc: renderStockProc,
+    fabricacion: renderFabricacion, terminados: renderTerminados, costosMO: renderCostosMO, costosProyecto: renderCostosProyecto, adicionales: renderAdicionales, comprasFlujo: renderComprasFlujo, horasExtra: renderHorasExtra, stockProc: renderStockProc,
     reaperturas: renderReaperturas, copiloto: renderCopiloto, auditoria: renderAuditoria, actividad: renderActividad, respaldos: renderRespaldos,
   };
   const target = document.getElementById("page-"+currentPage);
@@ -15147,6 +15151,175 @@ function tpCierreAplicar(){
   toast(`Semana del ${distDiaTxt(c.lunes)} lista con ${R.nuevos.length} trabajo(s).`,"ok");
   if(c.abrir) setTimeout(()=>tpModalCorreo(dest.id),50);
   _tpCierre=null;
+}
+
+/* =====================================================================
+   V3.32.0 — REGISTRO DE HORAS EXTRA
+   Reemplaza el aviso suelto por WhatsApp: cada registro es persona + día
+   + proyecto, con hora autorizada (aviso) y hora real de salida
+   (confirmación posterior, incl. regreso a Santiago). Se pueden pegar los
+   mensajes del grupo y el PMO los convierte en registros.
+   DB.horasExtra = [{id,fecha,pid,nombre,proyectoId,proyTxt,motivo,desde,hasta,real,estado,nota,origen}]
+   ===================================================================== */
+let hxFiltro = "semana", hxLunes = "", _hxPrev = null;
+function hxPuede(){ return cmPuedeRegistrar(); }
+function hxLista(){ if(!Array.isArray(DB.horasExtra)) DB.horasExtra=[]; return DB.horasExtra; }
+function hxPersona(r){ const q=r.pid?(DB.personal||[]).find(x=>x.id===r.pid):null; return q?q.nombre:(r.nombre||"—"); }
+function hxEsHabil(f){ const d=new Date(f+"T12:00:00Z").getUTCDay(); return d>=1&&d<=5; }
+function hxCalc(r){
+  const cfg=psCfg(), sal=psSalidaNormal(cfg,r.fecha), hab=hxEsHabil(r.fecha), fin=r.real||r.hasta;
+  if(!fin) return { h:0, ini:0, fin:0, hab, real:!!r.real, sinFin:true };
+  const ini=hab?Math.max(psHM(r.desde||sal),psHM(sal)):psHM(r.desde||cfg.inicio); let h=Math.max(0,(psHM(fin)-ini)/60);
+  if(!hab&&h>=6) h=Math.max(0,h-(Number(cfg.colacion)||0)/60);
+  return { h:Math.round(h*100)/100, ini, fin:psHM(fin), hab, real:!!r.real, sinFin:false, excede:hab&&h>TP_MAX_EXTRA_DIA+0.001 };
+}
+function hxProyTxt(r){ const p=r.proyectoId?proy(r.proyectoId):null; return p?p.codigo+" · "+(p.cliente||p.nombre):(r.proyTxt||"—"); }
+function hxHtxt(h){ return (Math.round(h*100)/100).toString().replace(".",","); }
+function hxGuardar(det){ registrarHistorial({proyecto:"General", accion:"Modificar", detalle:"Horas extra: "+det, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"}); guardarEstado(); renderAll(); }
+
+/* ---------- Página ---------- */
+function hxFiltrar(){
+  const L=hxLista().slice(), lun=hxLunes||tpLunesDe(hoyISO());
+  let F=L; if(hxFiltro==="semana"){ const fin=sumarDias(lun,6); F=L.filter(r=>r.fecha>=lun&&r.fecha<=fin); } else if(hxFiltro==="pend") F=L.filter(r=>r.estado!=="Confirmada");
+  return F.sort((a,b)=>b.fecha.localeCompare(a.fecha)||hxPersona(a).localeCompare(hxPersona(b)));
+}
+function renderHorasExtra(){
+  const esc=escaparHtml, lun=hxLunes||tpLunesDe(hoyISO()), F=hxFiltrar(), puede=hxPuede();
+  const pend=hxLista().filter(r=>r.estado!=="Confirmada").length, tot=F.reduce((a,r)=>a+hxCalc(r).h,0), exc=F.filter(r=>hxCalc(r).excede).length;
+  const porP={}; F.forEach(r=>{ const k=hxPersona(r); porP[k]=porP[k]||{h:0,n:0}; porP[k].h+=hxCalc(r).h; porP[k].n++; });
+  const chip=(k,t)=>`<button class="mp-chip ${hxFiltro===k?'on':''}" onclick="hxFiltro='${k}'; renderAll()">${t}</button>`;
+  const kpi=(t,v,w)=>`<div class="card" style="padding:8px 12px;min-width:120px${w?';border-color:#e0a39e;background:#fdecea':''}"><div class="muted" style="font-size:11px">${t}</div><div style="font-size:18px;font-weight:bold">${v}</div></div>`;
+  const fila=r=>{ const c=hxCalc(r), conf=r.estado==="Confirmada";
+    return `<tr><td style="white-space:nowrap">${esc(distDiaTxt(r.fecha))}</td><td>${esc(hxProyTxt(r))}</td><td><b>${esc(hxPersona(r))}</b></td><td class="small">${esc(r.motivo||"")}${r.nota?`<div class="muted">${esc(r.nota)}</div>`:""}</td>
+    <td style="white-space:nowrap">${esc(r.desde||psSalidaNormal(psCfg(),r.fecha))} → ${r.hasta?esc(r.hasta):'<span class="muted">sin hora</span>'}</td>
+    <td>${puede?`<input type="time" value="${esc(r.real||"")}" onchange="hxReal('${r.id}',this.value)" style="width:96px">`:esc(r.real||"—")}</td>
+    <td style="text-align:right;white-space:nowrap"><b>${c.sinFin?"—":hxHtxt(c.h)+" h"}</b>${c.excede?' <span title="Supera el máximo legal de 2 h extra por día" style="color:#b3261e">⚠</span>':""}</td>
+    <td>${conf?'<span class="badge b-verde">Confirmada</span>':'<span class="badge b-amarillo">Por confirmar</span>'}</td>
+    <td style="white-space:nowrap">${puede?`${!conf&&r.hasta?`<button class="btn btn-sm" title="Salió a la hora autorizada" onclick="hxReal('${r.id}','${r.hasta}')">✔ Igual</button> `:""}<button class="btn btn-sm" onclick="hxModal('${r.id}')">✎</button> <button class="btn btn-sm" onclick="hxBorrar('${r.id}')">🗑</button>`:""}</td></tr>`; };
+  return `<div class="page-head"><div><h1>Horas extra</h1><div class="page-desc">Registro de horas extra por persona y día: hora autorizada al avisar y hora real de salida al confirmar (incluye el regreso a Santiago). Horario normal ${esc(psCfg().salida)} (viernes ${esc(psCfg().salidaViernes)}); máximo legal ${TP_MAX_EXTRA_DIA} h extra por día.</div></div>
+    ${puede?`<div class="flex-gap"><button class="btn btn-primary" onclick="hxModal('')">+ Registrar horas extra</button><button class="btn" onclick="hxModalWsp()">📲 Pegar mensajes de WhatsApp</button><button class="btn" onclick="hxExcel()">📊 Excel</button></div>`:""}</div>
+    <div class="card" style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">${chip("semana","Semana")}${chip("pend","Por confirmar ("+pend+")")}${chip("todo","Todo")}
+      ${hxFiltro==="semana"?`<button class="btn btn-sm" onclick="hxLunes=sumarDias('${lun}',-7); renderAll()">◀</button><b>${esc(distDiaTxt(lun))} – ${esc(distDiaTxt(sumarDias(lun,4)))}</b><button class="btn btn-sm" onclick="hxLunes=sumarDias('${lun}',7); renderAll()">▶</button>`:""}</div>
+    <div class="flex-gap" style="flex-wrap:wrap;margin-bottom:10px">${kpi("Horas extra",hxHtxt(tot)+" h")}${kpi("Registros",F.length)}${kpi("Por confirmar",pend,pend>0&&hxFiltro!=="semana"?false:false)}${kpi("Sobre el máximo legal",exc,exc>0)}</div>
+    ${F.length?`<div class="card" style="margin-bottom:10px"><div class="table-scroll"><table class="tbl"><thead><tr><th>Fecha</th><th>Proyecto</th><th>Persona</th><th>Motivo</th><th>Autorizada</th><th>Hora real de salida</th><th style="text-align:right">Horas extra</th><th>Estado</th><th></th></tr></thead><tbody>${F.map(fila).join("")}</tbody></table></div>
+      <div class="hint" style="margin-top:6px">Las horas se cuentan desde la salida normal hasta la hora real (o la autorizada si aún no se confirma). Sábados y domingos se cuenta todo el tramo, descontando colación si pasa de 6 h.</div></div>
+      <div class="card"><b>Total por persona</b><div class="table-scroll"><table class="tbl" style="margin-top:4px"><thead><tr><th>Persona</th><th style="text-align:right">Días</th><th style="text-align:right">Horas extra</th></tr></thead><tbody>${Object.keys(porP).sort().map(k=>`<tr><td>${esc(k)}</td><td style="text-align:right">${porP[k].n}</td><td style="text-align:right">${hxHtxt(porP[k].h)} h</td></tr>`).join("")}</tbody></table></div></div>`
+    :`<div class="empty-state card">Sin registros en este filtro. Usa «Registrar horas extra» o pega los mensajes del grupo de WhatsApp.</div>`}`;
+}
+function hxReal(id,v){ const r=hxLista().find(x=>x.id===id); if(!r) return; r.real=v||""; r.estado=v?"Confirmada":"Autorizada"; hxGuardar(`${hxPersona(r)} ${r.fecha}: salida real ${v||"(quitada)"}`); }
+function hxBorrar(id){ const r=hxLista().find(x=>x.id===id); if(!r||!confirm(`¿Eliminar el registro de ${hxPersona(r)} del ${fcF(r.fecha)}?`)) return; DB.horasExtra=hxLista().filter(x=>x.id!==id); hxGuardar("registro eliminado"); }
+
+/* ---------- Alta / edición ---------- */
+function hxModal(id){
+  const r=id?hxLista().find(x=>x.id===id):null, esc=escaparHtml, personas=DB.personal||[];
+  const proys=(typeof proyectosDelAreaTodos==="function"?proyectosDelAreaTodos():DB.proyectos||[]);
+  openModal(`<h2>${r?"Editar":"Registrar"} horas extra</h2>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div><label class="field-label">Fecha</label><input class="input" type="date" id="hxF" value="${esc(r?r.fecha:hoyISO())}"></div>
+    <div><label class="field-label">Proyecto</label><select class="input" id="hxP"><option value="">— otro / general —</option>${proys.map(p=>`<option value="${p.id}" ${r&&r.proyectoId===p.id?"selected":""}>${esc(p.codigo+" · "+(p.cliente||p.nombre))}</option>`).join("")}</select></div></div>
+    <label class="field-label">${r?"Persona":"Personas (puedes marcar varias)"}</label>
+    ${r?`<select class="input" id="hxPe">${personas.map(q=>`<option value="${q.id}" ${r.pid===q.id?"selected":""}>${esc(q.nombre)}</option>`).join("")}${r.pid?"":`<option value="" selected>${esc(r.nombre||"")}</option>`}</select>`
+      :`<div style="max-height:22vh;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px;display:grid;grid-template-columns:1fr 1fr;gap:2px">${personas.map(q=>`<label style="display:flex;gap:6px;align-items:center"><input type="checkbox" class="hxPc" value="${q.id}"> ${esc(q.nombre)}</label>`).join("")}</div>
+      <label class="field-label">Otra persona (nombre libre, opcional)</label><input class="input" id="hxLibre" placeholder="Ej: Arturo (externo)">`}
+    <label class="field-label">Motivo</label><input class="input" id="hxM" value="${esc(r?r.motivo||"":"")}" placeholder="Ej: puesta en marcha">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px"><div><label class="field-label">Desde (vacío = salida normal)</label><input class="input" type="time" id="hxD" value="${esc(r?r.desde||"":"")}"></div><div><label class="field-label">Autorizada hasta</label><input class="input" type="time" id="hxH" value="${esc(r?r.hasta||"":"")}"></div><div><label class="field-label">Salida real (al confirmar)</label><input class="input" type="time" id="hxR" value="${esc(r?r.real||"":"")}"></div></div>
+    <label class="field-label">Nota (ej: hora de llegada a Santiago)</label><input class="input" id="hxN" value="${esc(r?r.nota||"":"")}">
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="hxGuardarModal('${id||""}')">Guardar</button></div>`,640);
+}
+function hxGuardarModal(id){
+  const g=i=>{ const e=document.getElementById(i); return e?(e.value||"").trim():""; }, fecha=g("hxF"); if(!fecha){ toast("Indica la fecha.","danger"); return; }
+  const base={ fecha, proyectoId:g("hxP"), motivo:g("hxM"), desde:g("hxD"), hasta:g("hxH"), real:g("hxR"), nota:g("hxN") }; if(!base.hasta&&!base.real){ toast("Indica hasta qué hora (autorizada o real).","danger"); return; }
+  base.estado=base.real?"Confirmada":"Autorizada"; const L=hxLista();
+  if(id){ const r=L.find(x=>x.id===id); const pe=g("hxPe"); Object.assign(r,base); if(pe) { r.pid=pe; delete r.nombre; } hxGuardarFin(`editado ${hxPersona(r)} ${fecha}`); return; }
+  const pids=[...document.querySelectorAll(".hxPc:checked")].map(x=>x.value), libre=g("hxLibre"); if(!pids.length&&!libre){ toast("Elige al menos una persona.","danger"); return; }
+  pids.forEach(pid=>L.push({ id:"HX"+Math.random().toString(36).slice(2,8), pid, origen:"manual", creado:hoyISO(), ...base }));
+  if(libre) L.push({ id:"HX"+Math.random().toString(36).slice(2,8), nombre:libre, origen:"manual", creado:hoyISO(), ...base });
+  hxGuardarFin(`${pids.length+(libre?1:0)} registro(s) del ${fecha}`);
+}
+function hxGuardarFin(det){ closeModal(); hxGuardar(det); }
+
+/* ---------- WhatsApp: pegar y convertir ---------- */
+function hxHora(h,m,suf){ h=Number(h); m=Number(m||0); suf=(suf||"").toLowerCase(); if(/^p/.test(suf)&&h<12) h+=12; if(/^a/.test(suf)&&h===12) h=0; if(h>23||m>59) return ""; return String(h).padStart(2,"0")+":"+String(m).padStart(2,"0"); }
+function hxTiempos(t){ const out=[], re=/(\d{1,2}):(\d{2})\s*(a\.?m\.?|p\.?m\.?)?|(\d{1,2})\s*(a\.?m\.?|p\.?m\.?|hrs?\.?|hs\.?)(?![a-záéíóú])/gi; let m; while((m=re.exec(t))){ const h=m[1]!==undefined?hxHora(m[1],m[2],m[3]):hxHora(m[4],0,m[5]); if(h) out.push({ h, i:m.index, len:m[0].length }); } return out; }
+function hxProyDe(txt){
+  const n=navNorm(txt); if(!n.trim()) return null; const ps=DB.proyectos||[]; let best=null;
+  ps.forEach(p=>{ const hay=navNorm([p.codigo,p.cliente,p.nombre].join(" ")); const toks=n.split(/[^a-z0-9]+/).filter(w=>w.length>=4); const sc=toks.filter(w=>hay.includes(w)).length; if(sc&&(!best||sc>best.sc)) best={p,sc}; });
+  return best?best.p:null;
+}
+function hxPersonasDe(txt){
+  const pers=DB.personal||[], res=[], vistos=new Set(); const partes=String(txt).split(/\s*,\s*|\s+y\s+|\s+e\s+|\s*\/\s*/i); let corto=false;
+  partes.forEach(tk=>{ if(corto){ res.resto=((res.resto||"")+" "+tk).trim(); return; } const w=navNorm(tk).replace(/[^a-z\s]/g,"").trim(); if(!w||w.length<3) return;
+    const esPers=pers.some(x=>{ const pn=navNorm(x.nombre).split(/\s+/); return pn[0]===w.split(/\s+/)[0]||navNorm(x.nombre)===w; });
+    if(!esPers&&w.split(/\s+/).length>=2){ corto=true; res.resto=tk.trim(); return; } const nombre=tk.trim().replace(/[.;:]+$/,"");
+    const q=pers.find(x=>{ const pn=navNorm(x.nombre).split(/\s+/); return pn[0]===w.split(/\s+/)[0]||navNorm(x.nombre)===w; }); const k=q?q.id:"n:"+w; if(vistos.has(k)) return; vistos.add(k);
+    res.push(q?{ pid:q.id }:{ nombre:nombre.charAt(0).toUpperCase()+nombre.slice(1) }); });
+  return res;
+}
+function hxParsear(texto){
+  const filas=[], avisos=[]; let ultimo=[]; const anio=hoyISO().slice(0,4);
+  String(texto||"").split(/\n+/).forEach(raw=>{
+    let t=raw.replace(/^\s*\[[^\]]*\]\s*[^:]{1,45}:\s*/,"").replace(/^\s*\d{1,2}\/\d{1,2}\/\d{2,4},?\s+\d{1,2}[:.]\d{2}(?:\s*[ap]\.?m\.?)?\s*-\s*[^:]{1,45}:\s*/i,"").trim(); if(!t) return;
+    const md=t.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\s*[-–—:]?\s*(.*)$/);
+    if(md){
+      let y=md[3]?(md[3].length===2?"20"+md[3]:md[3]):anio; const fecha=y+"-"+String(md[2]).padStart(2,"0")+"-"+String(md[1]).padStart(2,"0"), resto=md[4];
+      const seg=resto.split(/\s*[-–—]\s*/); const proy=hxProyDe(seg[0]); const proyTxt=seg[0].trim(); const cuerpo=(proy?seg.slice(1):seg).join(" - ").trim()||"";
+      const tiempos=hxTiempos(cuerpo); const iDesp=cuerpo.search(/despu[eé]s de las?|desde las?/i);
+      const corte=Math.min(...[iDesp,tiempos.length?tiempos[0].i:-1,cuerpo.search(/\bse queda/i),cuerpo.search(/\s{2,}/)].filter(i=>i>=0).concat([cuerpo.length]));
+      const personas=hxPersonasDe(cuerpo.slice(0,corte).replace(/[,;.]\s*$/,""));
+      let desde="", hasta="", real=""; const mDesp=cuerpo.match(/(?:despu[eé]s de las?|desde las?)\s*(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?|hrs?)?/i);
+      if(mDesp){ desde=hxHora(mDesp[1],mDesp[2],mDesp[3]); const otros=tiempos.filter(x=>x.h!==desde); if(otros.length) hasta=otros[otros.length-1].h; }
+      else if(/\d\s*(?:a\.?m\.?|p\.?m\.?|hrs?)?\s+a\s+\d/i.test(cuerpo)&&tiempos.length>=2){ desde=tiempos[0].h; real=tiempos[1].h; hasta=real; }
+      else if(tiempos.length) hasta=tiempos[tiempos.length-1].h;
+      let motivo=((personas.resto?personas.resto+" ":"")+cuerpo.slice(corte)); tiempos.forEach(x=>{ motivo=motivo.replace(cuerpo.substr(x.i,x.len),""); }); motivo=motivo.replace(/se quedar[aá]n?|despu[eé]s de las?|desde las?|\ba\b\s*$/gi,"").replace(/^[\s,;.\-–—]+|[\s,;.\-–—]+$/g,"").replace(/^por motivos? de\s*/i,"").replace(/\s{2,}/g," ").trim();
+      if(!proy&&proyTxt) motivo=(motivo?motivo+" · ":"")+"proyecto: "+proyTxt; else if(proy&&/\sy\s/i.test(seg[0])) motivo=(motivo?motivo+" · ":"")+"proyectos: "+proyTxt;
+      const grupo=[]; (personas.length?personas.slice():[{nombre:""}]).forEach(p=>{ const f={ inc:true, fecha, proyectoId:proy?proy.id:"", ...p, motivo, desde, hasta, real, estado:real?"Confirmada":"Autorizada", crudo:raw.trim() }; filas.push(f); grupo.push(f); });
+      if(!personas.length) avisos.push(`No reconocí personas en: «${raw.trim().slice(0,90)}»`); ultimo=grupo; return;
+    }
+    const tiempos=hxTiempos(t.replace(/^\s*[A-Za-zÁÉÍÓÚáéíóúñÑ,\s]+?(?=\s\d)/,m=>m)); const tm=hxTiempos(t);
+    if(!/\d/.test(t)) return;
+    if(tm.length&&ultimo.length){ const pr=hxPersonasDe(t.slice(0,tm[0].i).replace(/[,;.\s]+$/,"")); let n=0; pr.forEach(p=>{ const f=ultimo.find(x=>(p.pid&&x.pid===p.pid)||(!p.pid&&x.nombre&&navNorm(x.nombre)===navNorm(p.nombre||""))); if(f){ f.real=tm[0].h; f.estado="Confirmada"; n++; } }); if(n) return; }
+    if(t.length>3) avisos.push(`Línea ignorada: «${t.slice(0,80)}»`);
+  });
+  // misma persona y día en dos mensajes (aviso + hora final) → un solo registro
+  const uni=[]; filas.forEach(f=>{ const k=f.fecha+"|"+(f.pid||navNorm(f.nombre||"")), x=uni.find(u=>u._k===k);
+    if(!x){ uni.push(Object.assign(f,{_k:k})); return; }
+    ["desde","hasta","real"].forEach(c=>{ if(!x[c]&&f[c]) x[c]=f[c]; else if(c==="hasta"&&f[c]&&f.hasta>x.hasta) x.hasta=f.hasta; }); if(!x.proyectoId&&f.proyectoId) x.proyectoId=f.proyectoId; if(f.motivo&&!(x.motivo||"").includes(f.motivo)) x.motivo=((x.motivo?x.motivo+" · ":"")+f.motivo); x.estado=x.real?"Confirmada":"Autorizada"; });
+  uni.forEach(f=>delete f._k);
+  return { filas:uni, avisos };
+}
+function hxModalWsp(){
+  openModal(`<h2>Pegar mensajes de WhatsApp</h2><div class="hint" style="margin-bottom:6px">Pega los mensajes del grupo (uno por línea), por ejemplo:<br><span class="mono small">3/11 - greenvic - cristian - 19pm acompañamiento puesta en marcha</span><br><span class="mono small">5/11 - greenex - arturo y sergio, puesta en marcha 20:30pm</span><br>Una línea sin fecha como «Ivan 18:30» se toma como hora real de salida del bloque anterior. Antes de guardar podrás revisar y corregir todo.</div>
+    <textarea class="input" id="hxTxt" rows="9" placeholder="Pega aquí…"></textarea>
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="hxRevisar()">Revisar ▶</button></div>`,720);
+}
+function hxRevisar(){
+  const txt=(document.getElementById("hxTxt").value||"").trim(); if(!txt){ toast("Pega al menos un mensaje.","danger"); return; }
+  _hxPrev=hxParsear(txt); if(!_hxPrev.filas.length){ toast("No encontré registros con formato «fecha - proyecto - personas - hora».","danger"); return; }
+  hxVistaPrevia();
+}
+function hxVistaPrevia(){
+  const P=_hxPrev, esc=escaparHtml, pers=DB.personal||[], proys=DB.proyectos||[];
+  const fila=(f,i)=>`<tr data-i="${i}"><td><input type="checkbox" class="hxI" ${f.inc?"checked":""}></td><td><input type="date" class="hxFe" value="${esc(f.fecha)}"></td>
+    <td><select class="hxPr"><option value="">—</option>${proys.map(p=>`<option value="${p.id}" ${f.proyectoId===p.id?"selected":""}>${esc(p.codigo+" · "+(p.cliente||p.nombre))}</option>`).join("")}</select></td>
+    <td><select class="hxPe"><option value="">${f.pid?"—":esc(f.nombre||"— elegir —")}</option>${pers.map(q=>`<option value="${q.id}" ${f.pid===q.id?"selected":""}>${esc(q.nombre)}</option>`).join("")}</select></td>
+    <td><input type="time" class="hxDe" value="${esc(f.desde||"")}" style="width:90px"></td><td><input type="time" class="hxHa" value="${esc(f.hasta||"")}" style="width:90px"></td><td><input type="time" class="hxRe" value="${esc(f.real||"")}" style="width:90px"></td><td><input class="hxMo" value="${esc(f.motivo||"")}" style="width:160px"></td></tr>`;
+  openModal(`<h2>Revisar registros (${P.filas.length})</h2><div class="hint" style="margin-bottom:6px">Corrige lo que haga falta. <b>Desde</b> vacío = salida normal del día. Si una persona no está en la lista, queda con su nombre escrito. Marca solo lo que quieres guardar.</div>
+    ${P.avisos.length?`<div class="mp-alerta" style="margin-bottom:6px;font-size:12px">${P.avisos.map(esc).join("<br>")}</div>`:""}
+    <div class="table-scroll" style="max-height:46vh;overflow:auto"><table class="tbl"><thead><tr><th></th><th>Fecha</th><th>Proyecto</th><th>Persona</th><th>Desde</th><th>Hasta</th><th>Real</th><th>Motivo</th></tr></thead><tbody>${P.filas.map(fila).join("")}</tbody></table></div>
+    <div class="modal-actions"><button class="btn" onclick="hxModalWsp()">◀ Volver</button><button class="btn btn-primary" onclick="hxGuardarVista()">Guardar registros</button></div>`,1040);
+}
+function hxGuardarVista(){
+  const P=_hxPrev; if(!P) return; const L=hxLista(); let n=0, dup=0, sin=0;
+  [...document.querySelectorAll("#modal tr[data-i], .modal tr[data-i], tr[data-i]")].forEach(tr=>{ const f=P.filas[Number(tr.dataset.i)]; if(!f||!tr.querySelector(".hxI").checked) return; const q=s=>tr.querySelector(s).value;
+    const reg={ fecha:q(".hxFe"), proyectoId:q(".hxPr"), motivo:q(".hxMo").trim(), desde:q(".hxDe"), hasta:q(".hxHa"), real:q(".hxRe"), pid:q(".hxPe")||undefined, nombre:q(".hxPe")?undefined:(f.nombre||""), origen:"whatsapp", creado:hoyISO() };
+    if(!reg.fecha||(!reg.hasta&&!reg.real)||(!reg.pid&&!reg.nombre)){ sin++; return; } if(!reg.proyectoId&&f.crudo) reg.proyTxt=(f.crudo.split(/\s*[-–—]\s*/)[1]||"").slice(0,40);
+    reg.estado=reg.real?"Confirmada":"Autorizada"; if(!reg.pid) delete reg.pid; if(!reg.nombre) delete reg.nombre; Object.keys(reg).forEach(k=>reg[k]===undefined&&delete reg[k]);
+    if(L.some(x=>x.fecha===reg.fecha&&(x.pid&&x.pid===reg.pid||(!x.pid&&!reg.pid&&navNorm(x.nombre||"")===navNorm(reg.nombre||"")))&&(x.proyectoId||"")===(reg.proyectoId||""))){ dup++; return; }
+    L.push({ id:"HX"+Math.random().toString(36).slice(2,8), ...reg }); n++; });
+  closeModal(); _hxPrev=null; hxGuardar(`${n} registro(s) importados de WhatsApp`); toast(`${n} registro(s) guardado(s)`+(dup?`, ${dup} repetido(s) omitido(s)`:"")+(sin?`, ${sin} sin hora o sin persona (no guardados)`:"")+".",n?"ok":"danger");
+}
+async function hxExcel(){
+  const F=hxFiltrar(); if(!F.length){ toast("No hay registros para exportar.","danger"); return; } if(!(await asegurarXLSX())){ toast("No se pudo cargar el generador de Excel.","danger"); return; }
+  const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(F.slice().reverse().map(r=>{ const c=hxCalc(r); return { "Fecha":r.fecha,"Persona":hxPersona(r),"Proyecto":hxProyTxt(r),"Motivo":r.motivo||"","Desde":r.desde||psSalidaNormal(psCfg(),r.fecha),"Autorizada hasta":r.hasta||"","Salida real":r.real||"","Horas extra":c.h,"Estado":r.estado,"Nota":r.nota||"" }; })),"Horas extra"); XLSX.writeFile(wb,`Horas_extra_${hoyISO()}.xlsx`);
 }
 
 /* =====================================================================

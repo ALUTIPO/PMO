@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.30.0";
+const APP_VERSION = "3.30.1";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -15061,12 +15061,12 @@ function tpCierrePaso1(){
     <td><input type="number" id="cAv${it.id}" min="0" max="100" step="5" value="${f.av}" style="width:64px" ${f.est==="curso"?"":"disabled"}> %</td>
     <td><input type="date" id="cIr${it.id}" value="${esc(f.ir)}" ${f.est==="no"?"disabled":""}></td><td><input type="date" id="cFr${it.id}" value="${esc(f.fr)}" ${f.est==="listo"?"":"disabled"}></td></tr>`; };
   openModal(`<div class="modal-head"><h3>Cerrar la semana del ${esc(distDiaTxt(plan.lunes))} y armar la siguiente</h3><button class="close-x" onclick="closeModal()">✕</button></div>
-    <div class="modal-body"><div class="hint" style="margin-bottom:8px">Paso 1 de 2 · Marca lo que realmente pasó. Las fechas reales de inicio y término quedan registradas; lo que no está terminado pasa a la semana siguiente <b>solo con las horas que faltan</b>.</div>
+    <div class="modal-body"><div class="hint" style="margin-bottom:8px">Paso 1 de 2 · Marca lo que realmente pasó (puedes guardar el avance en cualquier momento y cerrar la semana después). Las fechas reales de inicio y término quedan registradas; lo que no está terminado pasa a la semana siguiente <b>solo con las horas que faltan</b>.</div>
     <div class="flex-gap" style="margin-bottom:6px"><button class="btn btn-sm" onclick="tpCierreTodo('listo')">Todo terminado</button><button class="btn btn-sm" onclick="tpCierreTodo('no')">Nada iniciado</button></div>
     <div class="table-scroll" style="max-height:46vh;overflow:auto"><table class="tbl"><thead><tr><th>Trabajo</th><th>Estado real</th><th>Avance</th><th>Inicio real</th><th>Término real</th></tr></thead><tbody>${plan.items.map(fila).join("")}</tbody></table></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px"><label class="small muted">Semana siguiente: lunes<input type="date" id="cLunes" value="${esc(c.lunes)}"></label>
     <label class="small muted">Cómo reprogramar lo pendiente<select id="cModo"><option value="compactar" ${c.modo==="compactar"?"selected":""}>Compactar desde el lunes (recomendado)</option><option value="mantener" ${c.modo==="mantener"?"selected":""}>Mantener la separación original entre trabajos</option></select></label></div></div>
-    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="tpCierrePaso2()">Ver la semana siguiente ▶</button></div>`,860);
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn" onclick="tpCierreGuardar()">💾 Guardar avance (sin pasar de semana)</button><button class="btn btn-primary" onclick="tpCierrePaso2()">Ver la semana siguiente ▶</button></div>`,860);
 }
 function tpCierreFila(id){
   const g=x=>document.getElementById(x), plan=tpPlan(_tpCierre.planId), it=plan.items.find(x=>x.id===id), est=g("cEst"+id).value;
@@ -15109,14 +15109,22 @@ function tpCierrePaso2(){
     <div class="modal-foot"><button class="btn" onclick="tpCierrePaso1b()">◀ Volver</button><button class="btn btn-primary" onclick="tpCierreAplicar()">Crear semana y registrar el cierre</button></div>`,820);
 }
 function tpCierrePaso1b(){ const c=_tpCierre; if(!c) return; const ab=document.getElementById("cAbrir"); if(ab) c.abrir=ab.checked; tpCierrePaso1(); }
-function tpCierreAplicar(){
-  const c=_tpCierre; if(!c||!tpPuede()) return; const ab=document.getElementById("cAbrir"); if(ab) c.abrir=ab.checked;
-  const plan=tpPlan(c.planId), R=tpCierreConstruir();
-  // 1) fechas y estado reales en la semana que cierra
+function tpCierreAplicarReal(plan,c){
   plan.items.forEach(it=>{ const f=c.filas[it.id];
     if(f.est==="listo"){ tpAplicaAvance(it,100); if(f.ir) it.inicioReal=f.ir; if(f.fr) it.finReal=f.fr; if(f.ir&&f.ir<=it.fin&&f.ir!==it.ini) it.ini=f.ir; if(f.fr&&f.fr>=it.ini) it.fin=f.fr; }
     else if(f.est==="curso"){ tpAplicaAvance(it,Math.min(99,Math.max(1,f.av))); if(f.ir){ it.inicioReal=f.ir; } }
     else { if(it.estado!=="bloqueado"){ it.avance=0; it.estado="pendiente"; } } });
+}
+function tpCierreValidar(c,plan){ for(const it of plan.items){ const f=c.filas[it.id]; if(f.est==="listo"&&f.ir&&f.fr&&f.fr<f.ir){ toast(`«${it.tarea}»: el término real no puede ser antes del inicio real.`,"danger"); return false; } } return true; }
+function tpCierreGuardar(){
+  if(!tpPuede()) return; const c=tpCierreLeer(); if(!c) return; const plan=tpPlan(c.planId); if(!tpCierreValidar(c,plan)) return;
+  tpCierreAplicarReal(plan,c); tpAplicarDependencias(plan); closeModal(); _tpCierre=null;
+  tpGuardar(plan,"avance y fechas reales registrados"); toast("Avance guardado. Cuando quieras, vuelve a abrir «Cerrar semana» para pasar lo pendiente a la semana siguiente.","ok");
+}
+function tpCierreAplicar(){
+  const c=_tpCierre; if(!c||!tpPuede()) return; const ab=document.getElementById("cAbrir"); if(ab) c.abrir=ab.checked;
+  const plan=tpPlan(c.planId), R=tpCierreConstruir();
+  tpCierreAplicarReal(plan,c);
   plan.cerrado={ fecha:hoyISO(), por:DB.usuario||"" };
   // 2) semana siguiente
   let dest=R.destino; if(!dest){ dest={ id:"TP-"+Math.random().toString(36).slice(2,8).toUpperCase(), lunes:c.lunes, estado:"borrador", enviados:[], items:[], creadoPor:DB.usuario }; DB.programaTaller.push(dest); }

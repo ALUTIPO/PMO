@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.30.1";
+const APP_VERSION = "3.31.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -13241,7 +13241,7 @@ function tpGuardarFechas(planId,itemId){
   const anc=tpLeerAncla(); if(anc&&tpAnclaCiclo(plan,itemId,anc.id)){ toast("Ese vínculo crea un círculo. Elige otra tarea.","danger"); return; }
   const ini0=it.ini, fin0=it.fin, ir=(document.getElementById('tpIniReal')||{}).value||"", fr=(document.getElementById('tpFinReal')||{}).value||"";
   if(ir&&fr&&fr<ir){ toast("El término real no puede ser antes del inicio real.","danger"); return; }
-  const prev=it.ancla; it.ini=ini; it.fin=fin;
+  tpBase(it); const prev=it.ancla; it.ini=ini; it.fin=fin;
   if(ir) it.inicioReal=ir; else delete it.inicioReal; if(fr) it.finReal=fr; else delete it.finReal;
   if(ir && ini===ini0 && fin===fin0 && ir!==ini0){ const span=Math.max(0,tpHabilesEntre(ini0,fin0)); it.ini=ir; it.fin=tpSumarHabiles(tpSiguienteHabil(ir),span); }
   if(fr){ if(fr>=it.ini) it.fin=fr; tpAplicaAvance(it,100); const avf=document.getElementById('tpAv'); if(avf) avf.value=100; }
@@ -13324,6 +13324,14 @@ function tpHex(h){ h=String(h||"#8a94a3").replace("#",""); if(h.length===3) h=h.
 function tpMezcla(hex,t){ const c=tpHex(hex).map(v=>Math.round(v+(255-v)*t)); return "#"+c.map(v=>v.toString(16).padStart(2,"0")).join(""); }
 function tpDiasHabiles(a,b){ const out=[]; let d=tpSiguienteHabil(a); for(let i=0;i<400 && d<=b;i++){ out.push(d); d=tpSiguienteHabil(sumarDias(d,1)); } return out; }
 /* planes: lista de {items}. Une las semanas (lo traspasado a la semana siguiente se toma de la más nueva). */
+/* ---- Línea base vs proyectado/real (estilo MS Project) ---- */
+function tpBase(it){ if(it&&!it.base&&it.ini&&it.fin) it.base={ ini:it.ini, fin:it.fin, horas:Number(it.horas)||0 }; }
+function tpBaseGantt(it,idx0,idx1){ return it.base&&it.base.ini&&it.base.fin?{ b0:idx0(it.base.ini), b1:idx1(it.base.fin) }:{}; }
+function tpVarTxt(it){
+  const b=it.base; if(!b) return ""; const d=it.fin>=b.fin?tpHabilesEntre(b.fin,it.fin):-tpHabilesEntre(it.fin,b.fin);
+  const hr=it.horasReales!=null&&it.horasReales!==""?" · "+tpHtxt(Number(it.horasReales))+" h reales de "+tpHtxt(b.horas)+" h":"";
+  return " · base "+distDiaTxt(b.ini)+(b.fin!==b.ini?"→"+distDiaTxt(b.fin):"")+" · "+(d===0?"en fecha":d>0?"+"+d+" d háb. de atraso":(-d)+" d háb. antes")+hr;
+}
 function tpGanttDatos(planes){
   const mapa={}, plOf=new Map();
   planes.forEach(pl=>{ const cont={}; pl.items.forEach(it=>{ if(!it.ini||!it.fin) return; const b=tpKey(it)+"##"+it.tarea; cont[b]=(cont[b]||0)+1; mapa[b+"##"+cont[b]]=it; plOf.set(it,pl); }); });
@@ -13346,8 +13354,8 @@ function tpGanttDatos(planes){
       i0:idx0(f.ini), i1:idx1(f.fin), ini:f.ini, fin:f.fin, avance:av, color, resp:[...new Set(its.flatMap(i=>tpNombres(i)))].join(", ") });
     its.slice().sort((a,b)=>a.ini.localeCompare(b.ini)).forEach(it=>{
       const col = it.estado==="listo"?"#2e9e5b" : it.estado==="bloqueado"?"#d64545" : color;
-      filas.push({ tipo:"a", key:k, itemId:it.id, planId:(plOf.get(it)||{}).id||"", sobre:sobreDe(it), label:it.tarea+(it.prioridad==="urgente"?" 🔴":""),
-        sub:(tpNombres(it).join(", ")||"sin asignar")+(()=>{ if(!it.ancla) return ""; const pl=plOf.get(it), a=pl&&pl.items?pl.items.find(x=>x.id===it.ancla.id):null; return a?(it.enLote?" · 👥 en conjunto con ":it.ancla.tipo==="mismo"?" · ⛓ mismo día que ":" · ⛓ después de ")+((a.tablero?a.tablero+": ":"")+a.tarea):""; })()+" · "+distDiaTxt(it.ini)+(it.fin!==it.ini?"→"+distDiaTxt(it.fin):""), i0:idx0(it.ini), i1:idx1(it.fin), ini:it.ini, fin:it.fin, avance:Number(it.avance)||0, color:col, meta:it.meta||"" });
+      filas.push({ tipo:"a", ...tpBaseGantt(it,idx0,idx1), key:k, itemId:it.id, planId:(plOf.get(it)||{}).id||"", sobre:sobreDe(it), label:it.tarea+(it.prioridad==="urgente"?" 🔴":""),
+        sub:(tpNombres(it).join(", ")||"sin asignar")+(()=>{ if(!it.ancla) return ""; const pl=plOf.get(it), a=pl&&pl.items?pl.items.find(x=>x.id===it.ancla.id):null; return a?(it.enLote?" · 👥 en conjunto con ":it.ancla.tipo==="mismo"?" · ⛓ mismo día que ":" · ⛓ después de ")+((a.tablero?a.tablero+": ":"")+a.tarea):""; })()+" · "+distDiaTxt(it.ini)+(it.fin!==it.ini?"→"+distDiaTxt(it.fin):"")+tpVarTxt(it), i0:idx0(it.ini), i1:idx1(it.fin), ini:it.ini, fin:it.fin, avance:Number(it.avance)||0, color:col, meta:it.meta||"" });
     });
   });
   return { dias, filas, ini, fin, nTableros:orden.length };
@@ -13369,6 +13377,8 @@ function tpGanttTabla(D, opt){
     const esT=f.tipo==="t"; if(!esT && opt.abiertos && !opt.abiertos(f.key)) return "";
     const n=f.i1-f.i0+1, hechas=Math.round(n*f.avance/100), claro=tpMezcla(f.color,0.62), alto=esT?24:19, pad=esT?"3px":"4px";
     const celdas=D.dias.map((d,i)=>{ let bg="";
+      if(!esT&&f.b0!==undefined){ const enB=i>=f.b0&&i<=f.b1, enA=i>=f.i0&&i<=f.i1, colA=(i-f.i0<hechas)?f.color:claro;
+        return `<td style="height:26px;padding:2px 0;vertical-align:top;border:1px solid #eee;${i===iHoy?'background:#fff1e3;border-left:2px solid #c1712e;':''}"><div style="height:4px;margin-bottom:3px;${enB?'background:#8d96a3;':''}"></div><div style="height:9px;${enA?'background:'+colA+';':''}"></div></td>`; }
       if(i>=f.i0 && i<=f.i1) bg=(i-f.i0<hechas)?f.color:claro; else if(i===iHoy) bg="#fff1e3";
       return `<td style="height:${alto}px;padding:${pad} 0;border:1px solid #eee;${bg?'background:'+bg+';background-clip:content-box;':''}${i===iHoy?'border-left:2px solid #c1712e;':''}"></td>`; }).join("");
     const aviso=opt.interactivo&&f.sobre?' <span style="color:#c0392b" title="Alguien pasa de 9 h por día">⚠</span>':'';
@@ -13376,7 +13386,7 @@ function tpGanttTabla(D, opt){
       ? `<td title="${escaparHtml(f.label+' · '+f.sub+' · '+distDiaTxt(f.ini)+' → '+distDiaTxt(f.fin))}" style="background:#faf6f1;border:1px solid #ddd;padding:2px 6px;font-size:12px;color:#222;${elip}${fijo?'cursor:pointer;position:sticky;left:0;z-index:2;':''}"${opt.interactivo?` onclick="tpGanttToggle(${ri})"`:''}>${opt.interactivo?`<b style="display:inline-block;width:14px">${opt.abiertos&&opt.abiertos(f.key)?'−':'+'}</b>`:''}<b>${escaparHtml(f.label)}</b>${aviso}${opt.editable?` <span style="cursor:pointer;color:#a15a1d" onclick="event.stopPropagation();tpModalInicioTablero(${ri})" title="Cambiar el inicio del tablero">✎</span>`:''} <span style="font-size:10px;color:#777">· ${f.avance}% · ${distDiaTxt(f.ini).split(' ').slice(1).join(' ')} → ${distDiaTxt(f.fin).split(' ').slice(1).join(' ')}</span></td>`
       : `<td title="${escaparHtml(f.label+' · '+f.sub)}" style="background:#fff;border:1px solid #eee;padding:1px 6px 1px ${opt.interactivo?24:14}px;font-size:11px;color:#333;${elip}${fijo?'position:sticky;left:0;z-index:2;':''}${opt.editable?'cursor:pointer;':''}"${opt.editable?` onclick="tpModalFechas(${ri})"`:''}>${aviso?'<span style="color:#c0392b">⚠</span> ':''}${escaparHtml(f.label)}${opt.editable?' <span style="color:#a15a1d">✎</span>':''} <span style="color:#888;font-size:10px">· ${escaparHtml(f.sub.split(' · ')[0])}</span></td>`;
     return `<tr>${lab}${celdas}</tr>`; }).join("");
-  const leyenda=`<div style="font-size:10px;color:#666;margin-top:6px">Color fuerte = avance · color claro = por hacer · verde = listo · rojo = bloqueado · columna con borde cobre = hoy · solo días hábiles.</div>`;
+  const leyenda=`<div style="font-size:10px;color:#666;margin-top:6px">Color fuerte = avance · color claro = por hacer · verde = listo · rojo = bloqueado · <b>línea gris fina = línea base (plan original)</b> sobre la barra de color = proyectado/real · columna con borde cobre = hoy · solo días hábiles.</div>`;
   return `<table style="${fijo?`table-layout:fixed;width:${LAB+N*W}px;`:''}border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;background:#fff;color:#222">${colg}<thead>
     <tr><th rowspan="2" style="background:#f1ece6;border:1px solid #ddd;font-size:11px;text-align:left;padding:3px 6px;${fijo?'position:sticky;left:0;z-index:3;':`min-width:${LAB}px;`}">Tablero / tarea</th>${meses}</tr><tr>${dh}</tr></thead><tbody>${filasHtml}</tbody></table>${leyenda}`;
 }
@@ -13418,9 +13428,10 @@ async function tpGanttPdf(planId){
       if(h.column.index===0){ if(f.tipo==="t"){ h.cell.styles.fontStyle="bold"; h.cell.styles.fillColor=[250,246,241]; } return; }
       const i=h.column.index-1;
       if(i>=f.i0&&i<=f.i1){ const k=f.i1-f.i0+1, hechas=Math.round(k*f.avance/100); h.cell.styles.fillColor=tpHex((i-f.i0<hechas)?f.color:tpMezcla(f.color,0.62)); }
-      else if(i===iHoy) h.cell.styles.fillColor=[255,241,227]; } });
+      else if(i===iHoy) h.cell.styles.fillColor=[255,241,227]; },
+    didDrawCell:function(h){ if(h.section!=="body"||h.column.index===0) return; const f=mapa[h.row.index]; if(!f||f.tipo!=="a"||f.b0===undefined) return; const i=h.column.index-1; if(i>=f.b0&&i<=f.b1){ doc.setFillColor(110,120,132); doc.rect(h.cell.x,h.cell.y+0.2,h.cell.width,Math.min(0.9,h.cell.height*0.22),"F"); } } });
   doc.setFontSize(7); doc.setFont(undefined,"normal"); doc.setTextColor(110);
-  doc.text("Color fuerte = avance · color claro = por hacer · verde = listo · rojo = bloqueado · columna naranja = hoy · solo días hábiles",M,Math.min(PH-5,(doc.lastAutoTable.finalY||PH-15)+4));
+  doc.text("Color fuerte = avance · color claro = por hacer · verde = listo · rojo = bloqueado · línea gris fina = línea base (plan original) · columna naranja = hoy · solo días hábiles",M,Math.min(PH-5,(doc.lastAutoTable.finalY||PH-15)+4));
   doc.save(`Gantt_taller_${hoyISO()}.pdf`);
 }
 function tpGanttToggle(ri){ const f=(tpGanttFilas||[])[ri]; if(!f) return; const k=f.key; tpGanttAbiertos[k]=!(tpGanttAbiertos[k]!==undefined?tpGanttAbiertos[k]:true); const sc=document.getElementById('tpGanttBox'); const x=sc?sc.scrollLeft:0, y=sc?sc.scrollTop:0; renderAll(); const s2=document.getElementById('tpGanttBox'); if(s2){ s2.scrollLeft=x; s2.scrollTop=y; } }
@@ -13775,8 +13786,8 @@ function tpCopiar(planId,quien){ (navigator.clipboard?navigator.clipboard.writeT
 function tpEnviarWA(planId,quien){
   const plan=tpPlan(planId); const per=quien==="grupo"?null:DB.personal.find(p=>p.id===quien); const tel=per?fsTelefonoWA(per.telefono):"";
   window.open("https://wa.me/"+tel+"?text="+encodeURIComponent(tpTexto(planId,quien)),"_blank");
-  if(per && !plan.enviados.includes(per.id)) plan.enviados.push(per.id);
-  plan.estado="enviado"; guardarEstado(); tpModalEnviar(planId);
+  if(per && !plan.enviados.includes(per.id)){ plan.enviados.push(per.id); plan.items.forEach(tpBase); }
+  plan.items.forEach(tpBase); plan.estado="enviado"; guardarEstado(); tpModalEnviar(planId);
 }
 /* ---- Página ---- */
 function renderTallerPrograma(){
@@ -15044,13 +15055,13 @@ let _tpCierre = null;
 function tpCierreLeer(){
   const c=_tpCierre; if(!c) return null; const plan=tpPlan(c.planId); if(!plan) return null; const g=id=>document.getElementById(id);
   if(g("cLunes")){ c.lunes=g("cLunes").value||c.lunes; c.modo=g("cModo").value; c.abrir=g("cAbrir")?g("cAbrir").checked:c.abrir; }
-  plan.items.forEach(it=>{ const e=g("cEst"+it.id); if(!e) return; c.filas[it.id]={ est:e.value, av:Math.max(0,Math.min(100,Math.round(Number(g("cAv"+it.id).value)||0))), ir:g("cIr"+it.id).value||"", fr:g("cFr"+it.id).value||"" }; });
+  plan.items.forEach(it=>{ const e=g("cEst"+it.id); if(!e) return; c.filas[it.id]={ est:e.value, av:Math.max(0,Math.min(100,Math.round(Number(g("cAv"+it.id).value)||0))), ir:g("cIr"+it.id).value||"", fr:g("cFr"+it.id).value||"", hr:g("cHr"+it.id).value }; });
   return c;
 }
 function tpModalCierre(planId){
   if(!tpPuede()) return; const plan=tpPlan(planId); if(!plan) return;
   if(!plan.items.length){ toast("Esta semana no tiene trabajos.","danger"); return; }
-  const filas={}; plan.items.forEach(it=>{ const est=it.estado==="listo"?"listo":(it.estado==="en_curso"||Number(it.avance)>0)?"curso":"no"; filas[it.id]={ est, av:est==="listo"?100:Number(it.avance)||0, ir:it.inicioReal||(est!=="no"?it.ini:""), fr:it.finReal||(est==="listo"?it.fin:"") }; });
+  const filas={}; plan.items.forEach(it=>{ const est=it.estado==="listo"?"listo":(it.estado==="en_curso"||Number(it.avance)>0)?"curso":"no"; filas[it.id]={ est, av:est==="listo"?100:Number(it.avance)||0, ir:it.inicioReal||(est!=="no"?it.ini:""), fr:it.finReal||(est==="listo"?it.fin:""), hr:est==="listo"?(it.horasReales!=null?it.horasReales:it.horas):"" }; });
   _tpCierre={ planId, lunes:sumarDias(plan.lunes,7), modo:"compactar", abrir:true, filas, paso:1 };
   tpCierrePaso1();
 }
@@ -15059,19 +15070,20 @@ function tpCierrePaso1(){
   const fila=it=>{ const f=c.filas[it.id]; return `<tr data-id="${it.id}"><td><b>${esc((it.tablero?it.tablero+" · ":"")+it.tarea)}</b><div class="small muted">${esc(tpNombres(it).join(", ")||"sin asignar")} · ${it.horas} h · plan ${esc(distDiaTxt(it.ini))}${it.fin!==it.ini?" → "+esc(distDiaTxt(it.fin)):""}</div></td>
     <td><select id="cEst${it.id}" onchange="tpCierreFila(${it.id})"><option value="listo" ${f.est==="listo"?"selected":""}>✔ Terminada</option><option value="curso" ${f.est==="curso"?"selected":""}>◐ En curso</option><option value="no" ${f.est==="no"?"selected":""}>○ No se inició</option></select></td>
     <td><input type="number" id="cAv${it.id}" min="0" max="100" step="5" value="${f.av}" style="width:64px" ${f.est==="curso"?"":"disabled"}> %</td>
-    <td><input type="date" id="cIr${it.id}" value="${esc(f.ir)}" ${f.est==="no"?"disabled":""}></td><td><input type="date" id="cFr${it.id}" value="${esc(f.fr)}" ${f.est==="listo"?"":"disabled"}></td></tr>`; };
+    <td><input type="date" id="cIr${it.id}" value="${esc(f.ir)}" ${f.est==="no"?"disabled":""}></td><td><input type="date" id="cFr${it.id}" value="${esc(f.fr)}" ${f.est==="listo"?"":"disabled"}></td><td><input type="number" id="cHr${it.id}" min="0" step="0.5" value="${esc(String(f.hr===undefined?"":f.hr))}" style="width:64px" ${f.est==="listo"?"":"disabled"}></td></tr>`; };
   openModal(`<div class="modal-head"><h3>Cerrar la semana del ${esc(distDiaTxt(plan.lunes))} y armar la siguiente</h3><button class="close-x" onclick="closeModal()">✕</button></div>
     <div class="modal-body"><div class="hint" style="margin-bottom:8px">Paso 1 de 2 · Marca lo que realmente pasó (puedes guardar el avance en cualquier momento y cerrar la semana después). Las fechas reales de inicio y término quedan registradas; lo que no está terminado pasa a la semana siguiente <b>solo con las horas que faltan</b>.</div>
     <div class="flex-gap" style="margin-bottom:6px"><button class="btn btn-sm" onclick="tpCierreTodo('listo')">Todo terminado</button><button class="btn btn-sm" onclick="tpCierreTodo('no')">Nada iniciado</button></div>
-    <div class="table-scroll" style="max-height:46vh;overflow:auto"><table class="tbl"><thead><tr><th>Trabajo</th><th>Estado real</th><th>Avance</th><th>Inicio real</th><th>Término real</th></tr></thead><tbody>${plan.items.map(fila).join("")}</tbody></table></div>
+    <div class="table-scroll" style="max-height:46vh;overflow:auto"><table class="tbl"><thead><tr><th>Trabajo</th><th>Estado real</th><th>Avance</th><th>Inicio real</th><th>Término real</th><th>Horas reales</th></tr></thead><tbody>${plan.items.map(fila).join("")}</tbody></table></div>
+    <div class="hint" style="margin-top:6px">Las fechas reales reemplazan al plan en la barra de color; el <b>plan original queda como línea base</b> (gris) para comparar. Las horas reales se comparan con las horas planificadas.</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px"><label class="small muted">Semana siguiente: lunes<input type="date" id="cLunes" value="${esc(c.lunes)}"></label>
     <label class="small muted">Cómo reprogramar lo pendiente<select id="cModo"><option value="compactar" ${c.modo==="compactar"?"selected":""}>Compactar desde el lunes (recomendado)</option><option value="mantener" ${c.modo==="mantener"?"selected":""}>Mantener la separación original entre trabajos</option></select></label></div></div>
-    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn" onclick="tpCierreGuardar()">💾 Guardar avance (sin pasar de semana)</button><button class="btn btn-primary" onclick="tpCierrePaso2()">Ver la semana siguiente ▶</button></div>`,860);
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn" onclick="tpCierreGuardar()">💾 Guardar avance (sin pasar de semana)</button><button class="btn btn-primary" onclick="tpCierrePaso2()">Ver la semana siguiente ▶</button></div>`,980);
 }
 function tpCierreFila(id){
   const g=x=>document.getElementById(x), plan=tpPlan(_tpCierre.planId), it=plan.items.find(x=>x.id===id), est=g("cEst"+id).value;
   g("cAv"+id).disabled=est!=="curso"; if(est==="listo") g("cAv"+id).value=100; else if(est==="no") g("cAv"+id).value=0; else if(Number(g("cAv"+id).value)<=0||Number(g("cAv"+id).value)>=100) g("cAv"+id).value=50;
-  g("cIr"+id).disabled=est==="no"; g("cFr"+id).disabled=est!=="listo";
+  g("cIr"+id).disabled=est==="no"; g("cFr"+id).disabled=est!=="listo"; g("cHr"+id).disabled=est!=="listo"; if(est==="listo"){ if(g("cHr"+id).value==="") g("cHr"+id).value=it.horasReales!=null?it.horasReales:it.horas; } else g("cHr"+id).value="";
   if(est==="no"){ g("cIr"+id).value=""; g("cFr"+id).value=""; } else { if(!g("cIr"+id).value) g("cIr"+id).value=it.ini; if(est==="listo"&&!g("cFr"+id).value) g("cFr"+id).value=it.fin; if(est!=="listo") g("cFr"+id).value=""; }
 }
 function tpCierreTodo(est){ const plan=tpPlan(_tpCierre.planId); plan.items.forEach(it=>{ const e=document.getElementById("cEst"+it.id); if(e){ e.value=est; tpCierreFila(it.id); } }); }
@@ -15081,12 +15093,12 @@ function tpCierreConstruir(){
   const hecho=it=>{ const f=c.filas[it.id]; return f.est==="listo"||(f.est==="curso"&&f.av>=100); };
   const pend=plan.items.filter(it=>!hecho(it)); let n=destino?destino.items.reduce((m,x)=>Math.max(m,x.id),0):0; const mapa={};
   const base=pend.length?pend.reduce((m,i)=>i.ini<m?i.ini:m,pend[0].ini):c.lunes;
-  const nuevos=pend.map(it=>{ const f=c.filas[it.id], av=f.est==="curso"?Math.max(1,Math.min(99,f.av)):0, tot=Number(it.horas)||0, rest=av?Math.max(0.5,Math.round(tot*(100-av)/100*2)/2):tot;
+  const nuevos=pend.map(it=>{ tpBase(it); const f=c.filas[it.id], av=f.est==="curso"?Math.max(1,Math.min(99,f.av)):0, tot=Number(it.horas)||0, rest=av?Math.max(0.5,Math.round(tot*(100-av)/100*2)/2):tot;
     const nOrig=Math.max(1,tpHabilesEntre(it.ini,it.fin)+1), dens=tot>0?tot/nOrig:TP_HORAS_DIA, nNew=Math.max(1,Math.ceil(rest/dens-0.001));
     const off=c.modo==="mantener"?Math.max(0,tpHabilesEntre(base,it.ini)):0, ini=tpSumarHabiles(c.lunes,off), fin=tpSumarHabiles(ini,nNew-1); mapa[it.id]=++n;
     const nota=(it.nota?it.nota+" · ":"")+(av?`Continúa de la semana del ${distDiaTxt(plan.lunes)}: avance ${av}%, quedan ${tpHtxt(rest)} h`:`No se inició en la semana del ${distDiaTxt(plan.lunes)}`);
     const o={ ...it, id:mapa[it.id], ancla:it.ancla?{...it.ancla}:undefined, responsables:it.responsables.slice(), ini, fin, horas:rest, avance:0, estado:it.estado==="bloqueado"?"bloqueado":"pendiente", nota, horasPrevias:(Number(it.horasPrevias)||0)+(tot-rest), _orig:it.id };
-    if(f.est!=="no"&&f.ir) o.inicioReal=f.ir; else delete o.inicioReal; delete o.finReal; if(!o.ancla) delete o.ancla; return o; });
+    if(f.est!=="no"&&f.ir) o.inicioReal=f.ir; else delete o.inicioReal; delete o.finReal; delete o.horasReales; if(!o.ancla) delete o.ancla; return o; });
   nuevos.forEach(o=>{ if(o.ancla){ if(mapa[o.ancla.id]) o.ancla={...o.ancla,id:mapa[o.ancla.id]}; else { delete o.ancla; delete o.enLote; } } });
   // reprogramar con carga y vínculos (incluye lo que ya hubiera en la semana destino)
   const tmp={ items:(destino?destino.items.map(i=>({...i})):[]).concat(nuevos.map(o=>({...o}))) }, r=tpPlanAjuste(tmp), razon={};
@@ -15110,8 +15122,9 @@ function tpCierrePaso2(){
 }
 function tpCierrePaso1b(){ const c=_tpCierre; if(!c) return; const ab=document.getElementById("cAbrir"); if(ab) c.abrir=ab.checked; tpCierrePaso1(); }
 function tpCierreAplicarReal(plan,c){
+  plan.items.forEach(tpBase);
   plan.items.forEach(it=>{ const f=c.filas[it.id];
-    if(f.est==="listo"){ tpAplicaAvance(it,100); if(f.ir) it.inicioReal=f.ir; if(f.fr) it.finReal=f.fr; if(f.ir&&f.ir<=it.fin&&f.ir!==it.ini) it.ini=f.ir; if(f.fr&&f.fr>=it.ini) it.fin=f.fr; }
+    if(f.est==="listo"){ tpAplicaAvance(it,100); if(f.ir) it.inicioReal=f.ir; if(f.fr) it.finReal=f.fr; if(Number(f.hr)>0) it.horasReales=Number(f.hr); if(f.ir&&f.ir<=it.fin&&f.ir!==it.ini) it.ini=f.ir; if(f.fr&&f.fr>=it.ini) it.fin=f.fr; }
     else if(f.est==="curso"){ tpAplicaAvance(it,Math.min(99,Math.max(1,f.av))); if(f.ir){ it.inicioReal=f.ir; } }
     else { if(it.estado!=="bloqueado"){ it.avance=0; it.estado="pendiente"; } } });
 }

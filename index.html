@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.35.0";
+const APP_VERSION = "3.36.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -12856,7 +12856,7 @@ function tpLunesDe(f){ const w=new Date(f+"T12:00:00Z").getUTCDay(); return suma
 function tpCarga(plan){
   const ini=plan.items.reduce((m,i)=>i.ini&&i.ini<m?i.ini:m,plan.lunes), fin=plan.items.reduce((m,i)=>i.fin&&i.fin>m?i.fin:m,sumarDias(plan.lunes,5));
   const carga={};
-  plan.items.forEach(it=>{ if(!it.ini||!it.fin) return; const ds=tpDias(it.ini,it.fin), h=tpHorasEf(it)/ds.length;
+  plan.items.forEach(it=>{ if(!it.ini||!it.fin) return; const ds=tpDias(it.ini,it.fin), h=tpHorasPers(it)/ds.length;
     it.responsables.forEach(pid=>{ carga[pid]=carga[pid]||{}; ds.forEach(d=>{ carga[pid][d]=(carga[pid][d]||0)+h; }); }); });
   const semanal = diasEntre(ini,fin) > 7; const columnas=[];
   if(!semanal){ for(let i=0;i<6;i++){ const d=sumarDias(plan.lunes,i); columnas.push({ label:distDiaTxt(d).slice(0,3)+" "+new Date(d+"T12:00:00Z").getUTCDate(), dias:[d] }); } }
@@ -13004,7 +13004,8 @@ function tpModalItem(planId,itemId,gi){
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
         <label class="small muted">Inicio<input type="date" id="tpIni" value="${it?it.ini:plan.lunes}"></label>
         <label class="small muted">Fin<input type="date" id="tpFin" value="${it?it.fin:sumarDias(plan.lunes,4)}"></label>
-        <label class="small muted">Horas estimadas<input type="number" id="tpHoras" min="0" step="0.5" value="${it?it.horas:8}"></label></div>
+        <label class="small muted">Horas estimadas (trabajo total)<input type="number" id="tpHoras" min="0" step="0.1" value="${it?it.horas:8}"></label></div>
+      <label class="small flex-gap" title="Por defecto, con 2 personas las horas se reparten: 2 h en total = 1 h reales cada una"><input type="checkbox" id="tpCada" ${it&&it.modoHoras==="cada"?"checked":""}> Cada responsable hace las horas completas (no se reparten)</label>
       <label class="small muted">Qué debe quedar listo (meta clara)<input type="text" id="tpMeta" value="${escaparHtml(it?it.meta:"")}" placeholder="Ej: Potencia cableada y revisada, lista para control"></label>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">${tpHtmlAncla(plan,it)}</div>
       <div id="tpCabeMsg" class="small" style="padding:6px 8px;border-radius:6px"></div>
@@ -13019,7 +13020,7 @@ function tpModalItem(planId,itemId,gi){
 function tpGuardarItem(planId,itemId){
   if(!tpPuede()) return; const plan=tpPlan(planId);
   const d={ proyectoId:document.getElementById('tpProy').value, tablero:document.getElementById('tpTablero').value.trim(), tarea:document.getElementById('tpTarea').value.trim(), responsables:tpLeerResp(),
-    ini:document.getElementById('tpIni').value, fin:document.getElementById('tpFin').value, horas:Number(document.getElementById('tpHoras').value)||0, meta:document.getElementById('tpMeta').value.trim(),
+    ini:document.getElementById('tpIni').value, fin:document.getElementById('tpFin').value, horas:Number(document.getElementById('tpHoras').value)||0, modoHoras:(document.getElementById('tpCada')&&document.getElementById('tpCada').checked)?'cada':'', meta:document.getElementById('tpMeta').value.trim(),
     prioridad:document.getElementById('tpPrio').value, nota:document.getElementById('tpNota').value.trim() };
   if(!d.tarea){ toast("Escribe la tarea.", "danger"); return; }
   if(!d.ini||!d.fin||d.fin<d.ini){ toast("Revisa las fechas de inicio y fin.", "danger"); return; }
@@ -13092,14 +13093,14 @@ function tpCrearArmado(planId){
 function tpHorasEf(it){ return it.enLote ? 0 : (Number(it.horas)||0); }   // una tarea «en conjunto» no suma horas: las pone el bloque líder
 function tpMapaCarga(items){
   const c={};
-  items.forEach(it=>{ if(!it.ini||!it.fin) return; const ds=tpDias(it.ini,it.fin), h=tpHorasEf(it)/ds.length; (it.responsables||[]).forEach(pid=>{ c[pid]=c[pid]||{}; ds.forEach(d=>{ c[pid][d]=(c[pid][d]||0)+h; }); }); });
+  items.forEach(it=>{ if(!it.ini||!it.fin) return; const ds=tpDias(it.ini,it.fin), h=tpHorasPers(it)/ds.length; (it.responsables||[]).forEach(pid=>{ c[pid]=c[pid]||{}; ds.forEach(d=>{ c[pid][d]=(c[pid][d]||0)+h; }); }); });
   return c;
 }
 function tpDiasN(ini,n){ const out=[]; let d=tpSiguienteHabil(ini); for(let i=0;i<n;i++){ out.push(d); d=tpSiguienteHabil(sumarDias(d,1)); } return out; }
 function tpNombrePersona(pid){ const p=DB.personal.find(x=>x.id===pid); return p?p.nombre:"(eliminado)"; }
 /* ¿Cabe la tarea con esas fechas, horas y personas? Devuelve los días en que alguien pasa de la jornada y el primer día donde sí cabe. */
 function tpCabe(plan,d){
-  const carga=tpMapaCarga(plan.items.filter(i=>i.id!==d.id)); const dias=tpDias(d.ini,d.fin), h=(Number(d.horas)||0)/dias.length, prob=[];
+  const carga=tpMapaCarga(plan.items.filter(i=>i.id!==d.id)); const dias=tpDias(d.ini,d.fin), h=(d.cada?(Number(d.horas)||0):(Number(d.horas)||0)/Math.max(1,(d.responsables||[]).length))/dias.length, prob=[];
   (d.responsables||[]).forEach(pid=>dias.forEach(day=>{ const t=((carga[pid]||{})[day]||0)+h; if(t>tpCap(day)+0.01) prob.push({pid,day,t}); }));
   let sug=""; if(prob.length && h<=TP_HORAS_DIA+0.01){ let s=tpSiguienteHabil(d.ini); for(let i=0;i<120;i++){ const ds=tpDiasN(s,dias.length); if(d.responsables.every(pid=>ds.every(day=>((carga[pid]||{})[day]||0)+h<=tpCap(day)+0.01))){ sug=s; break; } s=tpSiguienteHabil(sumarDias(s,1)); } }
   return { ok:!prob.length, prob, sug, h, n:dias.length };
@@ -13141,7 +13142,7 @@ function tpSnapGrupo(plan,t){
 function tpCabeEstado(planId,itemId){
   const plan=tpPlan(planId), it=itemId?plan.items.find(x=>x.id===itemId):null; const g=id=>document.getElementById(id);
   const resp=document.querySelector('.tpResp')?tpLeerResp():(it?it.responsables:[]);
-  return { plan, it, d:{ id:itemId||0, ini:g('tpIni').value, fin:g('tpFin').value, horas:(it&&it.enLote)?0:(g('tpHoras')?g('tpHoras').value:(it?it.horas:0)), responsables:resp } };
+  return { plan, it, d:{ id:itemId||0, ini:g('tpIni').value, fin:g('tpFin').value, horas:(it&&it.enLote)?0:(g('tpHoras')?g('tpHoras').value:(it?it.horas:0)), cada:g('tpCada')?g('tpCada').checked:!!(it&&it.modoHoras==='cada'), responsables:resp } };
 }
 function tpCabeRefrescar(planId,itemId){
   const el=document.getElementById('tpCabeMsg'); if(!el) return; const {plan,d}=tpCabeEstado(planId,itemId);
@@ -13150,7 +13151,7 @@ function tpCabeRefrescar(planId,itemId){
   const t=tpTxtCabe(tpCabe(plan,d)); el.innerHTML=t.html; el.style.background=t.ok?"rgba(46,158,91,.14)":"rgba(220,60,60,.14)";
 }
 function tpCabeIniciar(planId,itemId){
-  ['tpIni','tpFin','tpHoras'].forEach(id=>{ const e=document.getElementById(id); if(e) e.addEventListener('input',()=>tpCabeRefrescar(planId,itemId)); });
+  ['tpIni','tpFin','tpHoras','tpCada'].forEach(id=>{ const e=document.getElementById(id); if(e) e.addEventListener('input',()=>tpCabeRefrescar(planId,itemId)); });
   document.querySelectorAll('.tpResp').forEach(c=>c.addEventListener('change',()=>tpCabeRefrescar(planId,itemId)));
   tpCabeRefrescar(planId,itemId);
 }
@@ -13160,15 +13161,19 @@ function tpUsarSug(f){
 }
 /* Propone un orden que respete los vínculos y la jornada de cada persona. No cambia nada hasta que se aplica. */
 function tpPlanAjuste(plan){
-  const its=plan.items.filter(i=>i.ini&&i.fin).map(i=>({ id:i.id, key:tpKey(i), tarea:i.tarea, tablero:i.tablero||"", ini:i.ini, fin:i.fin, horas:tpHorasEf(i), resp:i.responsables, ancla:i.ancla, enLote:!!i.enLote, dep:i.enLote?"":i.despuesDe, ini0:i.ini, fin0:i.fin, razon:"", excede:false }));
+  const its=plan.items.filter(i=>i.ini&&i.fin).map(i=>({ id:i.id, key:tpKey(i), tarea:i.tarea, tablero:i.tablero||"", ini:i.ini, fin:i.fin, horas:tpHorasPers(i), ag:tpAgValida(i), uid:i, resp:i.responsables, ancla:i.ancla, enLote:!!i.enLote, dep:i.enLote?"":i.despuesDe, ini0:i.ini, fin0:i.fin, razon:"", excede:false }));
   const porId={}; its.forEach(t=>{ porId[t.id]=t; }); const puesto=new Set(), carga={};
   let pend=its.slice().sort((a,b)=>a.ini.localeCompare(b.ini)||a.id-b.id), guard=0;
   while(pend.length && guard++<its.length*4+10){
     const lista=pend.filter(t=>{ const a=t.ancla?porId[t.ancla.id]:null; if(a&&!puesto.has(a.id)) return false; if(t.dep&&t.dep!==t.key){ const g=its.filter(x=>x.key===t.dep); if(g.length&&!g.every(x=>puesto.has(x.id))) return false; } return true; });
     const t=lista[0]||pend[0]; pend=pend.filter(x=>x!==t);
-    const n=Math.max(1,tpHabilesEntre(t.ini,t.fin)+1), h=t.horas/n; let req=tpSiguienteHabil(t.ini), porVinculo="";
     const a=t.ancla?porId[t.ancla.id]:null;
-    if(a){ const m=t.ancla.tipo==='mismo'?tpSiguienteHabil(a.ini):tpSumarHabiles(a.fin,1); if(m>req){ req=m; porVinculo=(t.ancla.tipo==='mismo'?"sigue el día de «":"va después de «")+(a.tablero?a.tablero+": ":"")+a.tarea+"»"; } }
+    if(t.ag && t.ini===t.ini0 && t.fin===t.fin0){   /* ya programada por horas: se respeta si sus vínculos no se movieron */
+      const gr=t.dep?its.filter(x=>x.key===t.dep):[], grOk=!gr.length||(gr.every(x=>x.ini===x.ini0&&x.fin===x.fin0)&&gr.reduce((m,y)=>y.fin>m?y.fin:m,"")<=t.ini);
+      const anOk=!a||(a.ini===a.ini0&&a.fin===a.fin0&&(t.ancla.tipo==='mismo'?tpSiguienteHabil(t.ini)>=tpSiguienteHabil(a.ini):(t.ini>a.fin||tpAnclaMismoDiaOk(t.uid,a.uid))));
+      if(grOk&&anOk){ t.resp.forEach(pid=>{ carga[pid]=carga[pid]||{}; Object.keys(t.ag).forEach(day=>{ const q=t.ag[day]; let hh=0; for(let i=0;i<q.length;i+=2) hh+=(q[i+1]-q[i])/60; carga[pid][day]=(carga[pid][day]||0)+hh; }); }); puesto.add(t.id); continue; } }
+    const n=Math.max(1,tpHabilesEntre(t.ini,t.fin)+1), h=t.horas/n; let req=tpSiguienteHabil(t.ini), porVinculo="";
+    if(a){ const m=t.ancla.tipo==='mismo'?tpSiguienteHabil(a.ini):(t.ag&&tpAnclaMismoDiaOk(t.uid,a.uid)?a.fin:tpSumarHabiles(a.fin,1)); if(m>req){ req=m; porVinculo=(t.ancla.tipo==='mismo'?"sigue el día de «":"va después de «")+(a.tablero?a.tablero+": ":"")+a.tarea+"»"; } }
     if(t.dep){ const g=its.filter(x=>x.key===t.dep); if(g.length){ const m=tpSumarHabiles(g.reduce((x,y)=>y.fin>x?y.fin:x,g[0].fin),1); if(m>req){ req=m; porVinculo="el tablero va después de «"+tpNombreKey(t.dep)+"»"; } } }
     let d=req, bloq0=[];
     if(h<=TP_HORAS_DIA+0.01){
@@ -13290,11 +13295,11 @@ function tpAplicarDependencias(plan){
       const todas=m[k], dep=tpDespuesDe(todas); if(!dep||dep===k||!m[dep]) return;
       const propias=a=>{ const p=a.filter(i=>!i.enLote); return p.length?p:a; };   // lo «en conjunto» no ata al tablero
       const its=propias(todas), req=tpSumarHabiles(tpIniFinGrupo(propias(m[dep])).fin,1), ini=tpIniFinGrupo(its).ini;
-      if(tpSiguienteHabil(ini)<req){ tpMoverGrupo(its,req); cambio=true; }
+      if(tpSiguienteHabil(ini)<req && !tpGrupoMismoDiaOk(its,propias(m[dep]))){ tpMoverGrupo(its,req); cambio=true; }
     });
     plan.items.forEach(t=>{ if(!t.ancla) return; const a=plan.items.find(x=>x.id===t.ancla.id); if(!a) return;
       const req=t.ancla.tipo==='mismo'?tpSiguienteHabil(a.ini):tpSumarHabiles(a.fin,1);
-      if(tpSiguienteHabil(t.ini)<req){ const span=tpHabilesEntre(t.ini,t.fin); t.ini=req; t.fin=tpSumarHabiles(req,span); cambio=true; } });
+      if(tpSiguienteHabil(t.ini)<req && !(t.ancla.tipo!=='mismo'&&tpAnclaMismoDiaOk(t,a))){ const span=tpHabilesEntre(t.ini,t.fin); t.ini=req; t.fin=tpSumarHabiles(req,span); cambio=true; } });
     if(!cambio) break;
   }
 }
@@ -13478,7 +13483,8 @@ function tpAgenda(items){
   const lotes=[];
   orden.forEach(({it})=>{
     if(it.enLote){ lotes.push(it); return; }
-    const ds=tpDias(it.ini,it.fin), h=(Number(it.horas)||0)/ds.length, pids=(it.responsables&&it.responsables.length)?it.responsables:["_"+it.id], rec={};
+    const sv=tpAgValida(it); if(sv){ const rec0={}; Object.keys(sv).forEach(f=>{ const q=sv[f], tr=[]; let hh=0; for(let i=0;i<q.length;i+=2){ tr.push([q[i],q[i+1]]); hh+=(q[i+1]-q[i])/60; } rec0[f]={ a:q[0], b:q[q.length-1], h:hh, tramos:tr, exc:q[q.length-1]>psHM(psSalidaNormal(cfg,f))+1 }; const pp=(it.responsables&&it.responsables.length)?it.responsables:["_"+it.id]; pp.forEach(p=>{ cur[p+"|"+f]=Math.max(cur[p+"|"+f]||ini0,q[q.length-1]); }); }); M.set(it,rec0); return; }
+    const ds=tpDias(it.ini,it.fin), h=tpHorasPers(it)/ds.length, pids=(it.responsables&&it.responsables.length)?it.responsables:["_"+it.id], rec={};
     ds.forEach(d=>{ if(h<=0) return;
       let a=Math.max(ini0,...pids.map(p=>cur[p+"|"+d]||ini0)); if(a>=colA&&a<colB) a=colB;
       let rem=h*60, tr=[], fin;
@@ -13556,6 +13562,93 @@ function tpHtmlGanttHoras(plan){
   const tabla=filas?`<div id="tpGanttBox" style="overflow:auto;max-height:72vh;background:#fff;border:1px solid var(--line);border-radius:8px;padding:6px"><table style="border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;background:#fff;color:#222"><thead>${hdr}</thead><tbody>${filas}</tbody></table></div>`
     :`<div class="empty-state card">No hay trabajos con horas en este período.</div>`;
   return nav+banner+tabla+`<div class="hint" style="margin-top:6px">Cada tarea reparte sus horas proyectadas entre sus días y se ubica en la jornada de sus responsables, uno después de otro, desde las ${esc(cfg.inicio)} y saltando la colación (franja gris). La línea roja es la salida normal; lo que pasa de ahí se pinta rojo (hora extra). Las tareas «en conjunto» comparten el horario de su tarea líder. ${sinAs?"Las tareas sin responsable aparecen en «Sin asignar». ":""}Para cambiar fechas u horas vuelve a la escala «Días».</div>`;
+}
+
+/* =====================================================================
+   V3.36.0 — PROGRAMAR POR HORAS
+   Las horas de una tarea son el trabajo TOTAL: con 2 personas se reparten
+   (2 h en total = 1 h reales cada una), salvo que se marque «cada uno hace
+   las horas completas». «Programar por horas» ubica cada tarea a su hora
+   dentro del día (respetando vínculos y la jornada de cada persona), así
+   varias tareas cortas caben el mismo día. Se guarda it.agenda = {sig, d:{fecha:[a1,b1,a2,b2]}}.
+   ===================================================================== */
+function tpNResp(it){ return Math.max(1,(it.responsables||[]).length); }
+function tpHorasPers(it){ if(it.enLote) return 0; const h=Number(it.horas)||0; return it.modoHoras==="cada"?h:h/tpNResp(it); }
+function tpSig(it){ return [it.ini,it.fin,Number(it.horas)||0,Number(it.avance)||0,(it.responsables||[]).join(","),it.modoHoras||"",it.enLote?1:0].join("|"); }
+function tpAgValida(it){ return it&&it.agenda&&it.agenda.sig===tpSig(it)?it.agenda.d:null; }
+function tpSlotIni(it,f){ const d=tpAgValida(it); return d&&d[f]?d[f][0]:null; }
+function tpSlotFin(it,f){ const d=tpAgValida(it); return d&&d[f]?d[f][d[f].length-1]:null; }
+/* ¿Sigue valiendo que B va después de A si caen el mismo día? (según las horas) */
+function tpAnclaMismoDiaOk(t,a){ if(t.ini!==a.fin) return false; const s=tpSlotIni(t,t.ini), e=tpSlotFin(a,a.fin); return s!==null&&e!==null&&s>=e; }
+function tpGrupoMismoDiaOk(its,pred){
+  const pf=tpIniFinGrupo(pred).fin, ini=tpIniFinGrupo(its).ini; if(ini!==pf) return false;
+  let e=-1,s=1e9; for(const p of pred){ if(p.fin===pf){ const x=tpSlotFin(p,pf); if(x===null) return false; e=Math.max(e,x); } }
+  for(const i of its){ if(i.ini===ini){ const x=tpSlotIni(i,ini); if(x===null) return false; s=Math.min(s,x); } }
+  return s>=e;
+}
+function tpProgramar(plan,desde,compactar){
+  const cfg=psCfg(), ini0=psHM(cfg.inicio), colA=TP_COL_INI, colB=colA+(Number(cfg.colacion)||0);
+  const todos=plan.items.filter(i=>i.ini&&i.fin), byId=new Map(todos.map(i=>[i.id,i])), E=tpSiguienteHabil(desde);
+  const res=new Map(), cur={}, fijo=it=>it.estado==="listo"||Number(it.avance)>=100;
+  const grupos={}; todos.forEach(i=>{ (grupos[tpKey(i)]=grupos[tpKey(i)]||[]).push(i); });
+  todos.forEach(it=>{ if(fijo(it)) res.set(it,{ ini:it.ini, fin:it.fin, endDay:it.fin, endMin:0, startDay:it.ini, startMin:ini0, fijo:true }); });
+  const depth=it=>{ let d=0,x=it,n=0; while(x&&x.ancla&&n++<10){ x=byId.get(x.ancla.id); d++; } return d; };
+  let pend=todos.filter(i=>!fijo(i)&&!i.enLote).sort((a,b)=>a.ini.localeCompare(b.ini)||depth(a)-depth(b)||a.id-b.id), guard=0;
+  const cmp=(d1,m1,d2,m2)=>d1!==d2?(d1<d2?-1:1):(m1-m2);
+  const listo=t=>{ const a=t.ancla?byId.get(t.ancla.id):null; if(a&&!a.enLote&&!res.has(a)) return false; const g=t.despuesDe&&t.despuesDe!==tpKey(t)?(grupos[t.despuesDe]||[]).filter(x=>!x.enLote):[]; return g.every(x=>res.has(x)); };
+  while(pend.length&&guard++<todos.length*3+10){
+    const t=pend.find(listo)||pend[0]; pend=pend.filter(x=>x!==t);
+    const resp=(t.responsables&&t.responsables.length)?t.responsables:["_"+t.id], rest=Number(t.avance)>0?(100-Number(t.avance))/100:1;
+    const W=(Number(t.horas)||0)*rest*60, share=Math.round(t.modoHoras==="cada"?W:W/tpNResp(t));
+    let rd=compactar?E:(t.ini>E?tpSiguienteHabil(t.ini):E), rm=ini0;
+    const a=t.ancla?byId.get(t.ancla.id):null, ra=a?res.get(a):null;
+    if(ra&&!a.enLote){ const [d2,m2]=t.ancla.tipo==="mismo"?[ra.startDay,ra.startMin]:[ra.endDay,ra.endMin]; if(cmp(d2,m2,rd,rm)>0){ rd=d2; rm=m2; } }
+    if(t.despuesDe&&t.despuesDe!==tpKey(t)) (grupos[t.despuesDe]||[]).filter(x=>!x.enLote).forEach(x=>{ const r=res.get(x); if(r&&cmp(r.endDay,r.endMin,rd,rm)>0){ rd=r.endDay; rm=r.endMin; } });
+    if(rd<E){ rd=E; rm=ini0; }
+    let d=tpSiguienteHabil(rd), rem=share, d1=null, endDay=d, endMin=Math.max(ini0,rm), d0m=null; const slots={};
+    if(share<=0){ res.set(t,{ ini:d, fin:d, endDay:d, endMin:Math.max(ini0,rm), startDay:d, startMin:Math.max(ini0,rm), d:{} }); continue; }
+    for(let k=0;k<200&&rem>0;k++){
+      const sal=psHM(psSalidaNormal(cfg,d)); let st=Math.max(d===tpSiguienteHabil(rd)?rm:ini0,ini0,...resp.map(p=>cur[p+"|"+d]||ini0)); if(st>=colA&&st<colB) st=colB;
+      const segs=[[ini0,colA],[colB,sal]], tr=[];
+      for(const [s0,s1] of segs){ if(rem<=0) break; const a0=Math.max(st,s0); if(a0>=s1) continue; const len=Math.min(rem,s1-a0); tr.push(a0,a0+len); rem-=len; }
+      if(tr.length){ slots[d]=tr; if(d1===null){ d1=d; d0m=tr[0]; } endDay=d; endMin=tr[tr.length-1]; resp.forEach(p=>{ cur[p+"|"+d]=endMin; }); }
+      if(rem>0) d=tpSiguienteHabil(sumarDias(d,1));
+    }
+    res.set(t,{ ini:d1||d, fin:endDay, endDay, endMin, startDay:d1||d, startMin:d0m===null?ini0:d0m, d:slots });
+  }
+  const out=[];
+  todos.forEach(it=>{ if(fijo(it)){ return; } let r=res.get(it);
+    if(it.enLote){ const an=it.ancla?byId.get(it.ancla.id):null, ar=an?res.get(an):null; if(ar) r={ ini:ar.ini, fin:ar.fin, d:null }; else return; }
+    if(!r) return; out.push({ it, ini:r.ini, fin:r.fin, d:r.d, ini0:it.ini, fin0:it.fin, a:r.startMin, b:r.endMin }); });
+  return out;
+}
+function tpProgramarAplicar(plan,R){
+  R.forEach(x=>{ x.it.ini=x.ini; x.it.fin=x.fin; if(x.d&&Object.keys(x.d).length) x.it.agenda={ sig:tpSig(x.it), d:x.d }; else delete x.it.agenda; });
+}
+let _tpProg=null;
+function tpModalProgramar(planId){
+  if(!tpPuede()) return; const plan=tpPlan(planId); if(!plan) return;
+  const hoy=hoyISO(), desde=_tpProg&&_tpProg.planId===planId?_tpProg.desde:(hoy>plan.lunes?tpSiguienteHabil(hoy):plan.lunes), comp=_tpProg&&_tpProg.planId===planId?_tpProg.comp:true;
+  _tpProg={ planId, desde, comp }; const R=tpProgramar(plan,desde,comp), esc=escaparHtml;
+  const cambios=R.filter(x=>x.ini!==x.ini0||x.fin!==x.fin0||x.d), porP={};
+  R.forEach(x=>{ if(!x.d) return; const it=x.it; (it.responsables||[]).forEach(pid=>{ Object.keys(x.d).forEach(f=>{ const t=x.d[f]; let h=0; for(let i=0;i<t.length;i+=2) h+=(t[i+1]-t[i])/60; const k=pid+"|"+f; porP[k]=(porP[k]||0)+h; }); }); });
+  const personas=[...new Set(Object.keys(porP).map(k=>k.split("|")[0]))];
+  const resumen=personas.map(pid=>`<tr><td>${esc(tpNombrePersona(pid))}</td>${[...new Set(Object.keys(porP).filter(k=>k.startsWith(pid+"|")).map(k=>k.split("|")[1]))].sort().map(f=>`<td class="small" style="white-space:nowrap">${esc(distDiaTxt(f))}: <b>${tpHtxt(porP[pid+"|"+f])} h</b></td>`).join("")}</tr>`).join("");
+  const filas=R.slice().sort((a,b)=>a.ini.localeCompare(b.ini)||(a.a||0)-(b.a||0)).map(x=>{ const it=x.it, n=tpNResp(it), tot=Number(it.horas)||0;
+    const reparto=it.enLote?"en conjunto":(n>1&&it.modoHoras!=="cada"?`${tpHtxt(tot)} h entre ${n} = ${tpHtxt(tot/n)} h c/u`:`${tpHtxt(tot)} h`);
+    const hora=x.d?(Object.keys(x.d).sort().map(f=>{ const t=x.d[f]; return (x.ini!==x.fin?distDiaTxt(f).split(" ").slice(0,2).join(" ")+" ":"")+tpHmTxt(t[0])+"–"+tpHmTxt(t[t.length-1]); }).join(" · ")):"con su tarea líder";
+    return `<tr><td><b>${esc((it.tablero?it.tablero+" · ":"")+it.tarea)}</b><div class="small muted">${esc(tpNombres(it).join(", ")||"sin asignar")} · ${esc(reparto)}</div></td><td class="small" style="white-space:nowrap">${esc(distDiaTxt(x.ini0))}${x.fin0!==x.ini0?"→"+esc(distDiaTxt(x.fin0)):""}</td><td class="small" style="white-space:nowrap"><b>${esc(distDiaTxt(x.ini))}${x.fin!==x.ini?"→"+esc(distDiaTxt(x.fin)):""}</b><div>${esc(hora)}</div></td></tr>`; }).join("");
+  openModal(`<div class="modal-head"><h3>⏱ Programar por horas</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body"><div class="hint" style="margin-bottom:8px">Cada tarea se ubica a su hora dentro del día: parte a las ${esc(psCfg().inicio)}, salta la colación y respeta «después de» y el orden entre tableros. Las horas de la tarea son el trabajo total; si hay 2 personas se reparten. Lo terminado no se mueve.</div>
+      <div class="flex-gap" style="flex-wrap:wrap;margin-bottom:8px"><label class="small muted">Programar desde<input type="date" id="tpPgDesde" value="${desde}" onchange="_tpProg.desde=this.value||_tpProg.desde; tpModalProgramar('${planId}')"></label>
+      <label class="small flex-gap"><input type="checkbox" id="tpPgComp" ${comp?"checked":""} onchange="_tpProg.comp=this.checked; tpModalProgramar('${planId}')"> Traer hacia adelante lo que quepa (compactar)</label></div>
+      ${R.length?`<div class="table-scroll" style="max-height:38vh;overflow:auto"><table class="tbl"><thead><tr><th>Tarea</th><th>Antes</th><th>Queda</th></tr></thead><tbody>${filas}</tbody></table></div>
+      <div style="margin-top:8px"><b>Carga real por persona</b><div class="table-scroll"><table class="tbl"><tbody>${resumen}</tbody></table></div></div>`:`<div class="empty-state">No hay tareas pendientes para programar.</div>`}</div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cancelar</button>${R.length?`<button class="btn btn-primary" onclick="tpProgramarConfirmar('${planId}')">Aplicar (${cambios.length} cambio${cambios.length===1?"":"s"})</button>`:""}</div>`, 760);
+}
+function tpProgramarConfirmar(planId){
+  if(!tpPuede()||!_tpProg) return; const plan=tpPlan(planId), R=tpProgramar(plan,_tpProg.desde,_tpProg.comp);
+  tpProgramarAplicar(plan,R); closeModal(); tpAplicarDependencias(plan); tpGuardar(plan,`programado por horas desde ${_tpProg.desde}: ${R.length} tarea(s)`); toast("Programación por horas aplicada. Revísala en el Gantt, escala «Horas».","ok");
 }
 
 /* ---- Resumen por día para gerencia (V3.7.3) ---- */
@@ -13942,7 +14035,7 @@ function renderTallerPrograma(){
       <div><div class="small muted">Semana</div><b>${(()=>{ const ini=items.length?items.reduce((m,i)=>i.ini<m?i.ini:m,items[0].ini):plan.lunes, fin=items.length?items.reduce((m,i)=>i.fin>m?i.fin:m,items[0].fin):sumarDias(plan.lunes,4); return distDiaTxt(plan.lunes)+' → '+distDiaTxt(diasEntre(plan.lunes,fin)>4?fin:sumarDias(plan.lunes,4)); })()}</b> ${plan.estado==='enviado'?'<span class="badge b-verde"><span class="dot"></span>Enviado</span>':'<span class="badge b-gris"><span class="dot"></span>Borrador</span>'}</div>
       <div><div class="small muted">Trabajos</div><b>${listos}/${items.length} listos</b></div><div><div class="small muted">Horas programadas</div><b>${Math.round(horas*10)/10} h</b></div>
       ${sob.length?`<div style="color:var(--danger)"><b>⚠ ${sob.length} día(s) sobrecargado(s)</b></div>`:''}
-      <div class="flex-gap" style="margin-left:auto;flex-wrap:wrap;">${gest?`<button class="btn btn-sm btn-primary" onclick="tpModalCierre('${plan.id}')">🔁 Cerrar semana y armar la siguiente</button><button class="btn btn-sm" onclick="tpModalArmado('${plan.id}')">🧰 Armado de tablero</button><button class="btn btn-sm" onclick="tpModalCoordinar('${plan.id}')">⛓ Coordinar tareas</button><button class="btn btn-sm" onclick="tpModalAjuste('${plan.id}')">⚙ Ajustar por carga</button><button class="btn btn-sm" onclick="tpModalItem('${plan.id}')">+ Trabajo</button><button class="btn btn-sm btn-primary" onclick="tpModalEnviar('${plan.id}')">📲 Enviar por WhatsApp</button><button class="btn btn-sm" onclick="tpModalCorreo('${plan.id}')">✉ Correo / PDF</button><button class="btn btn-sm" onclick="tpEliminarSemana('${plan.id}')" title="Eliminar semana">🗑</button>`:''}</div>
+      <div class="flex-gap" style="margin-left:auto;flex-wrap:wrap;">${gest?`<button class="btn btn-sm btn-primary" onclick="tpModalCierre('${plan.id}')">🔁 Cerrar semana y armar la siguiente</button><button class="btn btn-sm" onclick="tpModalArmado('${plan.id}')">🧰 Armado de tablero</button><button class="btn btn-sm" onclick="tpModalCoordinar('${plan.id}')">⛓ Coordinar tareas</button><button class="btn btn-sm btn-primary" onclick="tpModalProgramar('${plan.id}')" title="Ubica cada tarea a su hora del día: varias tareas cortas caben el mismo día">⏱ Programar por horas</button><button class="btn btn-sm" onclick="tpModalAjuste('${plan.id}')">⚙ Ajustar por carga</button><button class="btn btn-sm" onclick="tpModalItem('${plan.id}')">+ Trabajo</button><button class="btn btn-sm btn-primary" onclick="tpModalEnviar('${plan.id}')">📲 Enviar por WhatsApp</button><button class="btn btn-sm" onclick="tpModalCorreo('${plan.id}')">✉ Correo / PDF</button><button class="btn btn-sm" onclick="tpEliminarSemana('${plan.id}')" title="Eliminar semana">🗑</button>`:''}</div>
     </div>
     <div class="mp-tabs" style="margin-top:10px;"><button class="mp-tab ${tpVista==='programa'?'on':''}" onclick="tpVista='programa'; renderAll();">☰ Programa de la semana</button><button class="mp-tab ${tpVista==='gantt'?'on':''}" onclick="tpVista='gantt'; renderAll();">▤ Gantt por tablero</button></div>
     ${tpVista==='gantt'?tpHtmlGantt(plan):grid+tabla}`;
@@ -15229,7 +15322,7 @@ function tpCierrePaso2(){
   if(!c.lunes||new Date(c.lunes+"T12:00:00Z").getUTCDay()!==1){ toast("La semana siguiente debe partir un lunes.","danger"); return; }
   for(const it of plan.items){ const f=c.filas[it.id]; if(f.est==="listo"&&f.ir&&f.fr&&f.fr<f.ir){ toast(`«${it.tarea}»: el término real no puede ser antes del inicio real.`,"danger"); return; } }
   const R=tpCierreConstruir(); c.paso=2;
-  const carga={}; R.nuevos.forEach(o=>{ const dias=tpDias(o.ini,o.fin), h=tpHorasEf(o)/Math.max(1,dias.length); o.responsables.forEach(pid=>{ carga[pid]=(carga[pid]||0)+tpHorasEf(o); }); });
+  const carga={}; R.nuevos.forEach(o=>{ const dias=tpDias(o.ini,o.fin), h=tpHorasEf(o)/Math.max(1,dias.length); o.responsables.forEach(pid=>{ carga[pid]=(carga[pid]||0)+tpHorasPers(o); }); });
   const filas=R.nuevos.slice().sort((a,b)=>a.ini.localeCompare(b.ini)||a.id-b.id).map(o=>`<tr><td><b>${esc((o.tablero?o.tablero+" · ":"")+o.tarea)}</b>${R.razon[o.id]?`<div class="small" style="color:#a15a1d">↳ ${esc(R.razon[o.id])}</div>`:""}</td><td class="small">${esc(tpNombres(o).join(", ")||"—")}</td><td style="text-align:right">${tpHtxt(o.horas)} h${o.horasPrevias?`<div class="small muted">de ${tpHtxt(o.horas+o.horasPrevias)} h</div>`:""}</td><td>${esc(distDiaTxt(o.ini))}${o.fin!==o.ini?" → "+esc(distDiaTxt(o.fin)):""}</td></tr>`).join("");
   openModal(`<div class="modal-head"><h3>Semana del ${esc(distDiaTxt(c.lunes))}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
     <div class="modal-body"><div class="hint" style="margin-bottom:8px">Paso 2 de 2 · Resumen de la semana que cierra: <b>${R.res.listo}</b> terminada(s), <b>${R.res.curso}</b> en curso, <b>${R.res.no}</b> sin iniciar. Pasan <b>${R.nuevos.length}</b> trabajo(s) a la semana siguiente${R.destino?` (se suman a la semana ya creada del ${esc(distDiaTxt(R.destino.lunes))})`:""}.</div>
@@ -16026,7 +16119,7 @@ function psProy(pid){ const p=pid?proy(pid):null; return p?((p.codigo&&p.codigo!
 function psDatos(lunes){
   const dias=[0,1,2,3,4].map(k=>sumarDias(lunes,k)), ent={}; dias.forEach(d=>{ ent[d]=[]; });
   (DB.asignaciones||[]).forEach(a=>{ if(!a.fechaInicio||!a.fechaFin) return; dias.forEach(d=>{ if(a.fechaInicio<=d && d<=a.fechaFin) ent[d].push({ pid:a.personaId, proyectoId:a.proyectoId||"", origen:a.enTerreno===false?"taller":"terreno", det:a.disciplina||"", extras:a.horasExtra||"", h:0 }); }); });
-  tpPlanes().forEach(pl=>pl.items.forEach(it=>{ if(!it.ini||!it.fin) return; const ds=tpDias(it.ini,it.fin), h=tpHorasEf(it)/ds.length;
+  tpPlanes().forEach(pl=>pl.items.forEach(it=>{ if(!it.ini||!it.fin) return; const ds=tpDias(it.ini,it.fin), h=tpHorasPers(it)/ds.length;
     ds.forEach(d=>{ if(!ent[d]) return; it.responsables.forEach(pid=>ent[d].push({ pid, proyectoId:it.proyectoId||"", origen:"taller", det:it.tablero||"Trabajos varios", h })); }); }));
   return { dias, ent };
 }

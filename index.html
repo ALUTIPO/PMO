@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.36.0";
+const APP_VERSION = "3.37.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -13005,6 +13005,7 @@ function tpModalItem(planId,itemId,gi){
         <label class="small muted">Inicio<input type="date" id="tpIni" value="${it?it.ini:plan.lunes}"></label>
         <label class="small muted">Fin<input type="date" id="tpFin" value="${it?it.fin:sumarDias(plan.lunes,4)}"></label>
         <label class="small muted">Horas estimadas (trabajo total)<input type="number" id="tpHoras" min="0" step="0.1" value="${it?it.horas:8}"></label></div>
+      <label class="small muted">Orden dentro del tablero (1 = primero; vacío = sin orden)<input type="number" id="tpOrd" min="1" step="1" value="${it&&tpOrdenDe(it)!==null?tpOrdenDe(it):""}" placeholder="Ej: 1 confección, 2 pruebas FAT, 3 embalaje"></label>
       <label class="small flex-gap" title="Por defecto, con 2 personas las horas se reparten: 2 h en total = 1 h reales cada una"><input type="checkbox" id="tpCada" ${it&&it.modoHoras==="cada"?"checked":""}> Cada responsable hace las horas completas (no se reparten)</label>
       <label class="small muted">Qué debe quedar listo (meta clara)<input type="text" id="tpMeta" value="${escaparHtml(it?it.meta:"")}" placeholder="Ej: Potencia cableada y revisada, lista para control"></label>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">${tpHtmlAncla(plan,it)}</div>
@@ -13020,7 +13021,7 @@ function tpModalItem(planId,itemId,gi){
 function tpGuardarItem(planId,itemId){
   if(!tpPuede()) return; const plan=tpPlan(planId);
   const d={ proyectoId:document.getElementById('tpProy').value, tablero:document.getElementById('tpTablero').value.trim(), tarea:document.getElementById('tpTarea').value.trim(), responsables:tpLeerResp(),
-    ini:document.getElementById('tpIni').value, fin:document.getElementById('tpFin').value, horas:Number(document.getElementById('tpHoras').value)||0, modoHoras:(document.getElementById('tpCada')&&document.getElementById('tpCada').checked)?'cada':'', meta:document.getElementById('tpMeta').value.trim(),
+    ini:document.getElementById('tpIni').value, fin:document.getElementById('tpFin').value, horas:Number(document.getElementById('tpHoras').value)||0, modoHoras:(document.getElementById('tpCada')&&document.getElementById('tpCada').checked)?'cada':'', orden:(parseInt((document.getElementById('tpOrd')||{}).value,10)>0?parseInt(document.getElementById('tpOrd').value,10):''), meta:document.getElementById('tpMeta').value.trim(),
     prioridad:document.getElementById('tpPrio').value, nota:document.getElementById('tpNota').value.trim() };
   if(!d.tarea){ toast("Escribe la tarea.", "danger"); return; }
   if(!d.ini||!d.fin||d.fin<d.ini){ toast("Revisa las fechas de inicio y fin.", "danger"); return; }
@@ -13161,19 +13162,25 @@ function tpUsarSug(f){
 }
 /* Propone un orden que respete los vínculos y la jornada de cada persona. No cambia nada hasta que se aplica. */
 function tpPlanAjuste(plan){
-  const its=plan.items.filter(i=>i.ini&&i.fin).map(i=>({ id:i.id, key:tpKey(i), tarea:i.tarea, tablero:i.tablero||"", ini:i.ini, fin:i.fin, horas:tpHorasPers(i), ag:tpAgValida(i), uid:i, resp:i.responsables, ancla:i.ancla, enLote:!!i.enLote, dep:i.enLote?"":i.despuesDe, ini0:i.ini, fin0:i.fin, razon:"", excede:false }));
+  const its=plan.items.filter(i=>i.ini&&i.fin).map(i=>({ id:i.id, key:tpKey(i), tarea:i.tarea, tablero:i.tablero||"", ini:i.ini, fin:i.fin, horas:tpHorasPers(i), ag:tpAgValida(i), uid:i, ord:tpOrdenDe(i), est:i.estado, finReal:i.finReal||"", resp:i.responsables, ancla:i.ancla, enLote:!!i.enLote, dep:i.enLote?"":i.despuesDe, ini0:i.ini, fin0:i.fin, razon:"", excede:false }));
   const porId={}; its.forEach(t=>{ porId[t.id]=t; }); const puesto=new Set(), carga={};
   let pend=its.slice().sort((a,b)=>a.ini.localeCompare(b.ini)||a.id-b.id), guard=0;
   while(pend.length && guard++<its.length*4+10){
-    const lista=pend.filter(t=>{ const a=t.ancla?porId[t.ancla.id]:null; if(a&&!puesto.has(a.id)) return false; if(t.dep&&t.dep!==t.key){ const g=its.filter(x=>x.key===t.dep); if(g.length&&!g.every(x=>puesto.has(x.id))) return false; } return true; });
+    const lista=pend.filter(t=>{ const a=t.ancla?porId[t.ancla.id]:null; if(a&&!puesto.has(a.id)) return false; if(t.ord!==null&&!t.enLote&&its.some(x=>x!==t&&!x.enLote&&x.key===t.key&&x.ord!==null&&x.ord<t.ord&&!puesto.has(x.id))) return false; if(t.dep&&t.dep!==t.key){ const g=its.filter(x=>x.key===t.dep); if(g.length&&!g.every(x=>puesto.has(x.id))) return false; } return true; });
     const t=lista[0]||pend[0]; pend=pend.filter(x=>x!==t);
     const a=t.ancla?porId[t.ancla.id]:null;
+    const fe=x=>tpFinEfRaw(x.est,x.fin,x.finReal), hp=x=>x.horas/Math.max(1,tpHabilesEntre(x.ini,x.fin)+1);
+    const ordP=t.ord===null||t.enLote?[]:its.filter(x=>x!==t&&!x.enLote&&x.key===t.key&&x.ord!==null&&x.ord<t.ord);
+    const preds=ordP.slice(); if(a&&t.ancla.tipo!=='mismo'&&!preds.includes(a)) preds.push(a);
+    const reqDe=p=>{ const f=fe(p); if(!tpEsHabil(f)) return tpSiguienteHabil(f); return tpMdOk(f,hp(t),f,hp(p),p.est==="listo",tpSlotIni(t.uid,f),tpSlotFin(p.uid,f))?f:tpSumarHabiles(f,1); };
     if(t.ag && t.ini===t.ini0 && t.fin===t.fin0){   /* ya programada por horas: se respeta si sus vínculos no se movieron */
       const gr=t.dep?its.filter(x=>x.key===t.dep):[], grOk=!gr.length||(gr.every(x=>x.ini===x.ini0&&x.fin===x.fin0)&&gr.reduce((m,y)=>y.fin>m?y.fin:m,"")<=t.ini);
-      const anOk=!a||(a.ini===a.ini0&&a.fin===a.fin0&&(t.ancla.tipo==='mismo'?tpSiguienteHabil(t.ini)>=tpSiguienteHabil(a.ini):(t.ini>a.fin||tpAnclaMismoDiaOk(t.uid,a.uid))));
-      if(grOk&&anOk){ t.resp.forEach(pid=>{ carga[pid]=carga[pid]||{}; Object.keys(t.ag).forEach(day=>{ const q=t.ag[day]; let hh=0; for(let i=0;i<q.length;i+=2) hh+=(q[i+1]-q[i])/60; carga[pid][day]=(carga[pid][day]||0)+hh; }); }); puesto.add(t.id); continue; } }
+      const pOk=preds.every(p=>p.ini===p.ini0&&p.fin===p.fin0&&(t.ini>fe(p)||(t.ini===fe(p)&&tpMdOk(t.ini,hp(t),fe(p),hp(p),p.est==="listo",tpSlotIni(t.uid,t.ini),tpSlotFin(p.uid,fe(p))))));
+      const anOk=!a||t.ancla.tipo!=='mismo'||tpSiguienteHabil(t.ini)>=tpSiguienteHabil(a.ini);
+      if(grOk&&pOk&&anOk){ t.resp.forEach(pid=>{ carga[pid]=carga[pid]||{}; Object.keys(t.ag).forEach(day=>{ const q=t.ag[day]; let hh=0; for(let i=0;i<q.length;i+=2) hh+=(q[i+1]-q[i])/60; carga[pid][day]=(carga[pid][day]||0)+hh; }); }); puesto.add(t.id); continue; } }
     const n=Math.max(1,tpHabilesEntre(t.ini,t.fin)+1), h=t.horas/n; let req=tpSiguienteHabil(t.ini), porVinculo="";
-    if(a){ const m=t.ancla.tipo==='mismo'?tpSiguienteHabil(a.ini):(t.ag&&tpAnclaMismoDiaOk(t.uid,a.uid)?a.fin:tpSumarHabiles(a.fin,1)); if(m>req){ req=m; porVinculo=(t.ancla.tipo==='mismo'?"sigue el día de «":"va después de «")+(a.tablero?a.tablero+": ":"")+a.tarea+"»"; } }
+    if(a&&t.ancla.tipo==='mismo'){ const m=tpSiguienteHabil(a.ini); if(m>req){ req=m; porVinculo="sigue el día de «"+(a.tablero?a.tablero+": ":"")+a.tarea+"»"; } }
+    preds.forEach(p=>{ const m=reqDe(p); if(m>req){ req=m; porVinculo=(ordP.includes(p)?"va después de la etapa «":"va después de «")+(p.tablero?p.tablero+": ":"")+p.tarea+"»"; } });
     if(t.dep){ const g=its.filter(x=>x.key===t.dep); if(g.length){ const m=tpSumarHabiles(g.reduce((x,y)=>y.fin>x?y.fin:x,g[0].fin),1); if(m>req){ req=m; porVinculo="el tablero va después de «"+tpNombreKey(t.dep)+"»"; } } }
     let d=req, bloq0=[];
     if(h<=TP_HORAS_DIA+0.01){
@@ -13298,8 +13305,10 @@ function tpAplicarDependencias(plan){
       if(tpSiguienteHabil(ini)<req && !tpGrupoMismoDiaOk(its,propias(m[dep]))){ tpMoverGrupo(its,req); cambio=true; }
     });
     plan.items.forEach(t=>{ if(!t.ancla) return; const a=plan.items.find(x=>x.id===t.ancla.id); if(!a) return;
-      const req=t.ancla.tipo==='mismo'?tpSiguienteHabil(a.ini):tpSumarHabiles(a.fin,1);
-      if(tpSiguienteHabil(t.ini)<req && !(t.ancla.tipo!=='mismo'&&tpAnclaMismoDiaOk(t,a))){ const span=tpHabilesEntre(t.ini,t.fin); t.ini=req; t.fin=tpSumarHabiles(req,span); cambio=true; } });
+      const req=t.ancla.tipo==='mismo'?tpSiguienteHabil(a.ini):tpReqTras(t,a);
+      if(tpSiguienteHabil(t.ini)<req){ const span=tpHabilesEntre(t.ini,t.fin); t.ini=req; t.fin=tpSumarHabiles(req,span); cambio=true; } });
+    plan.items.forEach(t=>{ if(t.estado==="listo") return; tpPredsOrden(plan.items,t).forEach(p=>{ if(!p.ini||!p.fin) return; const req=tpReqTras(t,p);
+      if(tpSiguienteHabil(t.ini)<req){ const span=tpHabilesEntre(t.ini,t.fin); t.ini=req; t.fin=tpSumarHabiles(req,span); cambio=true; } }); });
     if(!cambio) break;
   }
 }
@@ -13350,6 +13359,7 @@ function tpGanttDatos(planes){
   const AG=tpAgenda(items), cg=tpMapaCarga(items), sobreDe=it=>(it.responsables||[]).some(pid=>tpDias(it.ini,it.fin).some(d=>((cg[pid]||{})[d]||0)>tpCap(d)+0.01));
   const g={}, orden=[]; items.sort((a,b)=>a.ini.localeCompare(b.ini)).forEach(it=>{ const k=tpKey(it); if(!g[k]){ g[k]=[]; orden.push(k); } g[k].push(it); });
   const ini=items.reduce((m,i)=>i.ini<m?i.ini:m,items[0].ini); let fin=items.reduce((m,i)=>i.fin>m?i.fin:m,items[0].fin);
+  orden.forEach(k=>g[k].sort(tpCmpOrden));
   let dias=tpDiasHabiles(ini,fin); if(dias.length>130) dias=dias.slice(0,130);
   const idx0=f=>{ for(let i=0;i<dias.length;i++) if(dias[i]>=f) return i; return dias.length-1; };
   const idx1=f=>{ for(let i=dias.length-1;i>=0;i--) if(dias[i]<=f) return i; return 0; };
@@ -13478,7 +13488,7 @@ function tpHtmlGantt(plan){
 const TP_COL_INI = 13*60;   // la colación parte a las 13:00
 function tpAgenda(items){
   const cfg=psCfg(), ini0=psHM(cfg.inicio), colA=TP_COL_INI, colB=colA+(Number(cfg.colacion)||0), M=new Map(), cur={}, byId=new Map(items.map(i=>[i.id,i]));
-  const depth=it=>{ let d=0,x=it,n=0; while(x&&x.ancla&&n++<10){ x=byId.get(x.ancla.id); d++; } return d; };
+  const depth=(it,n=0)=>{ if(n>12) return 0; const ps=tpPredsTodos(items,it); return ps.length?1+Math.max(...ps.map(x=>depth(x,n+1))):0; };
   const orden=items.filter(i=>i.ini&&i.fin).map((it,ix)=>({it,ix,dp:depth(it)})).sort((a,b)=>a.it.ini.localeCompare(b.it.ini)||a.dp-b.dp||a.ix-b.ix);
   const lotes=[];
   orden.forEach(({it})=>{
@@ -13486,7 +13496,7 @@ function tpAgenda(items){
     const sv=tpAgValida(it); if(sv){ const rec0={}; Object.keys(sv).forEach(f=>{ const q=sv[f], tr=[]; let hh=0; for(let i=0;i<q.length;i+=2){ tr.push([q[i],q[i+1]]); hh+=(q[i+1]-q[i])/60; } rec0[f]={ a:q[0], b:q[q.length-1], h:hh, tramos:tr, exc:q[q.length-1]>psHM(psSalidaNormal(cfg,f))+1 }; const pp=(it.responsables&&it.responsables.length)?it.responsables:["_"+it.id]; pp.forEach(p=>{ cur[p+"|"+f]=Math.max(cur[p+"|"+f]||ini0,q[q.length-1]); }); }); M.set(it,rec0); return; }
     const ds=tpDias(it.ini,it.fin), h=tpHorasPers(it)/ds.length, pids=(it.responsables&&it.responsables.length)?it.responsables:["_"+it.id], rec={};
     ds.forEach(d=>{ if(h<=0) return;
-      let a=Math.max(ini0,...pids.map(p=>cur[p+"|"+d]||ini0)); if(a>=colA&&a<colB) a=colB;
+      let a=Math.max(ini0,...pids.map(p=>cur[p+"|"+d]||ini0)); if(d===ds[0]) tpPredsTodos(items,it).forEach(q=>{ const rq=M.get(q); if(rq&&rq[d]&&tpFinEf(q)===d) a=Math.max(a,rq[d].b); }); if(a>=colA&&a<colB) a=colB;
       let rem=h*60, tr=[], fin;
       if(a<colA && a+rem>colA){ tr.push([a,colA]); rem-=(colA-a); tr.push([colB,colB+rem]); fin=colB+rem; } else { tr.push([a,a+rem]); fin=a+rem; }
       pids.forEach(p=>{ cur[p+"|"+d]=fin; });
@@ -13591,11 +13601,11 @@ function tpProgramar(plan,desde,compactar){
   const todos=plan.items.filter(i=>i.ini&&i.fin), byId=new Map(todos.map(i=>[i.id,i])), E=tpSiguienteHabil(desde);
   const res=new Map(), cur={}, fijo=it=>it.estado==="listo"||Number(it.avance)>=100;
   const grupos={}; todos.forEach(i=>{ (grupos[tpKey(i)]=grupos[tpKey(i)]||[]).push(i); });
-  todos.forEach(it=>{ if(fijo(it)) res.set(it,{ ini:it.ini, fin:it.fin, endDay:it.fin, endMin:0, startDay:it.ini, startMin:ini0, fijo:true }); });
-  const depth=it=>{ let d=0,x=it,n=0; while(x&&x.ancla&&n++<10){ x=byId.get(x.ancla.id); d++; } return d; };
+  todos.forEach(it=>{ if(fijo(it)) res.set(it,{ ini:it.ini, fin:it.fin, endDay:tpFinEf(it), endMin:0, startDay:it.ini, startMin:ini0, fijo:true }); });
+  const depth=(it,n=0)=>{ if(n>12) return 0; const ps=tpPredsTodos(todos,it); return ps.length?1+Math.max(...ps.map(x=>depth(x,n+1))):0; };
   let pend=todos.filter(i=>!fijo(i)&&!i.enLote).sort((a,b)=>a.ini.localeCompare(b.ini)||depth(a)-depth(b)||a.id-b.id), guard=0;
   const cmp=(d1,m1,d2,m2)=>d1!==d2?(d1<d2?-1:1):(m1-m2);
-  const listo=t=>{ const a=t.ancla?byId.get(t.ancla.id):null; if(a&&!a.enLote&&!res.has(a)) return false; const g=t.despuesDe&&t.despuesDe!==tpKey(t)?(grupos[t.despuesDe]||[]).filter(x=>!x.enLote):[]; return g.every(x=>res.has(x)); };
+  const listo=t=>{ const a=t.ancla?byId.get(t.ancla.id):null; if(a&&!a.enLote&&!res.has(a)) return false; if(tpPredsOrden(todos,t).some(x=>!res.has(x))) return false; const g=t.despuesDe&&t.despuesDe!==tpKey(t)?(grupos[t.despuesDe]||[]).filter(x=>!x.enLote):[]; return g.every(x=>res.has(x)); };
   while(pend.length&&guard++<todos.length*3+10){
     const t=pend.find(listo)||pend[0]; pend=pend.filter(x=>x!==t);
     const resp=(t.responsables&&t.responsables.length)?t.responsables:["_"+t.id], rest=Number(t.avance)>0?(100-Number(t.avance))/100:1;
@@ -13603,6 +13613,7 @@ function tpProgramar(plan,desde,compactar){
     let rd=compactar?E:(t.ini>E?tpSiguienteHabil(t.ini):E), rm=ini0;
     const a=t.ancla?byId.get(t.ancla.id):null, ra=a?res.get(a):null;
     if(ra&&!a.enLote){ const [d2,m2]=t.ancla.tipo==="mismo"?[ra.startDay,ra.startMin]:[ra.endDay,ra.endMin]; if(cmp(d2,m2,rd,rm)>0){ rd=d2; rm=m2; } }
+    tpPredsOrden(todos,t).forEach(x=>{ const r=res.get(x); if(r&&cmp(r.endDay,r.endMin,rd,rm)>0){ rd=r.endDay; rm=r.endMin; } });
     if(t.despuesDe&&t.despuesDe!==tpKey(t)) (grupos[t.despuesDe]||[]).filter(x=>!x.enLote).forEach(x=>{ const r=res.get(x); if(r&&cmp(r.endDay,r.endMin,rd,rm)>0){ rd=r.endDay; rm=r.endMin; } });
     if(rd<E){ rd=E; rm=ini0; }
     let d=tpSiguienteHabil(rd), rem=share, d1=null, endDay=d, endMin=Math.max(ini0,rm), d0m=null; const slots={};
@@ -13650,6 +13661,52 @@ function tpProgramarConfirmar(planId){
   if(!tpPuede()||!_tpProg) return; const plan=tpPlan(planId), R=tpProgramar(plan,_tpProg.desde,_tpProg.comp);
   tpProgramarAplicar(plan,R); closeModal(); tpAplicarDependencias(plan); tpGuardar(plan,`programado por horas desde ${_tpProg.desde}: ${R.length} tarea(s)`); toast("Programación por horas aplicada. Revísala en el Gantt, escala «Horas».","ok");
 }
+
+/* =====================================================================
+   V3.37.0 — ORDEN DE ETAPAS DENTRO DE CADA TABLERO
+   it.orden (1,2,3…): una tarea no parte hasta que terminen todas las de número menor del mismo tablero
+   (mismo número = se pueden hacer a la vez). Si la anterior termina temprano, la siguiente puede partir ese
+   mismo día a continuación (según las horas), no al día siguiente por obligación.
+   ===================================================================== */
+function tpOrdenDe(it){ const v=it&&it.orden; if(v===undefined||v===null||v==="") return null; const n=Number(v); return Number.isFinite(n)?n:null; }
+function tpPredsOrden(items,t){ const o=tpOrdenDe(t); if(o===null||t.enLote) return []; const k=tpKey(t); return items.filter(x=>x!==t&&!x.enLote&&tpKey(x)===k&&tpOrdenDe(x)!==null&&tpOrdenDe(x)<o); }
+function tpPredsTodos(items,t){ const out=tpPredsOrden(items,t); if(t.ancla&&t.ancla.tipo!=="mismo"&&!t.enLote){ const a=items.find(x=>x.id===t.ancla.id); if(a&&!out.includes(a)) out.push(a); } return out; }
+function tpCmpOrden(a,b){ const oa=tpOrdenDe(a), ob=tpOrdenDe(b); if(oa!==null&&ob!==null&&oa!==ob) return oa-ob; return a.ini.localeCompare(b.ini)||(Number(a.id)||0)-(Number(b.id)||0); }
+/* una tarea terminada termina, a más tardar, hoy (aunque su fecha planificada sea futura) */
+function tpFinEfRaw(est,fin,finReal){ if(est!=="listo") return fin; if(finReal) return finReal; const h=hoyISO(); return fin>h?h:fin; }
+function tpFinEf(it){ return tpFinEfRaw(it.estado,it.fin,it.finReal); }
+/* ¿B puede partir el día fe (cuando A termina) si A termina temprano y B es corta? */
+function tpMdOk(tIni,tHpd,fe,pHpd,pListo,tSlot,pSlot){
+  if(tIni>fe) return true; if(tIni<fe) return false; if(!tpEsHabil(fe)) return true; if(pListo) return true;
+  if(tSlot!==null&&tSlot!==undefined&&pSlot!==null&&pSlot!==undefined) return tSlot>=pSlot;
+  const cfg=psCfg(), i0=psHM(cfg.inicio), colA=TP_COL_INI, col=Number(cfg.colacion)||0, sal=psHM(psSalidaNormal(cfg,fe));
+  let ep=i0+pHpd*60; if(ep>colA) ep+=col; let te=ep+tHpd*60; if(ep<=colA&&te>colA) te+=col; return te<=sal+1;
+}
+function tpHpd(it){ return tpHorasPers(it)/Math.max(1,tpHabilesEntre(it.ini,it.fin)+1); }
+function tpMismoDiaOk(t,p){ const fe=tpFinEf(p); return tpMdOk(t.ini,tpHpd(t),fe,tpHpd(p),p.estado==="listo",tpSlotIni(t,t.ini),tpSlotFin(p,fe)); }
+/* primer día en que t puede partir después de p */
+function tpReqTras(t,p){ const fe=tpFinEf(p); if(!tpEsHabil(fe)) return tpSiguienteHabil(fe);
+  return tpMdOk(fe,tpHpd(t),fe,tpHpd(p),p.estado==="listo",tpSlotIni(t,fe),tpSlotFin(p,fe))?fe:tpSumarHabiles(fe,1); }
+/* auditoría: tareas que parten antes de terminar su etapa previa */
+function tpAuditarOrden(plan){
+  const out=[]; plan.items.forEach(t=>{ if(!t.ini||!t.fin||t.estado==="listo") return; tpPredsTodos(plan.items,t).forEach(p=>{ if(!p.ini||!p.fin) return; if(!tpMismoDiaOk(t,p)) out.push({ t, p }); }); }); return out;
+}
+function tpCorregirOrden(planId){ if(!tpPuede()) return; const plan=tpPlan(planId); const n=tpAuditarOrden(plan).length; tpGuardar(plan,`orden de etapas corregido (${n} tarea(s) fuera de orden)`); toast(n?`Orden corregido: ${n} tarea(s) se corrieron después de su etapa previa.`:"Todo estaba en orden.", "ok"); }
+let _tpOrdGi=-1;
+function tpModalOrden(gi){
+  if(!tpPuede()) return; const plan=tpPlan(tpPlanId), key=tpGrupoKeys[gi]; const its=tpItemsGrupo(plan,key).slice().sort(tpCmpOrden); if(!its.length) return; _tpOrdGi=gi;
+  openModal(`<div class="modal-head"><h3>↕ Orden de etapas · ${escaparHtml(its[0].tablero||"Trabajos varios")}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body"><div class="hint" style="margin-bottom:8px">1 = primero. Una tarea <b>no parte hasta que terminen todas las de número menor</b> de este tablero (ej: la confección antes de las pruebas FAT). Mismo número = pueden hacerse a la vez. Si la etapa anterior termina temprano, la siguiente parte ese mismo día a continuación. Déjalo vacío si no hay orden.</div>
+      ${its.map((it,i)=>`<div class="flex-gap" style="padding:5px 0;border-top:1px solid var(--line-soft)"><input type="number" class="tpOrdIn" data-id="${it.id}" min="1" step="1" value="${tpOrdenDe(it)!==null?tpOrdenDe(it):(i+1)}" style="width:64px"><div style="flex:1"><b>${escaparHtml(it.tarea)}</b><div class="small muted">${distDiaTxt(it.ini)}${it.fin!==it.ini?" → "+distDiaTxt(it.fin):""} · ${escaparHtml(tpNombres(it).join(", ")||"sin asignar")} · ${tpHtxt(Number(it.horas)||0)} h</div></div></div>`).join("")}</div>
+    <div class="modal-foot"><button class="btn" onclick="tpOrdenQuitar()">Quitar orden</button><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="tpOrdenGuardar()">Guardar orden</button></div>`, 620);
+}
+function tpOrdenGuardar(){
+  if(!tpPuede()) return; const plan=tpPlan(tpPlanId), key=tpGrupoKeys[_tpOrdGi], its=tpItemsGrupo(plan,key); const antes=new Map(plan.items.map(i=>[i.id,i.ini+"|"+i.fin]));
+  document.querySelectorAll('.tpOrdIn').forEach(e=>{ const it=its.find(x=>String(x.id)===e.dataset.id); if(!it) return; const v=parseInt(e.value,10); if(Number.isFinite(v)&&v>0) it.orden=v; else delete it.orden; });
+  closeModal(); tpGuardar(plan,`orden de etapas de «${its[0].tablero||"Trabajos varios"}»`);
+  const mov=plan.items.filter(i=>antes.get(i.id)!==i.ini+"|"+i.fin).length; toast(mov?`Orden guardado. ${mov} tarea(s) se corrieron para respetarlo.`:"Orden guardado. No hizo falta mover fechas.","ok");
+}
+function tpOrdenQuitar(){ if(!tpPuede()) return; const plan=tpPlan(tpPlanId), key=tpGrupoKeys[_tpOrdGi], its=tpItemsGrupo(plan,key); its.forEach(i=>{ delete i.orden; }); closeModal(); tpGuardar(plan,`orden de etapas quitado en «${its[0].tablero||""}»`); }
 
 /* ---- Resumen por día para gerencia (V3.7.3) ---- */
 function tpResumenDias(items){
@@ -14008,7 +14065,7 @@ function renderTallerPrograma(){
   const grupos=tpGrupos(plan); tpGrupoKeys=grupos.map(g=>g.key);
   const nCols=gest?6:5;
   const filaTarea=(it)=>{ const sinR=!it.responsables.length;
-    return `<tr><td style="padding-left:34px"><div class="small">${escaparHtml(it.tarea)}${it.prioridad==='urgente'?' <span class="badge b-rojo"><span class="dot"></span>Urgente</span>':''}</div>${(it.meta||it.nota)?`<div class="small muted">${it.meta?'🎯 '+escaparHtml(it.meta):''}${it.nota?' · 📝 '+escaparHtml(it.nota):''}</div>`:''}</td>
+    return `<tr><td style="padding-left:34px"><div class="small">${tpOrdenDe(it)!==null?`<span class="badge b-gris" title="Etapa ${tpOrdenDe(it)} del tablero: parte cuando terminan las de número menor">${tpOrdenDe(it)}</span> `:""}${escaparHtml(it.tarea)}${it.prioridad==='urgente'?' <span class="badge b-rojo"><span class="dot"></span>Urgente</span>':''}</div>${(it.meta||it.nota)?`<div class="small muted">${it.meta?'🎯 '+escaparHtml(it.meta):''}${it.nota?' · 📝 '+escaparHtml(it.nota):''}</div>`:''}</td>
       <td class="small" style="${sinR?'color:var(--danger)':''}">${sinR?'⚠ sin asignar':escaparHtml(tpNombres(it).join(", "))}</td>
       <td class="small">${distDiaTxt(it.ini)}${it.fin!==it.ini?'<br>→ '+distDiaTxt(it.fin):''}</td><td style="text-align:right">${it.enLote?"conjunto":it.horas}</td>
       <td style="white-space:nowrap">${gest?`<input type="number" min="0" max="100" step="5" value="${Number(it.avance)||0}" title="% de avance de esta tarea" style="width:62px;display:inline-block;font-size:12px;padding:4px;border-radius:6px;border:1px solid var(--line);background:var(--card)" onchange="tpSetAvance('${plan.id}',${it.id},this.value)">% <select style="width:auto;display:inline-block;font-size:12px;padding:4px;border-radius:6px;border:1px solid var(--line);background:var(--card)" onchange="tpSetEstado('${plan.id}',${it.id},this.value)">${["pendiente","en_curso","listo","bloqueado"].map(e=>`<option value="${e}" ${it.estado===e?'selected':''}>${e.replace('_',' ')}</option>`).join("")}</select>`:`${Number(it.avance)||0}% ${badgeEst[it.estado]||''}`}</td>
@@ -14023,8 +14080,8 @@ function renderTallerPrograma(){
         <div class="progressbar thin" style="margin:4px 0 0 20px;max-width:240px"><span style="width:${avance}%"></span></div></td>
       <td class="small" style="${sinR?'color:var(--danger)':''}">${resp.length?escaparHtml(resp.join(", ")):'⚠ sin asignar'}${sinR&&resp.length?' <span title="Hay tareas sin asignar">⚠</span>':''}</td>
       <td class="small">${distDiaTxt(ini)}<br>→ ${distDiaTxt(fin)}</td><td style="text-align:right"><b>${Math.round(h*10)/10}</b></td><td class="small">${avance}%</td>
-      ${gest?`<td style="white-space:nowrap" onclick="event.stopPropagation()"><button class="btn btn-sm" title="Duplicar tablero" onclick="tpModalDuplicar(${gi})">⧉ Duplicar</button> <button class="btn btn-sm" title="Indicar que se arma después de otro tablero" onclick="tpModalDespues(${gi})">⛓ Después de…</button> <button class="btn btn-sm" title="Responsables del tablero" onclick="tpModalRespGrupo(${gi})">👷</button> <button class="btn btn-sm" title="Agregar tarea a este tablero" onclick="tpModalItem('${plan.id}',0,${gi})">＋</button> <button class="btn btn-sm" title="Quitar tablero" onclick="tpQuitarGrupo(${gi})">🗑</button></td>`:''}</tr>`;
-    return cab+(abierto?its.slice().sort((a,b)=>a.ini.localeCompare(b.ini)).map(filaTarea).join(""):"");
+      ${gest?`<td style="white-space:nowrap" onclick="event.stopPropagation()"><button class="btn btn-sm" title="Duplicar tablero" onclick="tpModalDuplicar(${gi})">⧉ Duplicar</button> <button class="btn btn-sm" title="Orden de las etapas de este tablero (1 = primero)" onclick="tpModalOrden(${gi})">↕ Orden</button> <button class="btn btn-sm" title="Indicar que se arma después de otro tablero" onclick="tpModalDespues(${gi})">⛓ Después de…</button> <button class="btn btn-sm" title="Responsables del tablero" onclick="tpModalRespGrupo(${gi})">👷</button> <button class="btn btn-sm" title="Agregar tarea a este tablero" onclick="tpModalItem('${plan.id}',0,${gi})">＋</button> <button class="btn btn-sm" title="Quitar tablero" onclick="tpQuitarGrupo(${gi})">🗑</button></td>`:''}</tr>`;
+    return cab+(abierto?its.slice().sort(tpCmpOrden).map(filaTarea).join(""):"");
   }).join("");
   const tabla=`<div class="flex-gap" style="margin:6px 0;"><button class="btn btn-sm" onclick="tpExpandirTodo(true)">＋ Expandir todo</button><button class="btn btn-sm" onclick="tpExpandirTodo(false)">− Contraer todo</button><span class="small muted">${grupos.length} tablero(s)</span></div>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Tablero / tarea</th><th>Responsables</th><th>Fechas</th><th style="text-align:right">Horas</th><th>Avance / estado</th>${gest?'<th></th>':''}</tr></thead><tbody>
@@ -14037,6 +14094,7 @@ function renderTallerPrograma(){
       ${sob.length?`<div style="color:var(--danger)"><b>⚠ ${sob.length} día(s) sobrecargado(s)</b></div>`:''}
       <div class="flex-gap" style="margin-left:auto;flex-wrap:wrap;">${gest?`<button class="btn btn-sm btn-primary" onclick="tpModalCierre('${plan.id}')">🔁 Cerrar semana y armar la siguiente</button><button class="btn btn-sm" onclick="tpModalArmado('${plan.id}')">🧰 Armado de tablero</button><button class="btn btn-sm" onclick="tpModalCoordinar('${plan.id}')">⛓ Coordinar tareas</button><button class="btn btn-sm btn-primary" onclick="tpModalProgramar('${plan.id}')" title="Ubica cada tarea a su hora del día: varias tareas cortas caben el mismo día">⏱ Programar por horas</button><button class="btn btn-sm" onclick="tpModalAjuste('${plan.id}')">⚙ Ajustar por carga</button><button class="btn btn-sm" onclick="tpModalItem('${plan.id}')">+ Trabajo</button><button class="btn btn-sm btn-primary" onclick="tpModalEnviar('${plan.id}')">📲 Enviar por WhatsApp</button><button class="btn btn-sm" onclick="tpModalCorreo('${plan.id}')">✉ Correo / PDF</button><button class="btn btn-sm" onclick="tpEliminarSemana('${plan.id}')" title="Eliminar semana">🗑</button>`:''}</div>
     </div>
+    ${(()=>{ const au=tpAuditarOrden(plan); if(!au.length) return ""; return `<div class="mp-alerta" style="margin-top:10px;font-size:12.5px"><b>⚠ Orden de etapas: ${au.length} tarea(s) parten antes de terminar su etapa previa</b>${au.slice(0,6).map(x=>`<div>• ${escaparHtml((x.t.tablero?x.t.tablero+" · ":"")+x.t.tarea)} (${distDiaTxt(x.t.ini)}) debería ir después de «${escaparHtml(x.p.tarea)}» (termina ${distDiaTxt(tpFinEf(x.p))})</div>`).join("")}${au.length>6?`<div>… y ${au.length-6} más</div>`:""}${gest?`<div style="margin-top:6px"><button class="btn btn-sm btn-primary" onclick="tpCorregirOrden('${plan.id}')">Corregir orden automáticamente</button></div>`:""}</div>`; })()}
     <div class="mp-tabs" style="margin-top:10px;"><button class="mp-tab ${tpVista==='programa'?'on':''}" onclick="tpVista='programa'; renderAll();">☰ Programa de la semana</button><button class="mp-tab ${tpVista==='gantt'?'on':''}" onclick="tpVista='gantt'; renderAll();">▤ Gantt por tablero</button></div>
     ${tpVista==='gantt'?tpHtmlGantt(plan):grid+tabla}`;
 }

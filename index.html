@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.38.1";
+const APP_VERSION = "3.39.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -8395,8 +8395,8 @@ function renderPersonal() {
           <td>${per.area==='fabricacion'?'<span class="badge b-blue"><span class="dot"></span>🔧 Fabricación</span>':per.area==='ambas'?'<span class="badge b-gris"><span class="dot"></span>Ambas</span>':'<span class="badge b-amarillo"><span class="dot"></span>⚡ Eléctrico</span>'}</td>
           <td class="mono small">${per.telefono||'<span class="muted">sin registrar</span>'}</td>
           <td>${per.tipo==="Externo" ? '<span class="badge b-amarillo"><span class="dot"></span>Externo</span>' : '<span class="badge b-gris"><span class="dot"></span>Interno</span>'}</td>
-          <td class="small muted">${per.notas || (per.tipo==="Externo" ? '(sin asignar — edita para anotar quién es)' : '—')}</td>
-          ${puedeRoster ? `<td><button class="btn btn-sm" onclick="modalPersonalForm('${per.id}')">Editar</button></td>` : ''}
+          <td class="small muted">${per.notas || (per.tipo==="Externo" ? '(sin asignar — edita para anotar quién es)' : '—')}${perDispTxt(per)?`<div style="color:#b3452c;font-weight:600">📆 ${escaparHtml(perDispTxt(per))}</div>`:''}</td>
+          ${puedeRoster ? `<td style="white-space:nowrap"><button class="btn btn-sm" onclick="modalPersonalForm('${per.id}')">Editar</button> <button class="btn btn-sm" title="Último día trabajado y días no trabajados" onclick="modalPersonalDisp('${per.id}')">📆 Disponibilidad</button></td>` : ''}
         </tr>
       `).join('')}
     </table>
@@ -12987,8 +12987,8 @@ function tpEliminarSemana(id){
 }
 /* ---- Tareas ---- */
 function tpHtmlResp(sel,clase){ clase=clase||'tpResp';
-  const orden=DB.personal.slice().sort((a,b)=>(/taller/i.test(b.cargo)?1:0)-(/taller/i.test(a.cargo)?1:0));
-  return `<div style="display:flex;flex-wrap:wrap;gap:6px 14px;">${orden.map(p=>`<label class="small flex-gap"><input type="checkbox" class="${clase}" value="${p.id}" ${sel.includes(p.id)?'checked':''}> ${escaparHtml(p.nombre)}</label>`).join("")}</div>`;
+  const orden=DB.personal.slice().sort((a,b)=>(a.disponibleHasta?1:0)-(b.disponibleHasta?1:0)||(/taller/i.test(b.cargo)?1:0)-(/taller/i.test(a.cargo)?1:0));
+  return `<div style="display:flex;flex-wrap:wrap;gap:6px 14px;">${orden.map(p=>`<label class="small flex-gap" ${p.disponibleHasta?`title="Ya no disponible desde el ${p.disponibleHasta>='0'?distDiaTxt(sumarDias(p.disponibleHasta,1)):''}" style="opacity:.6"`:''}><input type="checkbox" class="${clase}" value="${p.id}" ${sel.includes(p.id)?'checked':''}> ${escaparHtml(p.nombre)}${p.disponibleHasta?' <span class="muted">(no disponible desde '+escaparHtml(distDiaTxt(sumarDias(p.disponibleHasta,1)))+')</span>':''}</label>`).join("")}</div>`;
 }
 function tpLeerResp(clase){ return Array.from(document.querySelectorAll('.'+(clase||'tpResp')+':checked')).map(x=>x.value); }
 function tpOptProy(sel){ return `<option value="">(sin proyecto / interno)</option>${proyectosVigentes().map(p=>`<option value="${p.id}" ${sel===p.id?'selected':''}>${escaparHtml(p.codigo)} · ${escaparHtml(p.nombre.slice(0,40))}</option>`).join("")}`; }
@@ -13741,6 +13741,56 @@ function tpOrdenGuardar(){
 }
 function tpOrdenQuitar(){ if(!tpPuede()) return; const plan=tpPlan(tpPlanId), key=tpGrupoKeys[_tpOrdGi], its=tpItemsGrupo(plan,key); its.forEach(i=>{ delete i.orden; }); closeModal(); tpGuardar(plan,`orden de etapas quitado en «${its[0].tablero||""}»`); }
 
+/* =====================================================================
+   V3.39.0 — DISPONIBILIDAD DEL PERSONAL (bajas de externos y días no trabajados)
+   per.disponibleHasta = último día que trabajó (después ya no está disponible)
+   per.ausencias = [{id,desde,hasta,motivo}] días puntuales o rangos sin trabajar
+   Se descuenta del plan semanal, de la propuesta de Horas y costos, y avisa en el taller.
+   ===================================================================== */
+function perAus(per){ return exArr(per&&per.ausencias).filter(a=>a&&a.desde); }
+function perAusDe(pid,fecha){ const p=DB.personal.find(x=>x.id===pid); if(!p) return null; if(p.disponibleHasta&&fecha>p.disponibleHasta) return { tipo:"baja", motivo:p.bajaMotivo||"" }; const a=perAus(p).find(x=>x.desde<=fecha&&fecha<=(x.hasta||x.desde)); return a?{ tipo:"ausencia", motivo:a.motivo||"" }:null; }
+function perDisp(pid,fecha){ return !perAusDe(pid,fecha); }
+function perDispTxt(per){
+  const partes=[]; if(per.disponibleHasta) partes.push(`Ya no disponible desde el ${distDiaTxt(sumarDias(per.disponibleHasta,1))} (último día: ${distDiaTxt(per.disponibleHasta)})`);
+  const n=perAus(per).length; if(n) partes.push(`${n} período(s) sin trabajar`); return partes.join(" · ");
+}
+function modalPersonalDisp(id){
+  if(!puedeGestionarPersonalRoster()){ toast(`Tu rol (${DB.role}) no puede editar la dotación.`, "danger"); return; }
+  const per=DB.personal.find(x=>x.id===id); if(!per) return; const esc=escaparHtml, aus=perAus(per).slice().sort((a,b)=>a.desde.localeCompare(b.desde));
+  openModal(`<div class="modal-head"><h3>📆 Disponibilidad · ${esc(per.nombre)}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body"><div class="hint" style="margin-bottom:8px">${per.tipo==="Externo"?"Para un externo que ya no viene: indica el <b>último día que trabajó</b> y los días de esa semana en que <b>no vino</b>.":"Indica el último día trabajado si dejó de estar disponible, y los días en que no trabajó."} Esos días se descuentan del plan semanal y de la propuesta de horas y costos, y el taller avisa si sigue asignado.</div>
+      <label class="field-label">Último día que trabajó <span class="muted">(vacío = sigue disponible)</span></label><input type="date" id="dpHasta" value="${per.disponibleHasta||""}">
+      <label class="field-label">Motivo / nota de la baja</label><input type="text" id="dpMotivo" value="${esc(per.bajaMotivo||"")}" placeholder="Ej: terminó su semana de apoyo, no continúa">
+      <div class="section-label" style="margin-top:14px">Días que no trabajó</div>
+      ${aus.length?aus.map(a=>`<div class="flex-gap" style="padding:4px 0;border-top:1px solid var(--line-soft)"><div style="flex:1"><b>${esc(distDiaTxt(a.desde))}${a.hasta&&a.hasta!==a.desde?" → "+esc(distDiaTxt(a.hasta)):""}</b> <span class="small muted">${esc(a.motivo||"")}</span></div><button class="btn btn-sm" onclick="perAusQuitar('${per.id}','${a.id}')">Quitar</button></div>`).join(""):`<div class="small muted">Ninguno registrado.</div>`}
+      <div class="flex-gap" style="flex-wrap:wrap;margin-top:8px;align-items:flex-end"><label class="small muted">Desde<input type="date" id="dpAD"></label><label class="small muted">Hasta (opcional)<input type="date" id="dpAH"></label><label class="small muted" style="flex:1">Motivo<input type="text" id="dpAM" placeholder="Ej: no se presentó"></label><button class="btn btn-sm" onclick="perAusAgregar('${per.id}')">+ Agregar</button></div></div>
+    <div class="modal-foot"><button class="btn" onclick="closeModal()">Cerrar</button><button class="btn btn-primary" onclick="perDispGuardar('${per.id}')">Guardar</button></div>`, 560);
+}
+function perAusAgregar(id){
+  const per=DB.personal.find(x=>x.id===id); const d=document.getElementById('dpAD').value, h=document.getElementById('dpAH').value, m=document.getElementById('dpAM').value.trim(); if(!per) return;
+  if(!d){ toast("Indica el día (o desde qué día).", "danger"); return; } if(h&&h<d){ toast("El «hasta» no puede ser antes del «desde».", "danger"); return; }
+  const hasta=document.getElementById('dpHasta').value, motivo=document.getElementById('dpMotivo').value;
+  per.ausencias=perAus(per).concat([{ id:"AU-"+Math.random().toString(36).slice(2,7).toUpperCase(), desde:d, hasta:h||"", motivo:m }]);
+  per.disponibleHasta=hasta||""; per.bajaMotivo=motivo; if(!per.disponibleHasta) delete per.disponibleHasta; guardarEstado(); renderAll(); modalPersonalDisp(id);
+}
+function perAusQuitar(id,aid){ const per=DB.personal.find(x=>x.id===id); if(!per) return; const hasta=document.getElementById('dpHasta').value, motivo=document.getElementById('dpMotivo').value;
+  per.ausencias=perAus(per).filter(a=>a.id!==aid); per.disponibleHasta=hasta||""; per.bajaMotivo=motivo; if(!per.disponibleHasta) delete per.disponibleHasta; guardarEstado(); renderAll(); modalPersonalDisp(id); }
+function perDispGuardar(id){
+  const per=DB.personal.find(x=>x.id===id); if(!per) return; const hasta=document.getElementById('dpHasta').value, motivo=document.getElementById('dpMotivo').value.trim();
+  if(hasta) per.disponibleHasta=hasta; else delete per.disponibleHasta; per.bajaMotivo=motivo; if(!per.bajaMotivo) delete per.bajaMotivo;
+  registrarHistorial({proyecto:"—", accion:"Modificar", detalle:`Disponibilidad de ${per.nombre}: ${perDispTxt(per)||"disponible"}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"});
+  guardarEstado(); closeModal(); renderAll(); toast("Disponibilidad guardada. Se descuenta del plan semanal y de horas y costos.", "ok");
+}
+/* tareas pendientes del taller asignadas a alguien en un día en que no está disponible */
+function tpDispIssues(items,dias){
+  const out=[]; items.forEach(it=>{ if(!it.ini||!it.fin||it.estado==="listo"||it.enLote) return; const ds=tpDias(it.ini,it.fin).filter(d=>!dias||dias.includes(d));
+    (it.responsables||[]).forEach(pid=>{ const mal=ds.filter(d=>!perDisp(pid,d)); if(mal.length) out.push({ it, pid, dias:mal, todos:mal.length===tpDias(it.ini,it.fin).length }); }); }); return out;
+}
+function tpSacarNoDisp(planId){
+  if(!tpPuede()) return; const plan=tpPlan(planId); const iss=tpDispIssues(plan.items).filter(x=>x.todos); iss.forEach(x=>{ x.it.responsables=x.it.responsables.filter(p=>p!==x.pid); });
+  tpGuardar(plan,`personal no disponible retirado de ${iss.length} tarea(s)`); toast(iss.length?`Se retiró a personal no disponible de ${iss.length} tarea(s). Revisa las que quedaron sin responsable.`:"Nada que retirar: las tareas afectadas tienen días con y sin él.", iss.length?"ok":"info");
+}
+
 /* ---- Resumen por día para gerencia (V3.7.3) ---- */
 function tpResumenDias(items){
   const m={};
@@ -13825,6 +13875,7 @@ function tpGerAuditoria(mod){
       avis.push({ t:`${p.nombre} · ${TP_DIAS_C[k]}: tiene ${tpHtxt(c.hT)} h de taller y jornada normal de ${tpHtxt(c.cap)} h.`, s:"Marca horas extra ese día en el Plan semanal o redistribuye." });
     }
   }));
+  tpDispIssues(mod.semana,mod.dias).forEach(x=>{ crit.push({ t:`${tpNombrePersona(x.pid)} figura asignado a «${(x.it.tablero?x.it.tablero+" · ":"")+x.it.tarea}» (${x.dias.map(d=>tpFechaCorta(d)).join(", ")}) pero no está disponible esos días.`, s:"Reasigna la tarea o corrige su disponibilidad en Personal." }); });
   const sinResp=mod.semana.filter(i=>!i.responsables.length);
   if(sinResp.length) crit.push({ t:`${sinResp.length} trabajo(s) sin responsable: ${[...new Set(sinResp.map(i=>i.tablero||"Trabajos varios"))].join(", ")}.`, s:"Asigna personal antes de enviar: sin él no se puede proyectar el horario." });
   const finde=mod.semana.filter(i=>{ const d=tpDias(i.ini,i.fin)[0], w=new Date(d+"T12:00:00Z").getUTCDay(); return w===0||w===6; });
@@ -14142,6 +14193,7 @@ function renderTallerPrograma(){
       <div class="flex-gap" style="margin-left:auto;flex-wrap:wrap;">${gest?`<button class="btn btn-sm btn-primary" onclick="tpModalCierre('${plan.id}')">🔁 Cerrar semana y armar la siguiente</button><button class="btn btn-sm" onclick="tpModalArmado('${plan.id}')">🧰 Armado de tablero</button><button class="btn btn-sm" onclick="tpModalCoordinar('${plan.id}')">⛓ Coordinar tareas</button><button class="btn btn-sm btn-primary" onclick="tpModalProgramar('${plan.id}')" title="Ubica cada tarea a su hora del día: varias tareas cortas caben el mismo día">⏱ Programar por horas</button><button class="btn btn-sm" onclick="tpModalAjuste('${plan.id}')">⚙ Ajustar por carga</button><button class="btn btn-sm" onclick="tpModalItem('${plan.id}')">+ Trabajo</button><button class="btn btn-sm btn-primary" onclick="tpModalEnviar('${plan.id}')">📲 Enviar por WhatsApp</button><button class="btn btn-sm" onclick="tpModalCorreo('${plan.id}')">✉ Correo / PDF</button><button class="btn btn-sm" onclick="tpEliminarSemana('${plan.id}')" title="Eliminar semana">🗑</button>`:''}</div>
     </div>
     ${(()=>{ const au=tpAuditarOrden(plan); if(!au.length) return ""; return `<div class="mp-alerta" style="margin-top:10px;font-size:12.5px"><b>⚠ Orden de etapas: ${au.length} tarea(s) parten antes de terminar su etapa previa</b>${au.slice(0,6).map(x=>`<div>• ${escaparHtml((x.t.tablero?x.t.tablero+" · ":"")+x.t.tarea)} (${distDiaTxt(x.t.ini)}) debería ir después de «${escaparHtml(x.p.tarea)}» (termina ${distDiaTxt(tpFinEf(x.p))})</div>`).join("")}${au.length>6?`<div>… y ${au.length-6} más</div>`:""}${gest?`<div style="margin-top:6px"><button class="btn btn-sm btn-primary" onclick="tpCorregirOrden('${plan.id}')">Corregir orden automáticamente</button></div>`:""}</div>`; })()}
+    ${(()=>{ const di=tpDispIssues(plan.items); if(!di.length) return ""; return `<div class="mp-alerta" style="margin-top:10px;font-size:12.5px"><b>⚠ Personal no disponible asignado a ${di.length} tarea(s)</b>${di.slice(0,6).map(x=>`<div>• ${escaparHtml(tpNombrePersona(x.pid))} en «${escaparHtml((x.it.tablero?x.it.tablero+" · ":"")+x.it.tarea)}» (${x.dias.map(d=>distDiaTxt(d)).slice(0,3).join(", ")}${x.dias.length>3?"…":""})</div>`).join("")}${di.length>6?`<div>… y ${di.length-6} más</div>`:""}${gest?`<div style="margin-top:6px"><button class="btn btn-sm btn-primary" onclick="tpSacarNoDisp('${plan.id}')">Retirarlo de las tareas donde no está nunca disponible</button> <span class="small muted">o reasigna con «Editar» las que tienen días con y sin él</span></div>`:""}</div>`; })()}
     <div class="mp-tabs" style="margin-top:10px;"><button class="mp-tab ${tpVista==='programa'?'on':''}" onclick="tpVista='programa'; renderAll();">☰ Programa de la semana</button><button class="mp-tab ${tpVista==='gantt'?'on':''}" onclick="tpVista='gantt'; renderAll();">▤ Gantt por tablero</button></div>
     ${tpVista==='gantt'?tpHtmlGantt(plan):grid+tabla}`;
 }
@@ -14510,6 +14562,7 @@ function cmValidar(lunes){
     if(x.hx>TP_MAX_EXTRA_DIA+0.05) out.push({ n:"crit", t:`${cmNombre(x.pid)} · ${dn}: ${tpHtxt(x.hx)} h extra (máximo legal ${TP_MAX_EXTRA_DIA} h por día).` });
     if(x.h>cap+0.05&&hxEsHabil(x.fecha)) out.push({ n:"crit", t:`${cmNombre(x.pid)} · ${dn}: ${tpHtxt(x.h)} h ordinarias, la jornada es de ${tpHtxt(cap)} h. Lo que sobra va como hora extra.` });
     if(x.h+x.hx<cap-0.05 && x.h>0 && hxEsHabil(x.fecha)) out.push({ n:"aviso", t:`${cmNombre(x.pid)} · ${dn}: solo ${tpHtxt(x.h+x.hx)} h registradas de ${tpHtxt(cap)} h de jornada.` }); });
+  { const vistos=new Set(); s.lineas.forEach(l=>{ const m=perAusDe(l.pid,l.fecha), k=l.pid+"|"+l.fecha; if(!m||vistos.has(k)||!((Number(l.h)||0)+(Number(l.hx)||0)>0)) return; vistos.add(k); out.push({ n:"crit", t:`${cmNombre(l.pid)} · ${distDiaTxt(l.fecha)}: tiene horas registradas pero figura ${m.tipo==="baja"?"sin disponibilidad (ya no trabaja)":"como día no trabajado"}${m.motivo?" · "+m.motivo:""}. Quita esas líneas o corrige su disponibilidad en Personal.` }); }); }
   Object.keys(ps).forEach(pid=>{ if(ps[pid]>TP_MAX_SEMANA+0.05) out.push({ n:"crit", t:`${cmNombre(pid)}: ${tpHtxt(ps[pid])} h ordinarias en la semana (máximo ${TP_MAX_SEMANA} h).` }); });
   if(cmPuedeVer()){ const sin=[...new Set(s.lineas.map(l=>l.pid))].filter(pid=>!cmTarifa(pid).ok); if(sin.length) out.push({ n:"aviso", t:`Sin tarifa: ${sin.map(cmNombre).join(", ")}. Sus horas no tienen costo hasta que la cargues en «Tarifas».` }); }
   const prog=psModelo(lunes), faltan=[]; prog.dias.forEach(d=>d.gente.forEach(pid=>{ if(!s.lineas.some(l=>l.pid===pid&&l.fecha===d.fecha)&&!faltan.includes(pid)) faltan.push(pid); }));
@@ -16223,9 +16276,9 @@ function psProy(pid){ const p=pid?proy(pid):null; return p?((p.codigo&&p.codigo!
 /* Lo que hay cada día: terreno (asignaciones) + taller (tareas de armado) */
 function psDatos(lunes){
   const dias=[0,1,2,3,4].map(k=>sumarDias(lunes,k)), ent={}; dias.forEach(d=>{ ent[d]=[]; });
-  (DB.asignaciones||[]).forEach(a=>{ if(!a.fechaInicio||!a.fechaFin) return; dias.forEach(d=>{ if(a.fechaInicio<=d && d<=a.fechaFin) ent[d].push({ pid:a.personaId, proyectoId:a.proyectoId||"", origen:a.enTerreno===false?"taller":"terreno", det:a.disciplina||"", extras:a.horasExtra||"", h:0 }); }); });
+  (DB.asignaciones||[]).forEach(a=>{ if(!a.fechaInicio||!a.fechaFin) return; dias.forEach(d=>{ if(a.fechaInicio<=d && d<=a.fechaFin && perDisp(a.personaId,d)) ent[d].push({ pid:a.personaId, proyectoId:a.proyectoId||"", origen:a.enTerreno===false?"taller":"terreno", det:a.disciplina||"", extras:a.horasExtra||"", h:0 }); }); });
   tpPlanes().forEach(pl=>pl.items.forEach(it=>{ if(!it.ini||!it.fin) return; const ds=tpDias(it.ini,it.fin), h=tpHorasPers(it)/ds.length;
-    ds.forEach(d=>{ if(!ent[d]) return; it.responsables.forEach(pid=>ent[d].push({ pid, proyectoId:it.proyectoId||"", origen:"taller", det:it.tablero||"Trabajos varios", h })); }); }));
+    ds.forEach(d=>{ if(!ent[d]) return; it.responsables.forEach(pid=>{ if(perDisp(pid,d)) ent[d].push({ pid, proyectoId:it.proyectoId||"", origen:"taller", det:it.tablero||"Trabajos varios", h }); }); }); }));
   return { dias, ent };
 }
 function psNombres(pids){

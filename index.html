@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.40.1";
+const APP_VERSION = "3.41.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -13034,7 +13034,18 @@ function tpGuardarItem(planId,itemId){
 }
 function tpQuitarItem(planId,itemId){ if(!tpPuede()) return; const plan=tpPlan(planId); const it=plan.items.find(x=>x.id===itemId); plan.items=plan.items.filter(x=>x.id!==itemId); closeModal(); tpGuardar(plan,"quitado: "+(it?it.tarea:"")); }
 /* Avance individual por tarea (0–100 %). El estado se deduce solo; las tareas «en conjunto» de un mismo bloque comparten avance. */
-function tpAplicaAvance(it,a){ it.avance=a; if(it.estado!=="bloqueado"||a>=100) it.estado=a>=100?"listo":a>0?"en_curso":"pendiente"; }
+function tpAplicaAvance(it,a){ it.avance=a; if(it.estado!=="bloqueado"||a>=100) it.estado=a>=100?"listo":a>0?"en_curso":"pendiente"; tpSelloReal(it); }
+/* Fechas reales automáticas: al iniciar se toma el día real de inicio; al llegar a 100 % el día real de término. Se pueden corregir a mano en la tarea. */
+function tpSelloReal(it){
+  if(!it||!it.ini||!it.fin) return; const h=hoyISO(), a=Number(it.avance)||0;
+  if(a<=0){ delete it.inicioReal; delete it.finReal; return; }
+  if(a<100) delete it.finReal;
+  const span=Math.max(0,tpHabilesEntre(it.ini,it.fin));
+  if(!it.inicioReal){ tpBase(it); it.inicioReal=(a>=100&&it.ini<h)?it.ini:h;
+    if(a<100 && it.inicioReal!==it.ini){ it.ini=tpSiguienteHabil(it.inicioReal); it.fin=tpSumarHabiles(it.ini,span); } }
+  if(a>=100 && !it.finReal){ tpBase(it); it.finReal=h<it.inicioReal?it.inicioReal:h; if(it.finReal<it.ini) it.ini=it.finReal; it.fin=it.finReal; }
+  if(a>=100 && it.finReal){ if(it.finReal<it.ini) it.ini=it.finReal; it.fin=it.finReal; }
+}
 function tpSetAvance(planId,itemId,v){
   if(!tpPuede()) return; const plan=tpPlan(planId), it=plan&&plan.items.find(x=>x.id===itemId); if(!it) return;
   const a=Math.max(0,Math.min(100,Math.round(Number(v)||0)));
@@ -13045,7 +13056,7 @@ function tpSetAvance(planId,itemId,v){
 function tpSetEstado(planId,itemId,estado){
   if(!tpPuede()) return; const plan=tpPlan(planId); const it=plan.items.find(x=>x.id===itemId); if(!it) return;
   it.estado=estado; it.avance = estado==="listo"?100 : estado==="pendiente"?0 : (it.avance>0&&it.avance<100?it.avance:50);
-  tpGuardar(plan,`${it.tarea} → ${estado}`);
+  tpSelloReal(it); tpGuardar(plan,`${it.tarea} → ${estado}`);
 }
 /* ---- Armado completo de un tablero ---- */
 function tpModalArmado(planId){
@@ -13659,6 +13670,23 @@ function tpPgFechas(planId){
   if(!d&&!h){ toast("Indica el día de inicio y/o el límite.","danger"); return; }
   plan.items.forEach(i=>{ const s=_tpProg.sel[i.id]; if(i.estado!=="listo"&&!i.enLote&&(!s||s.on!==false)){ const x=tpPgSel(i.id); if(d) x.desde=d; if(h) x.hasta=h; } }); tpModalProgramar(planId);
 }
+/* ---- Resumen real vs plan por tablero ---- */
+function tpResumenReal(){
+  const G={}; tpPlanes().forEach(pl=>pl.items.forEach(it=>{ if(!it.ini||!it.fin||it.enLote&&false) return; const k=tpKey(it); (G[k]=G[k]||{ key:k, pid:it.proyectoId||"", tablero:it.tablero||"Trabajos varios", its:[] }).its.push(it); }));
+  const dh=(a,b)=>a&&b&&b>=a?tpHabilesEntre(a,b)+1:0;
+  return Object.values(G).map(g=>{
+    const its=g.its.map(it=>{ const b=it.base||{ini:it.ini,fin:it.fin,horas:Number(it.horas)||0}, ir=it.inicioReal||"", fr=it.finReal||(it.estado==="listo"?tpFinEf(it):"");
+      return { tarea:it.tarea, listo:it.estado==="listo", iniciada:!!ir||it.estado==="listo", b, ir, fr, dPlan:dh(b.ini,b.fin), dReal:(ir||fr)&&fr?dh(ir||b.ini,fr):0, hPlan:Number(b.horas)||Number(it.horas)||0, hReal:it.horasReales!=null&&it.horasReales!==""?Number(it.horasReales):null, av:Number(it.avance)||0 }; });
+    const ini=its.map(x=>x.b.ini).sort()[0], fin=its.map(x=>x.b.fin).sort().slice(-1)[0], ir=its.map(x=>x.ir).filter(Boolean).sort()[0]||"", terminado=its.every(x=>x.listo), fr=terminado?its.map(x=>x.fr).filter(Boolean).sort().slice(-1)[0]||"":"";
+    return { key:g.key, pid:g.pid, tablero:g.tablero, its, n:its.length, nListo:its.filter(x=>x.listo).length, ini, fin, ir, fr, terminado, dPlan:dh(ini,fin), dReal:terminado&&ir&&fr?dh(ir,fr):0, hPlan:its.reduce((a,x)=>a+x.hPlan,0), hReal:its.reduce((a,x)=>a+(x.hReal!=null?x.hReal:0),0), hRealN:its.filter(x=>x.hReal!=null).length };
+  }).filter(g=>g.ir||g.nListo).sort((a,b)=>tpProyCod(a.pid).localeCompare(tpProyCod(b.pid))||a.tablero.localeCompare(b.tablero));
+}
+function tpModalResumenReal(){
+  const R=tpResumenReal(), f=d=>d?tpFechaCorta(d):"—", dv=(r,p)=>!r||!p?"—":(r-p===0?"en plazo":(r>p?"+":"")+(r-p)+" d");
+  const filas=R.map(g=>`<tr style="background:var(--card)"><td><b>${escaparHtml(tpProyCod(g.pid))}</b> · ${escaparHtml(g.tablero)}<div class="small muted">${g.nListo}/${g.n} tareas listas</div></td><td>${f(g.ini)} → ${f(g.fin)}<div class="small muted">${g.dPlan} d háb. · ${tpHtxt(g.hPlan)} h</div></td><td>${f(g.ir)} → ${g.terminado?f(g.fr):"en curso"}<div class="small muted">${g.terminado?g.dReal+" d háb.":""}${g.hRealN?(g.terminado?" · ":"")+tpHtxt(g.hReal)+" h reales":""}</div></td><td><b>${g.terminado?dv(g.dReal,g.dPlan):"—"}</b></td></tr>`
+    +g.its.map(x=>`<tr><td class="small" style="padding-left:18px">${x.listo?"✔":"…"} ${escaparHtml(x.tarea)}</td><td class="small muted">${f(x.b.ini)} → ${f(x.b.fin)} · ${tpHtxt(x.hPlan)} h</td><td class="small">${f(x.ir)} → ${x.listo?f(x.fr):"en curso"}${x.hReal!=null?" · "+tpHtxt(x.hReal)+" h reales":""}</td><td class="small">${x.listo?dv(x.dReal,x.dPlan):""}</td></tr>`).join("")).join("");
+  openModal(`<div class="modal-head"><h3>📊 Tiempos reales vs plan</h3><button class="close-x" onclick="closeModal()">✕</button></div><div class="modal-body"><div class="small muted" style="margin-bottom:8px">Fechas reales = el día en que se marcó el inicio y el 100 %. Úsalo como base para estimar cuánto toma realmente cada tablero o tarea.</div>${R.length?`<div style="overflow:auto"><table class="tabla" style="width:100%;font-size:12.5px"><thead><tr><th>Tablero</th><th>Plan original</th><th>Real</th><th>Desvío</th></tr></thead><tbody>${filas}</tbody></table></div>`:'<div class="muted">Aún no hay tareas iniciadas ni terminadas.</div>'}</div>`,"900px");
+}
 function tpModalProgramar(planId){
   if(!tpPuede()) return; const plan=tpPlan(planId); if(!plan) return; const st=tpPgEstado(planId,plan), {desde,comp,sel}=st, esc=escaparHtml;
   const R=tpProgramar(plan,desde,comp,sel), porId=new Map(R.map(x=>[x.it.id,x]));
@@ -14206,7 +14234,7 @@ function renderTallerPrograma(){
       <div><div class="small muted">Semana</div><b>${(()=>{ const ini=items.length?items.reduce((m,i)=>i.ini<m?i.ini:m,items[0].ini):plan.lunes, fin=items.length?items.reduce((m,i)=>i.fin>m?i.fin:m,items[0].fin):sumarDias(plan.lunes,4); return distDiaTxt(plan.lunes)+' → '+distDiaTxt(diasEntre(plan.lunes,fin)>4?fin:sumarDias(plan.lunes,4)); })()}</b> ${plan.estado==='enviado'?'<span class="badge b-verde"><span class="dot"></span>Enviado</span>':'<span class="badge b-gris"><span class="dot"></span>Borrador</span>'}</div>
       <div><div class="small muted">Trabajos</div><b>${listos}/${items.length} listos</b></div><div><div class="small muted">Horas programadas</div><b>${Math.round(horas*10)/10} h</b></div>
       ${sob.length?`<div style="color:var(--danger)"><b>⚠ ${sob.length} día(s) sobrecargado(s)</b></div>`:''}
-      <div class="flex-gap" style="margin-left:auto;flex-wrap:wrap;">${gest?`<button class="btn btn-sm btn-primary" onclick="tpModalCierre('${plan.id}')">🔁 Cerrar semana y armar la siguiente</button><button class="btn btn-sm" onclick="tpModalArmado('${plan.id}')">🧰 Armado de tablero</button><button class="btn btn-sm" onclick="tpModalCoordinar('${plan.id}')">⛓ Coordinar tareas</button><button class="btn btn-sm btn-primary" onclick="tpModalProgramar('${plan.id}')" title="Ubica cada tarea a su hora del día: varias tareas cortas caben el mismo día">⏱ Programar por horas</button><button class="btn btn-sm" onclick="tpModalAjuste('${plan.id}')">⚙ Ajustar por carga</button><button class="btn btn-sm" onclick="tpModalItem('${plan.id}')">+ Trabajo</button><button class="btn btn-sm btn-primary" onclick="tpModalEnviar('${plan.id}')">📲 Enviar por WhatsApp</button><button class="btn btn-sm" onclick="tpModalCorreo('${plan.id}')">✉ Correo / PDF</button><button class="btn btn-sm" onclick="tpEliminarSemana('${plan.id}')" title="Eliminar semana">🗑</button>`:''}</div>
+      <div class="flex-gap" style="margin-left:auto;flex-wrap:wrap;">${gest?`<button class="btn btn-sm btn-primary" onclick="tpModalCierre('${plan.id}')">🔁 Cerrar semana y armar la siguiente</button><button class="btn btn-sm" onclick="tpModalArmado('${plan.id}')">🧰 Armado de tablero</button><button class="btn btn-sm" onclick="tpModalCoordinar('${plan.id}')">⛓ Coordinar tareas</button><button class="btn btn-sm btn-primary" onclick="tpModalProgramar('${plan.id}')" title="Ubica cada tarea a su hora del día: varias tareas cortas caben el mismo día">⏱ Programar por horas</button><button class="btn btn-sm" onclick="tpModalAjuste('${plan.id}')">⚙ Ajustar por carga</button><button class="btn btn-sm" onclick="tpModalResumenReal()" title="Plan original vs fechas y horas reales por tablero">📊 Real vs plan</button><button class="btn btn-sm" onclick="tpModalItem('${plan.id}')">+ Trabajo</button><button class="btn btn-sm btn-primary" onclick="tpModalEnviar('${plan.id}')">📲 Enviar por WhatsApp</button><button class="btn btn-sm" onclick="tpModalCorreo('${plan.id}')">✉ Correo / PDF</button><button class="btn btn-sm" onclick="tpEliminarSemana('${plan.id}')" title="Eliminar semana">🗑</button>`:''}</div>
     </div>
     ${(()=>{ const au=tpAuditarOrden(plan); if(!au.length) return ""; return `<div class="mp-alerta" style="margin-top:10px;font-size:12.5px"><b>⚠ Orden de etapas: ${au.length} tarea(s) parten antes de terminar su etapa previa</b>${au.slice(0,6).map(x=>`<div>• ${escaparHtml((x.t.tablero?x.t.tablero+" · ":"")+x.t.tarea)} (${distDiaTxt(x.t.ini)}) debería ir después de «${escaparHtml(x.p.tarea)}» (termina ${distDiaTxt(tpFinEf(x.p))})</div>`).join("")}${au.length>6?`<div>… y ${au.length-6} más</div>`:""}${gest?`<div style="margin-top:6px"><button class="btn btn-sm btn-primary" onclick="tpCorregirOrden('${plan.id}')">Corregir orden automáticamente</button></div>`:""}</div>`; })()}
     ${(()=>{ const di=tpDispIssues(plan.items); if(!di.length) return ""; return `<div class="mp-alerta" style="margin-top:10px;font-size:12.5px"><b>⚠ Personal no disponible asignado a ${di.length} tarea(s)</b>${di.slice(0,6).map(x=>`<div>• ${escaparHtml(tpNombrePersona(x.pid))} en «${escaparHtml((x.it.tablero?x.it.tablero+" · ":"")+x.it.tarea)}» (${x.dias.map(d=>distDiaTxt(d)).slice(0,3).join(", ")}${x.dias.length>3?"…":""})</div>`).join("")}${di.length>6?`<div>… y ${di.length-6} más</div>`:""}${gest?`<div style="margin-top:6px"><button class="btn btn-sm btn-primary" onclick="tpSacarNoDisp('${plan.id}')">Retirarlo de las tareas donde no está nunca disponible</button> <span class="small muted">o reasigna con «Editar» las que tienen días con y sin él</span></div>`:""}</div>`; })()}
@@ -16295,7 +16323,7 @@ function psProy(pid){ const p=pid?proy(pid):null; return p?((p.codigo&&p.codigo!
 function psDatos(lunes){
   const dias=[0,1,2,3,4].map(k=>sumarDias(lunes,k)), ent={}; dias.forEach(d=>{ ent[d]=[]; });
   (DB.asignaciones||[]).forEach(a=>{ if(!a.fechaInicio||!a.fechaFin) return; dias.forEach(d=>{ if(a.fechaInicio<=d && d<=a.fechaFin && perDisp(a.personaId,d)) ent[d].push({ pid:a.personaId, proyectoId:a.proyectoId||"", origen:a.enTerreno===false?"taller":"terreno", det:a.disciplina||"", extras:a.horasExtra||"", h:0 }); }); });
-  tpPlanes().forEach(pl=>pl.items.forEach(it=>{ if(!it.ini||!it.fin) return; const ds=tpDias(it.ini,it.fin), h=tpHorasPers(it)/ds.length;
+  tpPlanes().forEach(pl=>pl.items.forEach(it=>{ if(!it.ini||!it.fin) return; const i0=it.inicioReal||it.ini; let f0=it.estado==="listo"?tpFinEf(it):it.fin; if(f0<i0) f0=i0; const ds=tpDias(i0,f0), h=tpHorasPers(it)/ds.length;
     ds.forEach(d=>{ if(!ent[d]) return; it.responsables.forEach(pid=>{ if(perDisp(pid,d)) ent[d].push({ pid, proyectoId:it.proyectoId||"", origen:"taller", det:it.tablero||"Trabajos varios", h }); }); }); }));
   return { dias, ent };
 }

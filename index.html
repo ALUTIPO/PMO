@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.40.0";
+const APP_VERSION = "3.40.1";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -16308,7 +16308,7 @@ function psNombres(pids){
 function psJornada(w,cfg,pid,fecha,hTaller){
   const norm=psSalidaNormal(cfg,fecha), cap=psCapDia(cfg,fecha), o=(w.personas[pid]||{})[fecha];
   if(w.sinExtra||perSinExtra(pid)) return { modo:"normal", salida:norm, origen:"regla" };
-  if(o && o.modo) return { modo:o.modo, salida:o.modo==="extra"?(o.salida||norm):norm, origen:"manual" };
+  if(o && o.modo && !(o.modo==="extra" && o.salida && psHM(o.salida)<=psHM(norm))) return { modo:o.modo, salida:o.modo==="extra"?(o.salida||norm):norm, origen:"manual" };
   const d=w.dias[fecha];
   if(d && d.modo==="extra") return { modo:"extra", salida:d.salida||norm, origen:"dia" };
   if(d && d.modo==="normal") return { modo:"normal", salida:norm, origen:"dia" };
@@ -16371,7 +16371,7 @@ function psHtml(M,opt){
     const cuerpo=d.proys.map(p=>`<div style="font-size:10.5px;font-weight:bold;color:#a15a1d;margin:5px 0 2px">${escaparHtml(psProy(p.pid))}</div>`
       +p.taller.map(x=>`<div style="margin-bottom:4px"><b>🛠 Taller · ${escaparHtml(x.det)}</b><br><span style="color:#444">${nj(x.personas)}</span></div>`).join("")
       +p.terreno.map(x=>`<div style="margin-bottom:4px"><b>📍 ${escaparHtml(x.det||"Terreno")}</b><br><span style="color:#444">${nj(x.personas)}</span></div>`).join("")).join("")
-      +d.generales.map(g=>`<div style="background:#e6f3ec;border-radius:3px;padding:3px 5px;margin:5px 0"><b>🧹 ${escaparHtml(g.texto)}</b><br><span style="color:#444">${nj(g.personas)}</span></div>`).join("")
+      +d.generales.map(g=>`<div style="background:#e6f3ec;border-radius:3px;padding:3px 5px;margin:5px 0"><b>${g.texto===PS_TXT_TERRENO?"📍":"🧹"} ${escaparHtml(g.texto)}</b><br><span style="color:#444">${nj(g.personas)}</span></div>`).join("")
       +(opt.libres&&d.libres.length?`<div style="background:#fff3cd;color:#7a5b00;border-radius:3px;padding:3px 5px;margin:5px 0">⚠ Sin actividad: ${d.libres.map(p=>escaparHtml(nom[p])).join(", ")}</div>`:"");
     const dt=new Date(d.fecha+"T12:00:00Z");
     return `<td style="width:20%;vertical-align:top;border:1px solid #d9d2c9;padding:0;font-family:Arial,Helvetica,sans-serif"><div style="background:#c1712e;color:#fff;font-size:11.5px;font-weight:bold;padding:3px 6px">${PS_DIAS[dt.getUTCDay()-1]} ${dt.getUTCDate()} ${DIST_MESES[dt.getUTCMonth()]}</div>
@@ -16414,11 +16414,12 @@ function psSetPers(pid,fecha,v){
   psGuardar();
 }
 function psSetSalida(pid,fecha,v){ if(!psPuede()||!/^\d\d:\d\d$/.test(v)) return; const w=psEscribir(_ps.lunes); w.personas[pid]=w.personas[pid]||{}; w.personas[pid][fecha]={ modo:"extra", salida:v }; psGuardar(); }
-function psAddGeneral(pid,fecha){ if(!psPuede()) return; const w=psEscribir(_ps.lunes); w.generales.push({ id:"GEN-"+Math.random().toString(36).slice(2,8), fecha, pid, texto:(_ps.texto||"").trim()||"Aseo e inventario" }); psGuardar(); }
+const PS_TXT_TERRENO="Disponible para terreno";
+function psAddGeneral(pid,fecha,texto){ if(!psPuede()) return; const w=psEscribir(_ps.lunes); w.generales.push({ id:"GEN-"+Math.random().toString(36).slice(2,8), fecha, pid, texto:texto||(_ps.texto||"").trim()||"Aseo e inventario" }); psGuardar(); }
 function psQuitarGeneral(fecha,pid){ if(!psPuede()) return; const w=psEscribir(_ps.lunes); w.generales=w.generales.filter(g=>!(g.fecha===fecha&&g.pid===pid)); psGuardar(); }
-function psCompletarLibres(){
+function psCompletarLibres(txt){
   if(!psPuede()){ toast("Tu rol no puede editar la planificación.","danger"); return; }
-  const M=psModelo(_ps.lunes), w=psEscribir(_ps.lunes), texto=(_ps.texto||"").trim()||"Aseo e inventario"; let n=0;
+  const M=psModelo(_ps.lunes), w=psEscribir(_ps.lunes), texto=txt||(_ps.texto||"").trim()||"Aseo e inventario"; let n=0;
   M.dias.forEach(d=>d.libres.forEach(pid=>{ w.generales.push({ id:"GEN-"+Math.random().toString(36).slice(2,8), fecha:d.fecha, pid, texto }); n++; }));
   toast(n?`${n} día(s)-persona completados con «${texto}».`:"No hay días libres que completar.", n?"ok":"danger");
   if(n) psGuardar();
@@ -16441,9 +16442,9 @@ function psRender(){
     return `<th style="min-width:150px;vertical-align:top"><div>${PS_DIAS[i]} ${dt.getUTCDate()}</div><div style="margin-top:4px;display:flex;gap:4px;align-items:center;flex-wrap:wrap">${modoSel(o?o.modo:"",`psSetDia('${d.fecha}',this.value)`)}${o&&o.modo==="extra"?`<input type="time" step="1800" style="${sel}width:92px" value="${o.salida||""}" ${puede?"":"disabled"} onchange="psSetDiaSalida('${d.fecha}',this.value)">`:""}</div></th>`; }).join("");
   const filas=M.activos.map(pid=>`<tr><td><b>${escaparHtml(M.nom[pid])}</b>${puede?`<div><button class="btn btn-sm" style="margin-top:3px;font-size:10.5px;${perSinExtra(pid)?'background:#fbe3dc;color:#b3452c':''}" title="Regla permanente: nunca programar horas extra a esta persona" onclick="psPerSinExtra('${pid}')">${perSinExtra(pid)?'🚫 sin extras (quitar)':'🚫 sin extras'}</button></div>`:(perSinExtra(pid)?'<div class="small" style="color:#b3452c">🚫 sin extras</div>':'')}</td>${M.dias.map(d=>{
       const proys=d.proys.filter(p=>p.terreno.concat(p.taller).some(x=>x.personas.includes(pid))), gens=d.generales.filter(g=>g.personas.includes(pid));
-      if(!proys.length&&!gens.length) return `<td style="background:#fff8e1;vertical-align:top"><span class="small" style="color:#7a5b00">sin actividad</span>${puede?`<div><button class="btn btn-sm" style="margin-top:3px" onclick="psAddGeneral('${pid}','${d.fecha}')">＋ ${escaparHtml(_ps.texto||"Aseo e inventario")}</button></div>`:""}</td>`;
+      if(!proys.length&&!gens.length) return `<td style="background:#fff8e1;vertical-align:top"><span class="small" style="color:#7a5b00">sin actividad</span>${puede?`<div><button class="btn btn-sm" style="margin-top:3px" onclick="psAddGeneral('${pid}','${d.fecha}')">＋ ${escaparHtml(_ps.texto||"Aseo e inventario")}</button> <button class="btn btn-sm" style="margin-top:3px" title="Queda disponible para salir a terreno si surge" onclick="psAddGeneral('${pid}','${d.fecha}',PS_TXT_TERRENO)">📍 Disp. terreno</button></div>`:""}</td>`;
       const j=d.jor[pid], o=(psLeer(_ps.lunes).personas[pid]||{})[d.fecha];
-      return `<td style="vertical-align:top"><div class="small">${proys.map(p=>`<span style="display:inline-block;background:var(--copper-light);border-radius:6px;padding:1px 6px;margin:0 3px 3px 0;font-size:11px">${escaparHtml(psProy(p.pid).split(" · ")[0])}</span>`).join("")}${gens.map(g=>`<span style="display:inline-block;background:var(--ok-bg);border-radius:6px;padding:1px 6px;margin:0 3px 3px 0;font-size:11px">🧹 ${escaparHtml(g.texto)}${puede?` <a href="#" style="color:var(--danger);text-decoration:none" onclick="psQuitarGeneral('${d.fecha}','${pid}');return false;" title="Quitar">×</a>`:""}</span>`).join("")}</div>
+      return `<td style="vertical-align:top"><div class="small">${proys.map(p=>`<span style="display:inline-block;background:var(--copper-light);border-radius:6px;padding:1px 6px;margin:0 3px 3px 0;font-size:11px">${escaparHtml(psProy(p.pid).split(" · ")[0])}</span>`).join("")}${gens.map(g=>`<span style="display:inline-block;background:var(--ok-bg);border-radius:6px;padding:1px 6px;margin:0 3px 3px 0;font-size:11px">${g.texto===PS_TXT_TERRENO?"📍":"🧹"} ${escaparHtml(g.texto)}${puede?` <a href="#" style="color:var(--danger);text-decoration:none" onclick="psQuitarGeneral('${d.fecha}','${pid}');return false;" title="Quitar">×</a>`:""}</span>`).join("")}</div>
         <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">${modoSel(o?o.modo:"",`psSetPers('${pid}','${d.fecha}',this.value)`)}${j.modo==="extra"?`<input type="time" step="1800" style="${sel}width:92px" value="${j.salida}" ${puede?"":"disabled"} onchange="psSetSalida('${pid}','${d.fecha}',this.value)">`:`<span class="small muted">sale ${psSalidaNormal(cfg,d.fecha)}</span>`}</div>${j.origen==="auto"&&j.modo==="extra"?`<div class="small" style="color:var(--warn)">auto: más de ${TP_HORAS_DIA} h de taller</div>`:""}</td>`; }).join("")}</tr>`).join("");
   box.innerHTML=`<div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin-bottom:10px">
       <label class="small flex-gap" style="padding:4px 8px;border:1px solid ${psLeer(_ps.lunes).sinExtra?'#b3452c':'var(--line)'};border-radius:8px" title="Nadie tendrá horas extra esta semana; lo que no quepa se marca como conflicto"><input type="checkbox" ${psLeer(_ps.lunes).sinExtra?"checked":""} ${puede?"":"disabled"} onchange="psSemanaSinExtra('${_ps.lunes}',this.checked)"> 🚫 Sin horas extra esta semana</label>
@@ -16456,7 +16457,7 @@ function psRender(){
       <label class="small muted" style="display:flex;flex-direction:column;gap:3px">colación terreno (min)<input type="number" min="0" step="5" value="${cfg.colacionTerreno}" ${puede?"":"disabled"} onchange="if(!psPuede())return;psCfg().colacionTerreno=Math.max(0,Math.min(180,Number(this.value)||0));psGuardar()" style="width:80px"></label>
       <div class="small muted" style="align-self:center">Jornada: <b>${Math.round(psHorasSemana(cfg,M.lunes)*10)/10} h/sem</b></div>
       <label class="small muted" style="display:flex;flex-direction:column;gap:3px">Actividad de días libres<input type="text" value="${escaparHtml(_ps.texto)}" oninput="_ps.texto=this.value" style="width:190px"></label>
-      ${puede?`<button class="btn btn-sm btn-primary" onclick="psCompletarLibres()" ${nLibres?"":"disabled"}>🧹 Completar ${nLibres||""} día(s) libre(s)</button>`:""}
+      ${puede?`<button class="btn btn-sm btn-primary" onclick="psCompletarLibres()" ${nLibres?"":"disabled"}>🧹 Completar ${nLibres||""} día(s) libre(s)</button><button class="btn btn-sm" onclick="psCompletarLibres(PS_TXT_TERRENO)" ${nLibres?"":"disabled"} title="Marca todos los días libres como disponibles para ir a terreno">📍 Libres = disponible para terreno</button>`:""}
       <span style="flex:1"></span>
       <input type="text" id="psPara" placeholder="Para (correos)" value="${escaparHtml(tpCorreoPara)}" oninput="tpCorreoPara=this.value" style="width:190px">
       <button class="btn btn-sm" onclick="psPdf()">📄 PDF</button><button class="btn btn-sm" onclick="psCorreo('web')">✉ Outlook web</button><button class="btn btn-sm" onclick="psCorreo('app')">✉ Outlook</button><button class="btn btn-sm btn-primary" onclick="psCopiar()">📋 Copiar con formato</button></div>

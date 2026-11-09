@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.41.0";
+const APP_VERSION = "3.41.1";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -12853,9 +12853,16 @@ function tpDias(ini,fin){
   return habiles.length?habiles:out;
 }
 function tpLunesDe(f){ const w=new Date(f+"T12:00:00Z").getUTCDay(); return sumarDias(f, w===0?-6:1-w); }
+/* Una sola fuente de verdad para «qué se trabaja cada día»: fechas reales si existen; también cuenta lo de otras semanas que cae en ésta. */
+function tpRangoEf(it){ const i0=it.inicioReal||it.ini; let f0=it.estado==="listo"?tpFinEf(it):it.fin; if(f0<i0) f0=i0; return [i0,f0]; }
+function tpItemsOtras(plan){ const l=plan.lunes, l6=sumarDias(l,6), out=[];
+  tpPlanes().forEach(pl=>{ if(pl===plan||pl.id===plan.id) return; pl.items.forEach(it=>{ if(!it.ini||!it.fin) return; const r=tpRangoEf(it); if(r[0]<=l6&&r[1]>=l) out.push({ it, plan:pl }); }); });
+  return out; }
 function tpCarga(plan){
+  const otras=tpItemsOtras(plan).map(x=>x.it), l6=sumarDias(plan.lunes,6);
   const ini=plan.items.reduce((m,i)=>i.ini&&i.ini<m?i.ini:m,plan.lunes), fin=plan.items.reduce((m,i)=>i.fin&&i.fin>m?i.fin:m,sumarDias(plan.lunes,5));
   const carga={};
+  otras.forEach(it=>{ const r=tpRangoEf(it), ds=tpDias(r[0],r[1]), h=tpHorasPers(it)/ds.length; it.responsables.forEach(pid=>{ carga[pid]=carga[pid]||{}; ds.forEach(d=>{ if(d>=plan.lunes&&d<=l6) carga[pid][d]=(carga[pid][d]||0)+h; }); }); });
   plan.items.forEach(it=>{ if(!it.ini||!it.fin) return; const ds=tpDias(it.ini,it.fin), h=tpHorasPers(it)/ds.length;
     it.responsables.forEach(pid=>{ carga[pid]=carga[pid]||{}; ds.forEach(d=>{ carga[pid][d]=(carga[pid][d]||0)+h; }); }); });
   const semanal = diasEntre(ini,fin) > 7; const columnas=[];
@@ -13849,7 +13856,10 @@ function tpGerSemanas(plan){
 }
 function tpGerModelo(plan,quien,lunes){
   lunes=lunes||plan.lunes;
-  const todos=tpItemsDe(plan,quien).filter(i=>i.ini&&i.fin), dias=[0,1,2,3,4].map(k=>sumarDias(lunes,k));
+  const ef=it=>{ const r=tpRangoEf(it); return Object.assign({},it,{ ini:r[0], fin:r[1] }); };
+  const propios=tpItemsDe(plan,quien).filter(i=>i.ini&&i.fin).map(ef), idsP=new Set(propios.map(i=>i.id+"|"+plan.id));
+  const ajenos=tpPlanes().filter(pl=>pl.id!==plan.id).flatMap(pl=>pl.items.filter(i=>i.ini&&i.fin)).filter(i=>quien==="equipo"||i.responsables.includes(quien)).map(ef);
+  const todos=propios.concat(ajenos), dias=[0,1,2,3,4].map(k=>sumarDias(lunes,k));
   const semana=todos.filter(i=>tpDias(i.ini,i.fin).some(d=>dias.includes(d)));
   /* calendario: proyecto -> día -> tableros (sin personas) */
   const pm={}, orden=[];
@@ -13890,6 +13900,15 @@ function tpGerModelo(plan,quien,lunes){
   return { plan, quien, lunes, dias, semana, proys, personas, horario, entregas, cfg:M.cfg, M };
 }
 /* Revisión previa al envío: legalidad de las horas extra y calidad de las proyecciones */
+/* Cuadre: lo que muestra el plan semanal general (por día y tablero de taller) debe ser idéntico a lo que muestra el programa de taller. */
+function tpCuadre(lunes){
+  const PM=psModelo(lunes), out=[]; if(!tpPlanes().length) return out;
+  const pl=tpPlanes().find(x=>x.lunes===lunes)||tpPlanes()[0]; const G=tpGerModelo(pl,"equipo",lunes);
+  PM.dias.forEach(d=>{ const a=new Set(d.proys.flatMap(p=>p.taller.map(x=>(p.pid||"")+"|"+x.det))), b=new Set(G.proys.flatMap(p=>(p.dias[d.fecha]||[]).map(t=>(p.pid||"")+"|"+t)));
+    const sob=[...a].filter(x=>!b.has(x)), fal=[...b].filter(x=>!a.has(x)); if(!sob.length&&!fal.length) return;
+    const nm=k=>k.split("|")[1]; out.push({ fecha:d.fecha, txt:(sob.length?"el plan semanal tiene "+sob.map(nm).join(", ")+" que el programa no muestra":"")+(sob.length&&fal.length?"; ":"")+(fal.length?"el programa tiene "+fal.map(nm).join(", ")+" que el plan semanal no muestra":"") }); });
+  return out;
+}
 function tpGerAuditoria(mod){
   const crit=[], avis=[], info=[], M=mod.M;
   mod.personas.forEach(p=>p.cel.forEach((c,k)=>{
@@ -13909,6 +13928,8 @@ function tpGerAuditoria(mod){
     const causa=c.hT>c.cap+0.01?`por carga: ${tpHtxt(c.hT)} h de taller en una jornada de ${tpHtxt(c.cap)} h`:(c.sinCarga?"quedó fijada a mano en el Plan semanal":"fijada a mano en el Plan semanal");
     info.push({ t:`${p.nombre} · ${TP_DIAS_C[k]}: +${tpHtxt(c.extra)} h extra (${causa}).`, btn:{ t:`Prohibir horas extra a ${tpPrimerNombre(p.nombre)}`, js:`psPerSinExtra('${p.pid}')` } }); }));
   tpDispIssues(mod.semana,mod.dias).forEach(x=>{ crit.push({ t:`${tpNombrePersona(x.pid)} figura asignado a «${(x.it.tablero?x.it.tablero+" · ":"")+x.it.tarea}» (${x.dias.map(d=>tpFechaCorta(d)).join(", ")}) pero no está disponible esos días.`, s:"Reasigna la tarea o corrige su disponibilidad en Personal." }); });
+  { const cu=tpCuadre(mod.lunes); cu.forEach(x=>crit.push({ t:`El plan semanal general y el programa de taller no coinciden el ${tpFechaCorta(x.fecha)}: ${x.txt}.`, s:"Ambos deben salir de las mismas tareas. Revisa fechas, avance y estado de esas tareas en el Programa de taller." }));
+    const pl=tpPlanes().find(x=>x.lunes===mod.lunes); if(pl){ const ot=tpItemsOtras(pl); if(ot.length) info.push({ t:`${ot.length} tarea(s) de otras semanas caen en esta y se cuentan en el plan: ${ot.slice(0,6).map(x=>(x.it.tablero||"Trabajos varios")+" · "+x.it.tarea+" ("+tpFechaCorta(tpRangoEf(x.it)[0])+(tpRangoEf(x.it)[1]!==tpRangoEf(x.it)[0]?"→"+tpFechaCorta(tpRangoEf(x.it)[1]):"")+", semana del "+distDiaTxt(x.plan.lunes)+")").join("; ")}${ot.length>6?"…":""}.` }); } }
   const sinResp=mod.semana.filter(i=>!i.responsables.length);
   if(sinResp.length) crit.push({ t:`${sinResp.length} trabajo(s) sin responsable: ${[...new Set(sinResp.map(i=>i.tablero||"Trabajos varios"))].join(", ")}.`, s:"Asigna personal antes de enviar: sin él no se puede proyectar el horario." });
   const finde=mod.semana.filter(i=>{ const d=tpDias(i.ini,i.fin)[0], w=new Date(d+"T12:00:00Z").getUTCDay(); return w===0||w===6; });
@@ -14204,6 +14225,8 @@ function renderTallerPrograma(){
       return `<tr><td class="small"><b>${escaparHtml(per?per.nombre:"?")}</b></td>${columnas.map(c=>{ const h=c.dias.reduce((a,d)=>a+(carga[pid][d]||0),0), sobre=c.dias.some(d=>(carga[pid][d]||0)>tpCap(d)+0.01); return `<td style="text-align:center;${sobre?'background:rgba(220,60,60,.18);font-weight:700':''}">${h?Math.round(h*10)/10:'·'}</td>`; }).join("")}<td style="text-align:center"><b>${Math.round(tot*10)/10}</b></td></tr>`; }).join("")}
     </tbody></table></div></div>`:'';
   const badgeEst={pendiente:'<span class="badge b-gris"><span class="dot"></span>Pendiente</span>',en_curso:'<span class="badge b-amarillo"><span class="dot"></span>En curso</span>',listo:'<span class="badge b-verde"><span class="dot"></span>Listo</span>',bloqueado:'<span class="badge b-rojo"><span class="dot"></span>Bloqueado</span>'};
+  const otras=tpItemsOtras(plan), cuadre=tpCuadre(plan.lunes);
+  const bannerOtras=(otras.length||cuadre.length)?`<div class="mp-alerta" style="margin:10px 0">${otras.length?`🔗 <b>${otras.length} tarea(s) de otras semanas caen en esta semana</b> y cuentan en la carga y en el Plan semanal general: ${otras.map(x=>`<a href="#" onclick="tpPlanId='${x.plan.id}'; renderAll(); return false;">${escaparHtml((x.it.tablero||"Trabajos varios")+" · "+x.it.tarea)}</a> (${escaparHtml(distDiaTxt(tpRangoEf(x.it)[0]))}${tpRangoEf(x.it)[1]!==tpRangoEf(x.it)[0]?" → "+escaparHtml(distDiaTxt(tpRangoEf(x.it)[1])):""}, semana del ${escaparHtml(distDiaTxt(x.plan.lunes))})`).join("; ")}.`:""}${cuadre.length?`<div style="margin-top:4px">⛔ <b>No cuadra con el Plan semanal general:</b> ${cuadre.map(x=>escaparHtml(tpFechaCorta(x.fecha)+": "+x.txt)).join(" · ")}</div>`:""}</div>`:"";
   const grupos=tpGrupos(plan); tpGrupoKeys=grupos.map(g=>g.key);
   const nCols=gest?6:5;
   const filaTarea=(it)=>{ const sinR=!it.responsables.length;
@@ -14239,7 +14262,7 @@ function renderTallerPrograma(){
     ${(()=>{ const au=tpAuditarOrden(plan); if(!au.length) return ""; return `<div class="mp-alerta" style="margin-top:10px;font-size:12.5px"><b>⚠ Orden de etapas: ${au.length} tarea(s) parten antes de terminar su etapa previa</b>${au.slice(0,6).map(x=>`<div>• ${escaparHtml((x.t.tablero?x.t.tablero+" · ":"")+x.t.tarea)} (${distDiaTxt(x.t.ini)}) debería ir después de «${escaparHtml(x.p.tarea)}» (termina ${distDiaTxt(tpFinEf(x.p))})</div>`).join("")}${au.length>6?`<div>… y ${au.length-6} más</div>`:""}${gest?`<div style="margin-top:6px"><button class="btn btn-sm btn-primary" onclick="tpCorregirOrden('${plan.id}')">Corregir orden automáticamente</button></div>`:""}</div>`; })()}
     ${(()=>{ const di=tpDispIssues(plan.items); if(!di.length) return ""; return `<div class="mp-alerta" style="margin-top:10px;font-size:12.5px"><b>⚠ Personal no disponible asignado a ${di.length} tarea(s)</b>${di.slice(0,6).map(x=>`<div>• ${escaparHtml(tpNombrePersona(x.pid))} en «${escaparHtml((x.it.tablero?x.it.tablero+" · ":"")+x.it.tarea)}» (${x.dias.map(d=>distDiaTxt(d)).slice(0,3).join(", ")}${x.dias.length>3?"…":""})</div>`).join("")}${di.length>6?`<div>… y ${di.length-6} más</div>`:""}${gest?`<div style="margin-top:6px"><button class="btn btn-sm btn-primary" onclick="tpSacarNoDisp('${plan.id}')">Retirarlo de las tareas donde no está nunca disponible</button> <span class="small muted">o reasigna con «Editar» las que tienen días con y sin él</span></div>`:""}</div>`; })()}
     <div class="mp-tabs" style="margin-top:10px;"><button class="mp-tab ${tpVista==='programa'?'on':''}" onclick="tpVista='programa'; renderAll();">☰ Programa de la semana</button><button class="mp-tab ${tpVista==='gantt'?'on':''}" onclick="tpVista='gantt'; renderAll();">▤ Gantt por tablero</button></div>
-    ${tpVista==='gantt'?tpHtmlGantt(plan):grid+tabla}`;
+    ${bannerOtras}${tpVista==='gantt'?tpHtmlGantt(plan):grid+tabla}`;
 }
 
 // ================================================================
@@ -16323,7 +16346,7 @@ function psProy(pid){ const p=pid?proy(pid):null; return p?((p.codigo&&p.codigo!
 function psDatos(lunes){
   const dias=[0,1,2,3,4].map(k=>sumarDias(lunes,k)), ent={}; dias.forEach(d=>{ ent[d]=[]; });
   (DB.asignaciones||[]).forEach(a=>{ if(!a.fechaInicio||!a.fechaFin) return; dias.forEach(d=>{ if(a.fechaInicio<=d && d<=a.fechaFin && perDisp(a.personaId,d)) ent[d].push({ pid:a.personaId, proyectoId:a.proyectoId||"", origen:a.enTerreno===false?"taller":"terreno", det:a.disciplina||"", extras:a.horasExtra||"", h:0 }); }); });
-  tpPlanes().forEach(pl=>pl.items.forEach(it=>{ if(!it.ini||!it.fin) return; const i0=it.inicioReal||it.ini; let f0=it.estado==="listo"?tpFinEf(it):it.fin; if(f0<i0) f0=i0; const ds=tpDias(i0,f0), h=tpHorasPers(it)/ds.length;
+  tpPlanes().forEach(pl=>pl.items.forEach(it=>{ if(!it.ini||!it.fin) return; const [i0,f0]=tpRangoEf(it), ds=tpDias(i0,f0), h=tpHorasPers(it)/ds.length;
     ds.forEach(d=>{ if(!ent[d]) return; it.responsables.forEach(pid=>{ if(perDisp(pid,d)) ent[d].push({ pid, proyectoId:it.proyectoId||"", origen:"taller", det:it.tablero||"Trabajos varios", h }); }); }); }));
   return { dias, ent };
 }

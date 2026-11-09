@@ -16516,7 +16516,7 @@ function psRender(){
       <label class="small muted" style="display:flex;flex-direction:column;gap:3px">colación terreno (min)<input type="number" min="0" step="5" value="${cfg.colacionTerreno}" ${puede?"":"disabled"} onchange="if(!psPuede())return;psCfg().colacionTerreno=Math.max(0,Math.min(180,Number(this.value)||0));psGuardar()" style="width:80px"></label>
       <div class="small muted" style="align-self:center">Jornada: <b>${Math.round(psHorasSemana(cfg,M.lunes)*10)/10} h/sem</b></div>
       <label class="small muted" style="display:flex;flex-direction:column;gap:3px">Actividad de días libres<input type="text" value="${escaparHtml(_ps.texto)}" oninput="_ps.texto=this.value" style="width:190px"></label>
-      <label class="small muted" style="display:flex;flex-direction:column;gap:3px">Proyecto para «🏢 Ingeniería»<select onchange="_ps.proyIng=this.value" style="width:190px">${tpOptProy(_ps.proyIng||"")}</select></label>
+      <label class="small muted" style="display:flex;flex-direction:column;gap:3px">Proyecto para «🏢 Ingeniería»<select onchange="_ps.proyIng=this.value" style="width:190px" ${puede?"":"disabled"}>${tpOptProy(_ps.proyIng||"")}</select></label>
       ${puede?`<button class="btn btn-sm btn-primary" onclick="psCompletarLibres()" ${nLibres?"":"disabled"}>🧹 Completar ${nLibres||""} día(s) libre(s)</button><button class="btn btn-sm" onclick="psCompletarLibres(PS_TXT_TERRENO)" ${nLibres?"":"disabled"} title="Marca todos los días libres como disponibles para ir a terreno">📍 Libres = disponible para terreno</button>`:""}
       <span style="flex:1"></span>
       <input type="text" id="psPara" placeholder="Para (correos)" value="${escaparHtml(tpCorreoPara)}" oninput="tpCorreoPara=this.value" style="width:190px">

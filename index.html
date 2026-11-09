@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.39.0";
+const APP_VERSION = "3.40.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -13835,11 +13835,11 @@ function tpGerModelo(plan,quien,lunes){
     const cel=M.dias.map((d,k)=>{
       if(!d.gente.includes(p.id)) return { trab:false, txt:"—", nivel:0, extra:0, k };
       const j=d.jor[p.id], hT=d.hT[p.id]||0, norm=psSalidaNormal(M.cfg,d.fecha), cap=psCapDia(M.cfg,d.fecha);
-      const extraSal=j.modo==="extra"?Math.max(0,(psHM(j.salida)-psHM(norm))/60):0, extraNec=Math.max(0,hT-cap), extra=Math.max(extraSal,extraNec);
+      const forz=j.origen==="regla", extraSal=(!forz&&j.modo==="extra")?Math.max(0,(psHM(j.salida)-psHM(norm))/60):0, extraNec=Math.max(0,hT-cap), extra=forz?0:Math.max(extraSal,extraNec), exceso=forz?extraNec:0;
       const finMin=psHM(norm)+extra*60, hasta=extra<=0.01?norm:((j.modo==="extra"&&extraSal>=extraNec)?j.salida:(finMin<1440?psTxtHM(finMin):"más de 24:00"));
-      const nivel=extra>TP_MAX_EXTRA_DIA+0.01?2:(extra>0.01?1:0);
-      const txt=M.cfg.inicio+" – "+(hasta==="más de 24:00"?"sin cierre posible":hasta)+(nivel===0?"":" · +"+tpHtxt(extra)+" h"+(nivel===2?" ⚠":""));
-      return { trab:true, txt, nivel, extra, hT, cap, sinCarga:(j.modo==="extra"&&j.origen!=="auto"&&extraNec<=0.01), desde:M.cfg.inicio, hasta, hastaMin:(hasta==='más de 24:00'?finMin:psHM(hasta)), k, manualNormal:(j.modo==="normal"&&extraNec>0.01) };
+      const nivel=forz?(exceso>0.01?2:0):(extra>TP_MAX_EXTRA_DIA+0.01?2:(extra>0.01?1:0));
+      const txt=forz?(M.cfg.inicio+" – "+norm+(exceso>0.01?" · ⚠ "+tpHtxt(exceso)+" h no caben":"")):(M.cfg.inicio+" – "+(hasta==="más de 24:00"?"sin cierre posible":hasta)+(nivel===0?"":" · +"+tpHtxt(extra)+" h"+(nivel===2?" ⚠":"")));
+      return { trab:true, txt, nivel, extra, hT, cap, sinCarga:(j.modo==="extra"&&j.origen!=="auto"&&j.origen!=="regla"&&extraNec<=0.01), forzado:forz, exceso, origen:j.origen, pid:p.id, desde:M.cfg.inicio, hasta, hastaMin:(hasta==='más de 24:00'?finMin:psHM(hasta)), k, manualNormal:(!forz&&j.modo==="normal"&&extraNec>0.01) };
     });
     return { pid:p.id, nombre:p.nombre, cargo:p.cargo||"", ext:p.tipo==="Externo", cel, extraSem:cel.reduce((a,c)=>a+c.extra,0) };
   }).sort((a,b)=>a.nombre.localeCompare(b.nombre));
@@ -13865,7 +13865,9 @@ function tpGerModelo(plan,quien,lunes){
 function tpGerAuditoria(mod){
   const crit=[], avis=[], info=[], M=mod.M;
   mod.personas.forEach(p=>p.cel.forEach((c,k)=>{
-    if(c.nivel===2){
+    if(c.forzado&&c.exceso>0.01){
+      crit.push({ t:`${p.nombre} · ${TP_DIAS_C[k]}: ${tpHtxt(c.hT)} h de taller no caben en la jornada de ${tpHtxt(c.cap)} h y la regla «sin horas extra» está activa (${tpHtxt(c.exceso)} h de más).`, s:"Reparte esas horas a otro día o a otra persona con «Ajustar por carga»; la regla impide convertirlas en horas extra." });
+    } else if(c.nivel===2){
       const libres=DB.personal.filter(x=>x.tipo!=="Externo" && x.id!==p.pid && !M.dias[k].gente.includes(x.id)).slice(0,4).map(x=>x.nombre.split(" ")[0]);
       crit.push({ t:`${p.nombre} · ${TP_DIAS_C[k]}: ${tpHtxt(c.extra)} h extra ${c.hasta==='más de 24:00'?'(no caben en el día)':'(hasta '+c.hasta+')'}. El máximo legal es ${TP_MAX_EXTRA_DIA} h por día.`,
         s:`Reparte horas a otro día o suma un ayudante${libres.length?` (sin actividad ese día: ${libres.join(", ")})`:""}. Puedes usar «Ajustar por carga».` });
@@ -13875,6 +13877,9 @@ function tpGerAuditoria(mod){
       avis.push({ t:`${p.nombre} · ${TP_DIAS_C[k]}: tiene ${tpHtxt(c.hT)} h de taller y jornada normal de ${tpHtxt(c.cap)} h.`, s:"Marca horas extra ese día en el Plan semanal o redistribuye." });
     }
   }));
+  mod.personas.forEach(p=>p.cel.forEach((c,k)=>{ if(!c.trab||c.forzado||c.extra<=0.01) return;
+    const causa=c.hT>c.cap+0.01?`por carga: ${tpHtxt(c.hT)} h de taller en una jornada de ${tpHtxt(c.cap)} h`:(c.sinCarga?"quedó fijada a mano en el Plan semanal":"fijada a mano en el Plan semanal");
+    info.push({ t:`${p.nombre} · ${TP_DIAS_C[k]}: +${tpHtxt(c.extra)} h extra (${causa}).`, btn:{ t:`Prohibir horas extra a ${tpPrimerNombre(p.nombre)}`, js:`psPerSinExtra('${p.pid}')` } }); }));
   tpDispIssues(mod.semana,mod.dias).forEach(x=>{ crit.push({ t:`${tpNombrePersona(x.pid)} figura asignado a «${(x.it.tablero?x.it.tablero+" · ":"")+x.it.tarea}» (${x.dias.map(d=>tpFechaCorta(d)).join(", ")}) pero no está disponible esos días.`, s:"Reasigna la tarea o corrige su disponibilidad en Personal." }); });
   const sinResp=mod.semana.filter(i=>!i.responsables.length);
   if(sinResp.length) crit.push({ t:`${sinResp.length} trabajo(s) sin responsable: ${[...new Set(sinResp.map(i=>i.tablero||"Trabajos varios"))].join(", ")}.`, s:"Asigna personal antes de enviar: sin él no se puede proyectar el horario." });
@@ -13893,9 +13898,20 @@ function tpGerAuditoria(mod){
     else if(!e.gantt) avis.push({ t:`${e.tablero}: no aparece en el Gantt del proyecto; se informa la fecha del programa (${distDiaTxt(e.fin)}).`, s:"Guarda el programa para sincronizarlo al Gantt." });
     else if(e.difiere) avis.push({ t:`${e.tablero}: el Gantt del proyecto dice ${distDiaTxt(e.gFin)} y el programa ${distDiaTxt(e.fin)}.`, s:"Se informa la fecha del programa; revisa cuál es la correcta." });
   });
-  return { crit, avis, info, ok:!crit.length, lunes:mod.lunes, nSinCarga:avis.filter(a=>a.sinCarga).length };
+  return { crit, avis, info, ok:!crit.length, lunes:mod.lunes, nSinCarga:avis.filter(a=>a.sinCarga).length, hayExtra:mod.personas.some(p=>p.cel.some(c=>c.extra>0.01)), forzadoSem:psLeer(mod.lunes).sinExtra };
 }
 /* Las horas extra que se fijaron a mano en el Plan semanal general no se borran solas cuando la carga baja: esto las quita donde ya no hacen falta */
+function psSemanaSinExtra(lunes,v){
+  if(!psPuede()){ toast("Tu rol no puede modificar el plan semanal.","danger"); return; } const w=psEscribir(lunes); if(v) w.sinExtra=true; else delete w.sinExtra;
+  registrarHistorial({proyecto:"Taller", accion:"Modificar", detalle:`Plan semanal ${lunes}: regla «sin horas extra» ${v?"activada":"quitada"}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"});
+  guardarEstado(); renderAll(); if(document.getElementById('tpCorreoPrev')) tpCorreoRefrescar(); if(document.getElementById('psBox')) psRender(); toast(v?"Regla activa: esta semana no se programan horas extra. Lo que no quepa en la jornada aparece como conflicto.":"Regla quitada para esta semana.", "ok");
+}
+function psPerSinExtra(pid){
+  if(!psPuede()){ toast("Tu rol no puede modificar esto.","danger"); return; } const per=DB.personal.find(x=>x.id===pid); if(!per) return;
+  per.sinHorasExtra=!per.sinHorasExtra; if(!per.sinHorasExtra) delete per.sinHorasExtra;
+  registrarHistorial({proyecto:"Taller", accion:"Modificar", detalle:`Regla «sin horas extra» para ${per.nombre}: ${per.sinHorasExtra?"activada":"quitada"}`, usuario:DB.usuario+" · "+DB.role, criticidad:"Media"});
+  guardarEstado(); renderAll(); if(document.getElementById('tpCorreoPrev')) tpCorreoRefrescar(); if(document.getElementById('psBox')) psRender(); toast(per.sinHorasExtra?`${per.nombre}: nunca se le programan horas extra.`:`${per.nombre}: regla quitada.`, "ok");
+}
 function psQuitarExtrasSinCarga(lunes){
   if(!puedeGestionarTaller()){ toast("Tu rol no puede modificar el plan semanal.","danger"); return; }
   const w=psEscribir(lunes); let n=0, M=psModelo(lunes);
@@ -13908,11 +13924,11 @@ function psQuitarExtrasSinCarga(lunes){
   guardarEstado(); renderAll(); if(document.getElementById('tpCorreoPrev')) tpCorreoRefrescar(); toast(n?`Listo: ${n} día(s) con horas extra sin carga volvieron a horario normal.`:"No había horas extra sin carga.", n?"ok":"info");
 }
 function tpHtmlAuditoria(A,planId){
-  const esc=escaparHtml, li=(x,c,ic)=>`<div style="padding:3px 0;color:${c}">${ic} ${esc(x.t)}${x.s?`<div class="small muted" style="margin-left:18px">💡 ${esc(x.s)}</div>`:''}</div>`;
+  const esc=escaparHtml, li=(x,c,ic)=>`<div style="padding:3px 0;color:${c}">${ic} ${esc(x.t)}${x.btn?` <button class="btn btn-sm" onclick="${x.btn.js}">${esc(x.btn.t)}</button>`:''}${x.s?`<div class="small muted" style="margin-left:18px">💡 ${esc(x.s)}</div>`:''}</div>`;
   const cab=A.crit.length?`<b style="color:#b3261e">⛔ ${A.crit.length} observación(es) legal(es) o crítica(s)</b>`:`<b style="color:#2e7d32">✔ Sin observaciones legales</b>`;
   return `<div style="border:1px solid ${A.crit.length?'#e6b3ae':'#cfe3d0'};background:${A.crit.length?'#fff4f3':'#f4faf4'};border-radius:8px;padding:8px 10px;font-size:12.5px;">
     <div class="flex-between" style="gap:8px;flex-wrap:wrap"><div>🔎 Revisión previa al envío · ${cab}${A.avis.length?` · <span style="color:#8a5a00">${A.avis.length} aviso(s)</span>`:''}</div>
-    <div class="flex-gap">${A.nSinCarga?`<button class="btn btn-sm btn-primary" onclick="psQuitarExtrasSinCarga('${A.lunes}')">Quitar horas extra sin carga (${A.nSinCarga})</button>`:""}<button class="btn btn-sm" onclick="tpModalAjuste('${planId}')">Ajustar por carga</button></div></div>
+    <div class="flex-gap">${A.forzadoSem?`<button class="btn btn-sm" onclick="psSemanaSinExtra('${A.lunes}',false)" title="La regla está activa: quitarla">🚫 Regla activa · quitar</button>`:(A.hayExtra?`<button class="btn btn-sm btn-primary" onclick="psSemanaSinExtra('${A.lunes}',true)" title="Nadie tendrá horas extra esta semana: lo que no cabe se marca como conflicto">🚫 Forzar sin horas extra (semana)</button>`:"")}${A.nSinCarga?`<button class="btn btn-sm btn-primary" onclick="psQuitarExtrasSinCarga('${A.lunes}')">Quitar horas extra sin carga (${A.nSinCarga})</button>`:""}<button class="btn btn-sm" onclick="tpModalAjuste('${planId}')">Ajustar por carga</button></div></div>
     <div style="max-height:150px;overflow:auto;margin-top:4px">${A.crit.map(x=>li(x,'#b3261e','⛔')).join("")}${A.avis.map(x=>li(x,'#8a5a00','⚠')).join("")}${A.info.map(x=>li(x,'#555','ℹ')).join("")}</div></div>`;
 }
 function tpHtmlGerencia(plan,quien,lunes,mod){
@@ -14531,7 +14547,7 @@ function cmPropuesta(lunes){
       if(ter.length){ const r=resto>0.01?resto:cap*0.5; ter.forEach(e=>pesos.push({ proyectoId:e.proyectoId||"", lugar:"terreno", w:r/ter.length, nota:e.det||"" })); resto=Math.max(0,resto-r); }
       if(resto>0.01) pesos.push({ proyectoId:"", lugar:"indirecto", w:resto, nota:gen.length?(gen[0].texto||"Aseo e inventario"):"" });
       const W=pesos.reduce((a,p)=>a+p.w,0)||cap, j=d.jor[pid]||{modo:"normal",salida:norm};
-      const extraSal=j.modo==="extra"?Math.max(0,(psHM(j.salida)-psHM(norm))/60):0, extra=Math.max(extraSal,Math.max(0,W-cap));
+      const extraSal=(j.modo==="extra"&&j.origen!=="regla")?Math.max(0,(psHM(j.salida)-psHM(norm))/60):0, extra=j.origen==="regla"?0:Math.max(extraSal,Math.max(0,W-cap));
       pesos.forEach(p=>{ const f=p.w/W; out.push({ id:cmId(), pid, fecha, proyectoId:p.proyectoId, lugar:p.lugar, h:cmR(cap*f), hx:cmR(extra*f), nota:p.nota, origen:"auto" }); });
     });
   });
@@ -16267,7 +16283,9 @@ function psCapDia(cfg,fecha){ return Math.max(0,(psHM(psSalidaNormal(cfg,fecha))
 function psHorasSemana(cfg,lunes){ return [0,1,2,3,4].reduce((a,k)=>a+psCapDia(cfg,sumarDias(lunes,k)),0); }
 function psHM(s){ const p=String(s||"0:0").split(":"); return (Number(p[0])||0)*60+(Number(p[1])||0); }
 function psTxtHM(min){ min=Math.round(min/30)*30; const h=Math.floor(min/60)%24, m=((min%60)+60)%60; return String(h).padStart(2,"0")+":"+String(m).padStart(2,"0"); }
-function psLeer(lunes){ const w=(DB.planSemanal||{})[lunes]||{}; return { dias:w.dias||{}, personas:w.personas||{}, generales:exArr(w.generales) }; }
+function psLeer(lunes){ const w=(DB.planSemanal||{})[lunes]||{}; return { dias:w.dias||{}, personas:w.personas||{}, generales:exArr(w.generales), sinExtra:!!w.sinExtra }; }
+/* Regla «sin horas extra»: por semana o permanente por persona. Manda sobre lo manual y sobre la carga: lo que no cabe se marca como conflicto, no como extra. */
+function perSinExtra(pid){ const p=DB.personal.find(x=>x.id===pid); return !!(p&&p.sinHorasExtra); }
 function psEscribir(lunes){ if(!DB.planSemanal||typeof DB.planSemanal!=="object") DB.planSemanal={}; const w=DB.planSemanal[lunes]=DB.planSemanal[lunes]||{}; w.dias=w.dias||{}; w.personas=w.personas||{}; w.generales=exArr(w.generales); return w; }
 function psLunesInicial(){ const hoy=hoyISO(), w=new Date(hoy+"T12:00:00Z").getUTCDay(); return tpLunesDe(sumarDias(hoy, w===6?2:(w===0?1:0))); }
 function psFechaTxt(f){ const d=new Date(f+"T12:00:00Z"); return PS_DIAS[d.getUTCDay()-1]+" "+d.getUTCDate()+" "+DIST_MESES[d.getUTCMonth()]; }
@@ -16289,6 +16307,7 @@ function psNombres(pids){
 }
 function psJornada(w,cfg,pid,fecha,hTaller){
   const norm=psSalidaNormal(cfg,fecha), cap=psCapDia(cfg,fecha), o=(w.personas[pid]||{})[fecha];
+  if(w.sinExtra||perSinExtra(pid)) return { modo:"normal", salida:norm, origen:"regla" };
   if(o && o.modo) return { modo:o.modo, salida:o.modo==="extra"?(o.salida||norm):norm, origen:"manual" };
   const d=w.dias[fecha];
   if(d && d.modo==="extra") return { modo:"extra", salida:d.salida||norm, origen:"dia" };
@@ -16420,13 +16439,14 @@ function psRender(){
   const modoSel=(valor,onch)=>`<select style="${sel}" ${puede?"":"disabled"} onchange="${onch}"><option value="" ${!valor?"selected":""}>Auto</option><option value="normal" ${valor==="normal"?"selected":""}>Normal</option><option value="extra" ${valor==="extra"?"selected":""}>Horas extra</option></select>`;
   const cabDia=M.dias.map((d,i)=>{ const o=psLeer(_ps.lunes).dias[d.fecha]; const dt=new Date(d.fecha+"T12:00:00Z");
     return `<th style="min-width:150px;vertical-align:top"><div>${PS_DIAS[i]} ${dt.getUTCDate()}</div><div style="margin-top:4px;display:flex;gap:4px;align-items:center;flex-wrap:wrap">${modoSel(o?o.modo:"",`psSetDia('${d.fecha}',this.value)`)}${o&&o.modo==="extra"?`<input type="time" step="1800" style="${sel}width:92px" value="${o.salida||""}" ${puede?"":"disabled"} onchange="psSetDiaSalida('${d.fecha}',this.value)">`:""}</div></th>`; }).join("");
-  const filas=M.activos.map(pid=>`<tr><td><b>${escaparHtml(M.nom[pid])}</b></td>${M.dias.map(d=>{
+  const filas=M.activos.map(pid=>`<tr><td><b>${escaparHtml(M.nom[pid])}</b>${puede?`<div><button class="btn btn-sm" style="margin-top:3px;font-size:10.5px;${perSinExtra(pid)?'background:#fbe3dc;color:#b3452c':''}" title="Regla permanente: nunca programar horas extra a esta persona" onclick="psPerSinExtra('${pid}')">${perSinExtra(pid)?'🚫 sin extras (quitar)':'🚫 sin extras'}</button></div>`:(perSinExtra(pid)?'<div class="small" style="color:#b3452c">🚫 sin extras</div>':'')}</td>${M.dias.map(d=>{
       const proys=d.proys.filter(p=>p.terreno.concat(p.taller).some(x=>x.personas.includes(pid))), gens=d.generales.filter(g=>g.personas.includes(pid));
       if(!proys.length&&!gens.length) return `<td style="background:#fff8e1;vertical-align:top"><span class="small" style="color:#7a5b00">sin actividad</span>${puede?`<div><button class="btn btn-sm" style="margin-top:3px" onclick="psAddGeneral('${pid}','${d.fecha}')">＋ ${escaparHtml(_ps.texto||"Aseo e inventario")}</button></div>`:""}</td>`;
       const j=d.jor[pid], o=(psLeer(_ps.lunes).personas[pid]||{})[d.fecha];
       return `<td style="vertical-align:top"><div class="small">${proys.map(p=>`<span style="display:inline-block;background:var(--copper-light);border-radius:6px;padding:1px 6px;margin:0 3px 3px 0;font-size:11px">${escaparHtml(psProy(p.pid).split(" · ")[0])}</span>`).join("")}${gens.map(g=>`<span style="display:inline-block;background:var(--ok-bg);border-radius:6px;padding:1px 6px;margin:0 3px 3px 0;font-size:11px">🧹 ${escaparHtml(g.texto)}${puede?` <a href="#" style="color:var(--danger);text-decoration:none" onclick="psQuitarGeneral('${d.fecha}','${pid}');return false;" title="Quitar">×</a>`:""}</span>`).join("")}</div>
         <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">${modoSel(o?o.modo:"",`psSetPers('${pid}','${d.fecha}',this.value)`)}${j.modo==="extra"?`<input type="time" step="1800" style="${sel}width:92px" value="${j.salida}" ${puede?"":"disabled"} onchange="psSetSalida('${pid}','${d.fecha}',this.value)">`:`<span class="small muted">sale ${psSalidaNormal(cfg,d.fecha)}</span>`}</div>${j.origen==="auto"&&j.modo==="extra"?`<div class="small" style="color:var(--warn)">auto: más de ${TP_HORAS_DIA} h de taller</div>`:""}</td>`; }).join("")}</tr>`).join("");
   box.innerHTML=`<div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin-bottom:10px">
+      <label class="small flex-gap" style="padding:4px 8px;border:1px solid ${psLeer(_ps.lunes).sinExtra?'#b3452c':'var(--line)'};border-radius:8px" title="Nadie tendrá horas extra esta semana; lo que no quepa se marca como conflicto"><input type="checkbox" ${psLeer(_ps.lunes).sinExtra?"checked":""} ${puede?"":"disabled"} onchange="psSemanaSinExtra('${_ps.lunes}',this.checked)"> 🚫 Sin horas extra esta semana</label>
       <div class="flex-gap"><button class="btn btn-sm" onclick="psCambiarSemana(-1)">◀</button><input type="date" value="${_ps.lunes}" onchange="psIrSemana(this.value)" style="width:auto"><button class="btn btn-sm" onclick="psCambiarSemana(1)">▶</button></div>
       <label class="small muted" style="display:flex;flex-direction:column;gap:3px">Horario normal: entrada<input type="time" value="${cfg.inicio}" ${puede?"":"disabled"} onchange="psSetCfg('inicio',this.value)" style="width:100px"></label>
       <label class="small muted" style="display:flex;flex-direction:column;gap:3px">salida<input type="time" value="${cfg.salida}" ${puede?"":"disabled"} onchange="psSetCfg('salida',this.value)" style="width:100px"></label>

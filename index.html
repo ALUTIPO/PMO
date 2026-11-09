@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.43.0";
+const APP_VERSION = "3.44.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -13363,7 +13363,7 @@ function tpConfirmarDespues(gi){
 }
 
 /* ---- Carta Gantt global por tablero + versión para correo (V3.7.2) ---- */
-let tpVista = "programa", tpGanttAlcance = "todas", tpGanttAbiertos = {}, tpGanttKeys = [];
+let tpGanttLineas = true, tpVista = "programa", tpGanttAlcance = "todas", tpGanttAbiertos = {}, tpGanttKeys = [];
 function tpHex(h){ h=String(h||"#8a94a3").replace("#",""); if(h.length===3) h=h.split("").map(c=>c+c).join(""); return [parseInt(h.slice(0,2),16)||0,parseInt(h.slice(2,4),16)||0,parseInt(h.slice(4,6),16)||0]; }
 function tpMezcla(hex,t){ const c=tpHex(hex).map(v=>Math.round(v+(255-v)*t)); return "#"+c.map(v=>v.toString(16).padStart(2,"0")).join(""); }
 function tpDiasHabiles(a,b){ const out=[]; let d=tpSiguienteHabil(a); for(let i=0;i<400 && d<=b;i++){ out.push(d); d=tpSiguienteHabil(sumarDias(d,1)); } return out; }
@@ -13399,11 +13399,27 @@ function tpGanttDatos(planes){
       i0:idx0(f.ini), i1:idx1(f.fin), ini:f.ini, fin:f.fin, avance:av, color, resp:[...new Set(its.flatMap(i=>tpNombres(i)))].join(", ") });
     its.slice().sort((a,b)=>a.ini.localeCompare(b.ini)).forEach(it=>{
       const col = it.estado==="listo"?"#2e9e5b" : it.estado==="bloqueado"?"#d64545" : color;
-      filas.push({ tipo:"a", ag:AG.get(it)||{}, ...tpBaseGantt(it,idx0,idx1), key:k, itemId:it.id, planId:(plOf.get(it)||{}).id||"", sobre:sobreDe(it), label:it.tarea+(it.prioridad==="urgente"?" 🔴":""),
+      filas.push({ tipo:"a", uid:it, ag:AG.get(it)||{}, ...tpBaseGantt(it,idx0,idx1), key:k, itemId:it.id, planId:(plOf.get(it)||{}).id||"", sobre:sobreDe(it), label:it.tarea+(it.prioridad==="urgente"?" 🔴":""),
         sub:(tpNombres(it).join(", ")||"sin asignar")+(()=>{ if(!it.ancla) return ""; const pl=plOf.get(it), a=pl&&pl.items?pl.items.find(x=>x.id===it.ancla.id):null; return a?(it.enLote?" · 👥 en conjunto con ":it.ancla.tipo==="mismo"?" · ⛓ mismo día que ":" · ⛓ después de ")+((a.tablero?a.tablero+": ":"")+a.tarea):""; })()+" · "+distDiaTxt(it.ini)+(it.fin!==it.ini?"→"+distDiaTxt(it.fin):"")+tpVarTxt(it), i0:idx0(it.ini), i1:idx1(it.fin), ini:it.ini, fin:it.fin, avance:Number(it.avance)||0, color:col, meta:it.meta||"" });
     });
   });
-  return { dias, filas, ini, fin, nTableros:orden.length };
+  /* Enlaces fin→inicio como en MS Project: orden de etapas, «después de» entre tareas y entre tableros */
+  const rowDe=new Map(); filas.forEach((f,i)=>{ if(f.tipo==="a") rowDe.set(f.uid,i); });
+  const links=[], visto=new Set(), add=(a,b)=>{ const r1=rowDe.get(a), r2=rowDe.get(b); if(r1===undefined||r2===undefined||r1===r2) return; const k=r1+">"+r2; if(visto.has(k)) return; visto.add(k); links.push({ r1, r2 }); };
+  items.forEach(t=>{ if(t.enLote) return; const ps=tpPredsTodos(items,t); const o=tpOrdenDe(t);
+    if(o!==null){ const menores=ps.filter(x=>tpOrdenDe(x)!==null&&tpKey(x)===tpKey(t)), mx=menores.length?Math.max(...menores.map(x=>tpOrdenDe(x))):null; menores.filter(x=>tpOrdenDe(x)===mx).forEach(x=>add(x,t)); ps.filter(x=>tpKey(x)!==tpKey(t)||tpOrdenDe(x)===null).forEach(x=>add(x,t)); }
+    else ps.forEach(x=>add(x,t)); });
+  orden.forEach(k=>{ const its=g[k], dep=tpDespuesDe(its); if(!dep||dep===k||!g[dep]) return; const pr=g[dep], fm=pr.reduce((m,i)=>i.fin>m?i.fin:m,pr[0].fin), im=its.reduce((m,i)=>i.ini<m?i.ini:m,its[0].ini);
+    pr.filter(i=>i.fin===fm).forEach(a=>its.filter(i=>i.ini===im).forEach(b=>add(a,b))); });
+  return { dias, filas, ini, fin, nTableros:orden.length, links };
+}
+/* Mapas de celdas que llevan trazo de conector (vertical a la derecha del fin; horizontal hasta el inicio) */
+function tpGanttConectores(D){
+  const v={}, h={}; (D.links||[]).forEach(l=>{ const a=D.filas[l.r1], b=D.filas[l.r2]; if(!a||!b||a.i1===undefined||b.i0===undefined) return;
+    const e=a.i1, s2=b.i0, col=s2>e?e:s2-1; if(col<0) return;
+    for(let r=l.r1;r<=l.r2;r++){ (v[r]=v[r]||{})[col]=true; }
+    if(s2>e+1) for(let c=e+1;c<s2;c++) (h[l.r2]=h[l.r2]||{})[c]=true; });
+  return { v, h };
 }
 /* Tabla con estilos en línea: sirve igual en la pantalla y pegada en un correo. */
 function tpGanttTabla(D, opt){
@@ -13417,22 +13433,25 @@ function tpGanttTabla(D, opt){
     return `<th style="width:${W}px;background:${h?'#c1712e':'#f7f4f0'};color:${h?'#fff':'#555'};font-size:${fs}px;font-weight:${dt.getUTCDay()===1?700:400};text-align:center;padding:1px 0;border:1px solid #ddd;line-height:1.15;overflow:hidden">${dn[dt.getUTCDay()]}<br>${dt.getUTCDate()}</th>`; }).join("");
   const colg=fijo?`<colgroup><col style="width:${LAB}px">${D.dias.map(()=>`<col style="width:${W}px">`).join("")}</colgroup>`:"";
   const elip="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+  const CN=(opt.sinLineas||!tpGanttLineas)?{v:{},h:{}}:tpGanttConectores(D);
+  const tpLkInj=(c,ri,i)=>{ const vv=CN.v[ri]&&CN.v[ri][i], hh=CN.h[ri]&&CN.h[ri][i]; if(!vv&&!hh) return c; const k=c.indexOf('">'); if(k<0) return c;
+    return c.slice(0,k)+';'+(vv?'border-right:2px solid #d32f2f;':'')+(hh?'background-image:linear-gradient(to bottom,transparent 40%,#d32f2f 40%,#d32f2f 56%,transparent 56%);':'')+c.slice(k); };
   const filasHtml=D.filas.map((f,ri)=>{
     if(f.tipo==="p") return `<tr><td colspan="${N+1}" style="background:#faf3ea;border:1px solid #ddd;padding:4px 8px;font-size:12px;font-weight:bold;color:#a15a1d;${elip}${fijo?'position:sticky;left:0;':''}">📁 ${escaparHtml(f.label)}</td></tr>`;
     const esT=f.tipo==="t"; if(!esT && opt.abiertos && !opt.abiertos(f.key)) return "";
     const n=f.i1-f.i0+1, hechas=Math.round(n*f.avance/100), claro=tpMezcla(f.color,0.62), alto=esT?24:19, pad=esT?"3px":"4px";
-    const celdas=D.dias.map((d,i)=>{ let bg="";
+    const celdas=D.dias.map((d,i)=>tpLkInj((()=>{ let bg="";
       const sl=!esT&&f.ag?f.ag[d]:null, par=c=>{ if(!sl) return c; const q=tpFraccionDia(sl,d); return `linear-gradient(to right,transparent ${q.a.toFixed(1)}%,${c} ${q.a.toFixed(1)}%,${c} ${Math.max(q.b,q.a+6).toFixed(1)}%,transparent ${Math.max(q.b,q.a+6).toFixed(1)}%)`; };
       if(!esT&&f.b0!==undefined){ const enB=i>=f.b0&&i<=f.b1, enA=i>=f.i0&&i<=f.i1, colA=(i-f.i0<hechas)?f.color:claro;
         return `<td${sl?` title="${escaparHtml(tpHmTxt(sl.a)+'–'+tpHmTxt(sl.b)+' · '+tpHtxt(sl.h)+' h ese día')}"`:''} style="height:26px;padding:2px 0;vertical-align:top;border:1px solid #eee;${i===iHoy?'background:#fff1e3;border-left:2px solid #c1712e;':''}"><div style="height:4px;margin-bottom:3px;${enB?'background:#8d96a3;':''}"></div><div style="height:9px;${enA?'background:'+par(colA)+';':''}"></div></td>`; }
       if(i>=f.i0 && i<=f.i1) bg=par((i-f.i0<hechas)?f.color:claro); else if(i===iHoy) bg="#fff1e3";
-      return `<td style="height:${alto}px;padding:${pad} 0;border:1px solid #eee;${bg?'background:'+bg+';background-clip:content-box;':''}${i===iHoy?'border-left:2px solid #c1712e;':''}"></td>`; }).join("");
+      return `<td style="height:${alto}px;padding:${pad} 0;border:1px solid #eee;${bg?'background:'+bg+';background-clip:content-box;':''}${i===iHoy?'border-left:2px solid #c1712e;':''}"></td>`; })(),ri,i)).join("");
     const aviso=opt.interactivo&&f.sobre?' <span style="color:#c0392b" title="Alguien pasa de 9 h por día">⚠</span>':'';
     const lab = esT
       ? `<td title="${escaparHtml(f.label+' · '+f.sub+' · '+distDiaTxt(f.ini)+' → '+distDiaTxt(f.fin))}" style="background:#faf6f1;border:1px solid #ddd;padding:2px 6px;font-size:12px;color:#222;${elip}${fijo?'cursor:pointer;position:sticky;left:0;z-index:2;':''}"${opt.interactivo?` onclick="tpGanttToggle(${ri})"`:''}>${opt.interactivo?`<b style="display:inline-block;width:14px">${opt.abiertos&&opt.abiertos(f.key)?'−':'+'}</b>`:''}<b>${escaparHtml(f.label)}</b>${aviso}${opt.editable?` <span style="cursor:pointer;color:#a15a1d" onclick="event.stopPropagation();tpModalInicioTablero(${ri})" title="Cambiar el inicio del tablero">✎</span>`:''} <span style="font-size:10px;color:#777">· ${f.avance}% · ${distDiaTxt(f.ini).split(' ').slice(1).join(' ')} → ${distDiaTxt(f.fin).split(' ').slice(1).join(' ')}</span></td>`
       : `<td title="${escaparHtml(f.label+' · '+f.sub)}" style="background:#fff;border:1px solid #eee;padding:1px 6px 1px ${opt.interactivo?24:14}px;font-size:11px;color:#333;${elip}${fijo?'position:sticky;left:0;z-index:2;':''}${opt.editable?'cursor:pointer;':''}"${opt.editable?` onclick="tpModalFechas(${ri})"`:''}>${aviso?'<span style="color:#c0392b">⚠</span> ':''}${escaparHtml(f.label)}${opt.editable?' <span style="color:#a15a1d">✎</span>':''} <span style="color:#888;font-size:10px">· ${escaparHtml(f.sub.split(' · ')[0])}</span></td>`;
     return `<tr>${lab}${celdas}</tr>`; }).join("");
-  const leyenda=`<div style="font-size:10px;color:#666;margin-top:6px">Color fuerte = avance · color claro = por hacer · verde = listo · rojo = bloqueado · <b>línea gris fina = línea base (plan original)</b> sobre la barra de color = proyectado/real · el relleno de cada día es solo la parte de la jornada que ocupa la tarea (según sus horas) · columna con borde cobre = hoy · solo días hábiles.</div>`;
+  const leyenda=`<div style="font-size:10px;color:#666;margin-top:6px">Color fuerte = avance · color claro = por hacer · verde = listo · rojo = bloqueado · <b>línea gris fina = línea base (plan original)</b> · <b style="color:#d32f2f">línea roja = dependencia (termina → empieza)</b> sobre la barra de color = proyectado/real · el relleno de cada día es solo la parte de la jornada que ocupa la tarea (según sus horas) · columna con borde cobre = hoy · solo días hábiles.</div>`;
   return `<table style="${fijo?`table-layout:fixed;width:${LAB+N*W}px;`:''}border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;background:#fff;color:#222">${colg}<thead>
     <tr><th rowspan="2" style="background:#f1ece6;border:1px solid #ddd;font-size:11px;text-align:left;padding:3px 6px;${fijo?'position:sticky;left:0;z-index:3;':`min-width:${LAB}px;`}">Tablero / tarea</th>${meses}</tr><tr>${dh}</tr></thead><tbody>${filasHtml}</tbody></table>${leyenda}`;
 }
@@ -13460,7 +13479,7 @@ async function tpGanttPdf(planId){
   const labW = Math.min(78,Math.max(48, PW*0.2)); const cw = Math.max(1.6,(PW-2*M-labW)/n);
   const topY=19, disp=PH-topY-12, rowH=Math.max(3,Math.min(6,disp/(filas.length+2.5))), fz=Math.max(5,Math.min(8,rowH*1.65));
   const nm=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"], meses=[]; D.dias.forEach(d=>{ const m=d.slice(0,7); if(!meses.length||meses[meses.length-1].m!==m) meses.push({m,n:1}); else meses[meses.length-1].n++; });
-  const hoy=hoyISO(), iHoy=D.dias.indexOf(hoy), mapa={};
+  const hoy=hoyISO(), iHoy=D.dias.indexOf(hoy), mapa={}, CNp=tpGanttConectores(D);
   const head=[[{content:"Tablero / tarea",rowSpan:2,styles:{valign:"middle"}}, ...meses.map(x=>({content:x.n>=3?nm[parseInt(x.m.slice(5),10)-1]+" "+x.m.slice(2,4):nm[parseInt(x.m.slice(5),10)-1],colSpan:x.n,styles:{halign:"left"}}))], D.dias.map((d,i)=>({content:String(new Date(d+"T12:00:00Z").getUTCDate()),styles:i===iHoy?{fillColor:[193,113,46],textColor:[255,255,255]}:{}}))];
   const body=filas.map((f,ri)=>{ mapa[ri]=f;
     if(f.tipo==="p") return [{content:f.label,colSpan:n+1,styles:{fillColor:[250,243,234],textColor:[161,90,29],fontStyle:"bold"}}];
@@ -13477,9 +13496,12 @@ async function tpGanttPdf(planId){
       else if(i===iHoy) h.cell.styles.fillColor=[255,241,227]; },
     didDrawCell:function(h){ if(h.section!=="body"||h.column.index===0) return; const f=mapa[h.row.index]; if(!f||f.tipo!=="a") return; const i=h.column.index-1;
       { const sl=f.ag&&f.ag[D.dias[i]]; if(sl&&i>=f.i0&&i<=f.i1){ const q=tpFraccionDia(sl,D.dias[i]), k=f.i1-f.i0+1, hechas=Math.round(k*f.avance/100), c=tpHex((i-f.i0<hechas)?f.color:tpMezcla(f.color,0.62)), a=h.cell.width*q.a/100, b=Math.max(h.cell.width*q.b/100,a+h.cell.width*0.06); doc.setFillColor(c[0],c[1],c[2]); doc.rect(h.cell.x+a,h.cell.y,b-a,h.cell.height,"F"); } }
-      if(f.b0===undefined) return; if(i>=f.b0&&i<=f.b1){ doc.setFillColor(110,120,132); doc.rect(h.cell.x,h.cell.y+0.2,h.cell.width,Math.min(0.9,h.cell.height*0.22),"F"); } } });
+      if(f.b0!==undefined && i>=f.b0&&i<=f.b1){ doc.setFillColor(110,120,132); doc.rect(h.cell.x,h.cell.y+0.2,h.cell.width,Math.min(0.9,h.cell.height*0.22),"F"); }
+      if(det==="tareas"&&tpGanttLineas){ const ri=h.row.index; doc.setDrawColor(211,47,47); doc.setLineWidth(0.3);
+        if(CNp.v[ri]&&CNp.v[ri][i]) doc.line(h.cell.x+h.cell.width,h.cell.y,h.cell.x+h.cell.width,h.cell.y+h.cell.height);
+        if(CNp.h[ri]&&CNp.h[ri][i]) doc.line(h.cell.x,h.cell.y+h.cell.height/2,h.cell.x+h.cell.width,h.cell.y+h.cell.height/2); } } });
   doc.setFontSize(7); doc.setFont(undefined,"normal"); doc.setTextColor(110);
-  doc.text("Color fuerte = avance · color claro = por hacer · verde = listo · rojo = bloqueado · línea gris fina = línea base (plan original) · columna naranja = hoy · solo días hábiles",M,Math.min(PH-5,(doc.lastAutoTable.finalY||PH-15)+4));
+  doc.text("Color fuerte = avance · color claro = por hacer · verde = listo · rojo = bloqueado · línea gris fina = línea base (plan original) · línea roja = dependencia · columna naranja = hoy · solo días hábiles",M,Math.min(PH-5,(doc.lastAutoTable.finalY||PH-15)+4));
   doc.save(`Gantt_taller_${hoyISO()}.pdf`);
 }
 function tpGanttToggle(ri){ const f=(tpGanttFilas||[])[ri]; if(!f) return; const k=f.key; tpGanttAbiertos[k]=!(tpGanttAbiertos[k]!==undefined?tpGanttAbiertos[k]:true); const sc=document.getElementById('tpGanttBox'); const x=sc?sc.scrollLeft:0, y=sc?sc.scrollTop:0; renderAll(); const s2=document.getElementById('tpGanttBox'); if(s2){ s2.scrollLeft=x; s2.scrollTop=y; } }
@@ -13494,6 +13516,7 @@ function tpHtmlGantt(plan){
     <button class="mp-chip ${tpGanttAlcance==='todas'?'on':''}" onclick="tpGanttAlcance='todas'; renderAll();">Todas las semanas</button>
     <button class="mp-chip ${tpGanttAlcance==='semana'?'on':''}" onclick="tpGanttAlcance='semana'; renderAll();">Solo esta semana</button>
     <button class="btn btn-sm" onclick="tpGanttTodos(true)">＋ Desplegar tareas</button><button class="btn btn-sm" onclick="tpGanttTodos(false)">− Plegar tareas</button><button class="btn btn-sm" onclick="tpGanttIrHoy()">◉ Ir a hoy</button>
+    <label class="small flex-gap" title="Conecta con líneas rojas cada tarea con la que la sigue, como en MS Project"><input type="checkbox" ${tpGanttLineas?"checked":""} onchange="tpGanttLineas=this.checked; renderAll();"> Líneas de dependencia</label>
     <button class="btn btn-sm" onclick="tpModalGanttPdf('${plan.id}')">📄 Gantt en PDF</button><button class="btn btn-sm" onclick="tpModalCorreo('${plan.id}')">✉ Enviar por correo / PDF</button></div>`;
   if(!D){ tpGanttFilas=[]; return barra+`<div class="empty-state card">Aún no hay trabajos con fechas para dibujar el Gantt.</div>`; }
   tpGanttFilas=D.filas;

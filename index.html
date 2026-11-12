@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.44.0";
+const APP_VERSION = "3.45.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -4534,9 +4534,9 @@ function accionesEtapaCotizacion(p, c) {
     case "Cotizando":
       return `<button class="btn btn-sm btn-primary" onclick="modalSolicitarOC('${p.id}', '${c.id}')">✉ Solicitar OC</button>`;
     case "OC Solicitada":
-      return `<button class="btn btn-sm btn-primary" onclick="modalRegistrarNumeroOC('${p.id}', '${c.id}')">✔ Registrar N° de OC</button>`;
+      return `<button class="btn btn-sm btn-primary" onclick="modalRegistrarNumeroOC('${p.id}', '${c.id}')">✔ Registrar N° de OC</button><button class="btn btn-sm" onclick="modalSolicitarOC('${p.id}', '${c.id}')" title="Volver a abrir el correo de solicitud a Administración (copiar, programa de correo u Outlook web)">✉ Reenviar solicitud de OC</button>`;
     case "OC Emitida":
-      return `<button class="btn btn-sm btn-primary" onclick="modalNotificarProveedor('${p.id}', '${c.id}')">✉ Notificar despacho a proveedor</button>`;
+      return `<button class="btn btn-sm btn-primary" onclick="modalNotificarProveedor('${p.id}', '${c.id}')">✉ Notificar despacho a proveedor</button><button class="btn btn-sm" onclick="modalSolicitarOC('${p.id}', '${c.id}')" title="Volver a abrir el correo de solicitud a Administración">✉ Reenviar solicitud de OC</button>`;
     case "En Tránsito":
     case "Recibido Parcial":
       return `<button class="btn btn-sm btn-primary" onclick="modalRegistrarRecepcion('${p.id}', '${c.id}')">📦 Registrar recepción</button>`;
@@ -10792,7 +10792,8 @@ function enviarSolicitudOC(pid, cotId, modo) {
   if (c.estado === "Cotizando") { const ev = pcEvaluar(p, totalNetoCotizacion(c)); if (!ev.ok) { toast(ev.motivo, "danger"); return; } }
   const asunto = `Solicitud OC — Cotización ${c.numeroCotizacion||c.id} — ${c.proveedor}`;
   abrirEnOutlook("adminchile@alutipo.com", asunto, document.getElementById('ocCorreo').value, modo);
-  cambiarEstadoCotizacion(pid, cotId, 'OC Solicitada');
+  if (c.estado === "Cotizando") cambiarEstadoCotizacion(pid, cotId, 'OC Solicitada');
+  else registrarHistorial({proyecto:p.codigo, accion:"Modificar", detalle:`Cotización ${cotId}: solicitud de OC reenviada a Administración`, usuario:DB.usuario+" · "+DB.role, criticidad:"Baja"});
   renderAll();
 }
 
@@ -10805,8 +10806,9 @@ function modalSolicitarOC(pid, cotId) {
   const destinatario = "adminchile@alutipo.com";
   const asunto = `Solicitud OC — Cotización ${c.numeroCotizacion||c.id} — ${c.proveedor}`;
   openModal(`
-    <div class="modal-head"><h3>Solicitar OC — ${c.proveedor}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><h3>${c.estado==="Cotizando"?"Solicitar OC":"Reenviar solicitud de OC"} — ${c.proveedor}</h3><button class="close-x" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
+      ${c.estado!=="Cotizando"?`<div class="ai-note" style="margin-bottom:8px">↻ Esta solicitud ya se marcó como enviada (estado «${c.estado}»). Aquí puedes copiarla o abrirla de nuevo las veces que haga falta; el estado no cambia.</div>`:''}
       ${!prov ? `<div class="ai-note" style="background:var(--warn-bg); border-color:#eccf9c; color:var(--copper-dark)">⚠ "${c.proveedor}" no está en el catálogo de proveedores — no se pudo autocompletar el modo de pago. <a href="#" onclick="closeModal(); modalProveedores(); return false;">Agregarlo ahora →</a></div>` : ''}
       ${!c.linkSharepoint ? `<div class="ai-note" style="background:var(--danger-bg); border-color:#e7bfae; color:var(--danger)">⚠ Esta cotización no tiene link de SharePoint — agrégalo editando la cotización antes de enviar.</div>` : ''}
       <div class="hint">Destinado a: <b>Administración Chile</b> (${destinatario}). El botón de Outlook ya carga el destinatario — el texto de abajo es solo el cuerpo, sin destinatario ni firma (Outlook agrega tu firma real).</div>
@@ -10820,7 +10822,7 @@ function modalSolicitarOC(pid, cotId) {
           if(ok){ toast('Correo copiado (sin destinatario ni firma).', 'ok'); }
           else { toast('No se pudo copiar automáticamente. Selecciona el texto y usa Ctrl+C.', 'danger'); }
         });
-        cambiarEstadoCotizacion('${pid}', '${cotId}', 'OC Solicitada'); renderAll();">📋 Copiar correo</button>
+        if(proy('${pid}').cotizaciones.find(x=>x.id==='${cotId}').estado==='Cotizando'){ cambiarEstadoCotizacion('${pid}', '${cotId}', 'OC Solicitada'); renderAll(); }">📋 Copiar correo</button>
       <button class="btn" onclick="enviarSolicitudOC('${pid}','${cotId}','app')">✉ Programa de correo</button>
       <button class="btn btn-primary" onclick="enviarSolicitudOC('${pid}','${cotId}','web')">📧 Abrir en Outlook web</button>
     </div>

@@ -539,7 +539,7 @@ table { min-width: 560px; }
    para verificar a simple vista, mirando la esquina superior de la
    app, que el navegador está usando el archivo recién subido y no uno
    viejo guardado en caché. Se muestra en la barra superior. */
-const APP_VERSION = "3.45.0";
+const APP_VERSION = "3.46.0";
 const firebaseConfig = {
   apiKey: "AIzaSyCwK85DFAWcrJWqp4SDU0Z73AQC9NGfWMQ",
   authDomain: "alutipo-pmo.firebaseapp.com",
@@ -16402,8 +16402,17 @@ function psJornada(w,cfg,pid,fecha,hTaller){
   if(hTaller>cap+0.01) return { modo:"extra", salida:psTxtHM(psHM(norm)+(hTaller-cap)*60), origen:"auto" };
   return { modo:"normal", salida:norm, origen:"auto" };
 }
-function psModelo(lunes){
-  const D=psDatos(lunes), w=psLeer(lunes), cfg=psCfg(), todos=new Set();
+/* «Dejar fuera» al personal designado en terreno por proyecto: esa planificación se envía por separado.
+   Es solo del envío/vista (correo, PDF, copiar); el plan y las demás pantallas no cambian. */
+function psTerrenoIds(lunes){ const D=psDatos(lunes), r=new Set(); D.dias.forEach(d=>D.ent[d].forEach(e=>{ if(e.origen==="terreno") r.add(e.pid); })); return [...r]; }
+function psFueraLista(){ return (_ps.fueraSem===_ps.lunes&&Array.isArray(_ps.fuera))?_ps.fuera:[]; }
+function psFueraToggle(){ const act=psFueraLista().length>0; _ps.fueraSem=_ps.lunes; _ps.fuera=act?[]:psTerrenoIds(_ps.lunes); if(!act&&!_ps.fuera.length) toast("Esta semana nadie está designado en terreno por proyecto.","info"); psRender(); }
+function psFueraQuitar(pid){ _ps.fuera=psFueraLista().filter(x=>x!==pid); _ps.fueraSem=_ps.lunes; psRender(); }
+function psFueraAgregar(pid){ if(!pid) return; const l=psFueraLista(); if(!l.includes(pid)) l.push(pid); _ps.fuera=l; _ps.fueraSem=_ps.lunes; psRender(); }
+function psModeloEnvio(){ return psModelo(_ps.lunes, psFueraLista()); }
+function psModelo(lunes,fuera){
+  const D=psDatos(lunes), w=psLeer(lunes), cfg=psCfg(), todos=new Set(), fu=new Set(fuera||[]);
+  if(fu.size){ D.dias.forEach(d=>{ D.ent[d]=D.ent[d].filter(e=>!fu.has(e.pid)); }); w.generales=w.generales.filter(g=>!fu.has(g.pid)); }
   D.dias.forEach(d=>D.ent[d].forEach(e=>todos.add(e.pid))); w.generales.forEach(g=>{ if(D.dias.includes(g.fecha)) todos.add(g.pid); });
   const activos=[...todos].filter(id=>DB.personal.some(p=>p.id===id)), nom=psNombres(activos);
   activos.sort((a,b)=>nom[a].localeCompare(nom[b]));
@@ -16551,21 +16560,22 @@ function psRender(){
       <span style="flex:1"></span>
       <input type="text" id="psPara" placeholder="Para (correos)" value="${escaparHtml(tpCorreoPara)}" oninput="tpCorreoPara=this.value" style="width:190px">
       <button class="btn btn-sm" onclick="psPdf()">📄 PDF</button><button class="btn btn-sm" onclick="psCorreo('web')">✉ Outlook web</button><button class="btn btn-sm" onclick="psCorreo('app')">✉ Outlook</button><button class="btn btn-sm btn-primary" onclick="psCopiar()">📋 Copiar con formato</button></div>
+    ${(()=>{ const fl=psFueraLista(), nT=psTerrenoIds(_ps.lunes).length; return `<div class="flex-gap" style="margin-bottom:8px;flex-wrap:wrap"><button class="btn btn-sm ${fl.length?"btn-primary":""}" onclick="psFueraToggle()" title="La planificación del personal designado en terreno por proyecto se envía por separado: déjalos fuera de este correo, PDF y copia">${fl.length?"↩ Incluir al personal de terreno":"🚫 Dejar fuera al personal de terreno"}${!fl.length&&nT?" ("+nT+")":""}</button>${fl.length?`<span class="small muted">Fuera de este envío:</span>${fl.map(id=>`<span style="display:inline-flex;gap:4px;align-items:center;background:#fbe3dc;color:#b3452c;border-radius:12px;padding:2px 8px;font-size:12px">${escaparHtml((DB.personal.find(x=>x.id===id)||{}).nombre||id)} <a href="#" style="color:#b3452c;text-decoration:none" title="Volver a incluir" onclick="psFueraQuitar('${id}'); return false;">×</a></span>`).join("")}<select class="small" style="width:auto" onchange="psFueraAgregar(this.value)"><option value="">＋ dejar fuera a…</option>${DB.personal.filter(x=>!fl.includes(x.id)&&M.activos.includes(x.id)).map(x=>`<option value="${x.id}">${escaparHtml(x.nombre)}</option>`).join("")}</select>`:""}</div>`; })()}
     ${nLibres?`<div class="mp-alerta" style="margin-bottom:10px">⚠ Hay ${nLibres} día(s) sin actividad (ej. ${escaparHtml(M.dias.find(d=>d.libres.length)?psFechaTxt(M.dias.find(d=>d.libres.length).fecha):"")}). Puedes completarlos con «${escaparHtml(_ps.texto||"Aseo e inventario")}» con un clic.</div>`:""}
-    <div id="psPrev" style="border:1px solid var(--line);border-radius:8px;background:#fff;padding:12px;overflow:auto">${psHtml(M,{libres:true})}</div>
+    <div id="psPrev" style="border:1px solid var(--line);border-radius:8px;background:#fff;padding:12px;overflow:auto">${psHtml(psModeloEnvio(),{libres:true})}</div>
     <h4 style="margin:16px 0 6px">Jornada por persona y día</h4>
     <div class="hint" style="margin-bottom:6px">«Auto» = horario normal, o horas extra si en el taller le caen más horas de las de su jornada (${TP_HORAS_DIA} h de lunes a jueves; viernes ${Math.round(psCapDia(cfg,M.dias[4].fecha)*10)/10} h). Elige «Horas extra» y la hora de salida para fijarlo; la fila de arriba (cada día) aplica a todo el equipo.</div>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Persona</th>${cabDia}</tr></thead><tbody>${filas||`<tr><td colspan="6" class="muted">No hay personas con actividades esta semana.</td></tr>`}</tbody></table></div>`;
 }
 async function psCopiar(silencioso){
-  const M=psModelo(_ps.lunes), html=psHtml(M,{}), texto=psTexto(M);
+  const M=psModeloEnvio(), html=psHtml(M,{}), texto=psTexto(M);
   try{ if(!(navigator.clipboard&&window.ClipboardItem)) throw new Error("sin ClipboardItem");
     await navigator.clipboard.write([new ClipboardItem({ "text/html":new Blob([html],{type:"text/html"}), "text/plain":new Blob([texto],{type:"text/plain"}) })]);
     if(!silencioso) toast("Copiado con formato. Pégalo en el correo con Ctrl+V.","ok"); return true;
   }catch(err){ try{ const el=document.getElementById("psPrev"), r=document.createRange(); r.selectNodeContents(el); const s=window.getSelection(); s.removeAllRanges(); s.addRange(r); const ok=document.execCommand("copy"); s.removeAllRanges(); if(!silencioso) toast(ok?"Copiado con formato.":"No se pudo copiar.",ok?"ok":"danger"); return ok; }catch(e2){ if(!silencioso) toast("No se pudo copiar.","danger"); return false; } }
 }
 async function psCorreo(modo){
-  const M=psModelo(_ps.lunes), texto=psTexto(M), asunto=psTitulo(M), para=((document.getElementById("psPara")||{}).value||"").trim();
+  const M=psModeloEnvio(), texto=psTexto(M), asunto=psTitulo(M), para=((document.getElementById("psPara")||{}).value||"").trim();
   await psCopiar(true);
   if(modo==="app") window.location.href=`mailto:${para}?subject=${encodeURIComponent(asunto)}&body=${encodeURIComponent(texto.replace(/\r?\n/g,"\r\n"))}`;
   else { let cuerpo=texto; const base=`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(para)}&subject=${encodeURIComponent(asunto)}&body=`;
@@ -16575,7 +16585,7 @@ async function psCorreo(modo){
 }
 async function psPdf(){
   if(!(await asegurarPDF())){ toast("No se pudo cargar el generador de PDF. Revisa tu conexión.","danger"); return; }
-  const M=psModelo(_ps.lunes), nom=M.nom, { jsPDF }=window.jspdf, doc=new jsPDF({ orientation:"landscape", unit:"mm", format:"a4" });
+  const M=psModeloEnvio(), nom=M.nom, { jsPDF }=window.jspdf, doc=new jsPDF({ orientation:"landscape", unit:"mm", format:"a4" });
   tpPdfLogo(doc,297,10,6); doc.setFontSize(15); doc.setFont(undefined,"bold"); doc.text("ALUTIPO — Planificación semanal",14,15);
   const ps=psProyectosSemana(M); doc.setFontSize(10); doc.setFont(undefined,"normal");
   doc.text(`Semana ${distDiaTxt(M.lunes)} al ${distDiaTxt(M.dias[4].fecha)} · ${ps.length} proyecto(s) · ${M.activos.length} persona(s) · horario normal ${M.cfg.inicio}-${M.cfg.salida} (viernes ${M.cfg.salidaViernes}) · Emitido ${hoyISO()}`,14,21);
